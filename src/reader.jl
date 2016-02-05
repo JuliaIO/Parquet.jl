@@ -9,6 +9,7 @@ type ParFile
     handle::IOStream
     meta_len::Int32
     meta::FileMetaData
+    page_meta_cache::Dict{ColumnChunk,Vector{PageHeader}}
 end
 
 function ParFile(path::AbstractString)
@@ -24,17 +25,42 @@ end
 function ParFile(path::AbstractString, handle::IOStream)
     is_par_file(handle) || error("Not a parquet format file: $path")
     meta_len = metadata_length(handle)
-    meta = metadata(handle, meta_len)
-    ParFile(path, handle, meta_len, meta)
+    meta = metadata(handle, path, meta_len)
+    ParFile(path, handle, meta_len, meta, Dict{ColumnChunk,Vector{PageHeader}}())
 end
 
-function show(io::IO, par::ParFile)
-    println("Parquet file: $(par.path)")
-    meta = par.meta
-    println("    version: $(meta.version)")
-    println("    nrows: $(meta.num_rows)")
-    println("    created by: $(meta.created_by)")
+rowgroups(par::ParFile) = par.meta.row_groups
+columns(par::ParFile, rowgroupidx::Integer) = columns(par, rowgroups(par)[rowgroupidx])
+columns(par::ParFile, rowgroup::RowGroup) = rowgroup.columns
+pages(par::ParFile, rowgroupidx::Integer, colidx::Integer) = pages(par, columns(par, rowgroupidx), colidx)
+pages(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = pages(par, cols[colidx])
+function pages(par::ParFile, col::ColumnChunk)
+    (col in keys(par.page_meta_cache)) && (return par.page_meta_cache[col])
+    # read pages from the file
+    pos = page_offset(col)
+    endpos = end_offset(col)
+    io = par.handle
+    pagevec = PageHeader[]
+    while pos < endpos
+        seek(io, pos)
+        page = read_thrift(io, PageHeader)
+        push!(pagevec, page)
+        pos = (position(io) + page_size(page))
+    end
+    par.page_meta_cache[col] = pagevec
+    pagevec
 end
+
+page_size(page::PageHeader) = Thrift.isfilled(page, :compressed_page_size) ? page.compressed_page_size : page.uncompressed_page_size
+
+function page_offset(col::ColumnChunk)
+    colmeta = col.meta_data
+    offset = colmeta.data_page_offset
+    Thrift.isfilled(colmeta, :index_page_offset) && (offset = min(offset, colmeta.index_page_offset))
+    Thrift.isfilled(colmeta, :dictionary_page_offset) && (offset = min(offset, colmeta.dictionary_page_offset))
+    offset
+end
+end_offset(col::ColumnChunk) = page_offset(col) + col.meta_data.total_compressed_size
 
 # file format verification
 function is_par_file(fname::AbstractString)
@@ -60,12 +86,33 @@ function is_par_file(io)
     true
 end
 
-# file metadata
-function read_thrift(buff::Array{UInt8}, typ)
-    t = TMemoryTransport(buff)
-    p = TCompactProtocol(t)
-    read(p, typ)
+# column metadata
+function metadata(io, path::AbstractString, col::ColumnChunk)
+    if isfilled(col, :file_path)
+        @logmsg("opening file $(col.file_path) to read column metadata at $(col.file_offset)")
+        closeio = true
+        fio = open(col.file_path)
+    else
+        if io == nothing
+            @logmsg("opening file $path to read column metadata at $(col.file_offset)")
+            closeio = true
+            fio = open(path)
+        else
+            @logmsg("reading column metadata at $(col.file_offset)")
+            closeio = false
+            fio = io
+        end
+    end
+    seek(fio, col.file_offset)
+    meta = read_thrift(fio, ColumnMetaData)
+    closeio && close(fio)
+    meta
 end
+
+# file metadata
+read_thrift(buff::Array{UInt8}, typ) = read(TCompactProtocol(TMemoryTransport(buff)), typ)
+read_thrift(io::IO, typ) = read(TCompactProtocol(TFileTransport(io)), typ)
+read_thrift{T<:TTransport}(t::T, typ) = read(TCompactProtocol(t), typ)
 
 function metadata_length(io)
     sz = filesize(io)
@@ -75,11 +122,21 @@ function metadata_length(io)
     ProtoBuf.read_fixed(io, Int32)
 end
 
-function metadata(io, len::Integer=metadata_length(io))
+function metadata(io, path::AbstractString, len::Integer=metadata_length(io))
     @logmsg("metadata len = $len")
     sz = filesize(io)
     seek(io, sz - SZ_PAR_MAGIC - SZ_FOOTER - len)
-    meta_bytes = Array(UInt8, len)
-    read!(io, meta_bytes)
-    read_thrift(meta_bytes, FileMetaData)
+    meta = read_thrift(io, FileMetaData)
+    # go through all column chunks and read metadata from file offsets if required
+    for grp in meta.row_groups
+        for col in grp.columns
+            if !isfilled(col, :meta_data)
+                # need to read metadata from an offset
+                col.meta_data = metadata(io, path, col)
+            end
+        end
+    end
+    meta
 end
+
+metadata(par::ParFile) = par.meta

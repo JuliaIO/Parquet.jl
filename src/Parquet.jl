@@ -6,8 +6,9 @@ using Snappy
 using GZip
 
 import Base: show
+import Thrift: isfilled
 
-export is_par_file, ParFile, show
+export is_par_file, ParFile, show, rowgroups, columns, pages
 
 # enable logging only during debugging
 using Logging
@@ -25,5 +26,6 @@ end
 include("PAR2/PAR2.jl")
 using .PAR2
 include("reader.jl")
+include("show.jl")
 
 end # module
