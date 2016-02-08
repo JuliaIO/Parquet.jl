@@ -4,12 +4,26 @@ const SZ_PAR_MAGIC = length(PAR_MAGIC)
 const SZ_FOOTER = 4
 const SZ_VALID_PAR = 2*SZ_PAR_MAGIC + SZ_FOOTER
 
+# unit of compression
+type Page
+    colchunk::ColumnChunk
+    hdr::PageHeader
+    pos::Int
+    data::Vector{UInt8}
+end
+
+#type Column
+#    rg::RowGroup
+#    chunks::Vector{ColumnChunk}
+#    pages::Vector{Page}
+#end
+
 type ParFile
     path::AbstractString
     handle::IOStream
     meta_len::Int32
     meta::FileMetaData
-    page_meta_cache::Dict{ColumnChunk,Vector{PageHeader}}
+    page_meta_cache::LRU{ColumnChunk,Vector{Page}}
 end
 
 function ParFile(path::AbstractString)
@@ -22,16 +36,48 @@ function ParFile(path::AbstractString)
     end
 end
 
-function ParFile(path::AbstractString, handle::IOStream)
+function ParFile(path::AbstractString, handle::IOStream; maxcache::Integer=10)
     is_par_file(handle) || error("Not a parquet format file: $path")
     meta_len = metadata_length(handle)
     meta = metadata(handle, path, meta_len)
-    ParFile(path, handle, meta_len, meta, Dict{ColumnChunk,Vector{PageHeader}}())
+    ParFile(path, handle, meta_len, meta, LRU{ColumnChunk,Vector{Page}}(maxcache))
 end
 
+colname(col::ColumnChunk) = colname(col.meta_data)
+colname(col::ColumnMetaData) = join(col.path_in_schema, '.')
+colnames(rowgroup::RowGroup) = [colname(col) for col in rowgroup.columns]
+
+# return all rowgroups in the par file
 rowgroups(par::ParFile) = par.meta.row_groups
+
+# Return rowgroups that stores all the columns mentioned in `cnames`.
+# Returned row groups can be further queried to get the range of rows.
+rowgroups(par::ParFile, colname::AbstractString, rowrange::UnitRange=1:typemax(Int64)) = rowgroups(par, [colname], rowrange)
+function rowgroups(par::ParFile, cnames, rowrange::UnitRange=1:typemax(Int64))
+    R = RowGroup[]
+    L = length(cnames)
+    beginrow = 1
+    for rowgrp in rowgroups(par)
+        cnamesrg = colnames(rowgrp)
+        found = length(intersect(cnames, cnamesrg))
+        endrow = beginrow + rowgrp.num_rows - 1
+        (found == L) && (length(intersect(beginrow:endrow)) > 0) && push!(R, rowgrp)
+        beginrow = endrow + 1
+    end
+    R
+end
+
 columns(par::ParFile, rowgroupidx::Integer) = columns(par, rowgroups(par)[rowgroupidx])
 columns(par::ParFile, rowgroup::RowGroup) = rowgroup.columns
+columns(par::ParFile, rowgroup::RowGroup, colname::AbstractString) = columns(par, rowgroup, [colname])
+function columns(par::ParFile, rowgroup::RowGroup, cnames)
+    R = ColumnChunk[]
+    for col in columns(par, rowgroup)
+        (colname(col) in cnames) && push!(R, col)
+    end
+    R
+end
+
 pages(par::ParFile, rowgroupidx::Integer, colidx::Integer) = pages(par, columns(par, rowgroupidx), colidx)
 pages(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = pages(par, cols[colidx])
 function pages(par::ParFile, col::ColumnChunk)
@@ -40,15 +86,37 @@ function pages(par::ParFile, col::ColumnChunk)
     pos = page_offset(col)
     endpos = end_offset(col)
     io = par.handle
-    pagevec = PageHeader[]
+    pagevec = Page[]
     while pos < endpos
         seek(io, pos)
-        page = read_thrift(io, PageHeader)
+        pagehdr = read_thrift(io, PageHeader)
+
+        buff = Array(UInt8, page_size(pagehdr))
+        page_data_pos = position(io)
+        data = read!(io, buff)
+        page = Page(col, pagehdr, page_data_pos, data)
         push!(pagevec, page)
-        pos = (position(io) + page_size(page))
+        pos = position(io)
     end
     par.page_meta_cache[col] = pagevec
     pagevec
+end
+
+function bytes(page::Page, uncompressed::Bool=true)
+    data = page.data
+    codec = page.colchunk.meta_data.codec
+    if uncompressed && (codec != CompressionCodec.UNCOMPRESSED)
+        uncompressed_sz = page.hdr.uncompressed_page_size
+        if codec == CompressionCodec.SNAPPY
+            data = Snappy.uncompress(data)
+        elseif codec == CompressionCodec.GZIP
+            data = Zlib.decompress(data)
+        else
+            error("Unknown compression codec for column chunk: $codec")
+        end
+        (length(data) == uncompressed_sz) || error("failed to uncompress page. expected $(uncompressed_sz), got $(length(data)) bytes")
+    end
+    data
 end
 
 page_size(page::PageHeader) = Thrift.isfilled(page, :compressed_page_size) ? page.compressed_page_size : page.uncompressed_page_size
@@ -87,25 +155,28 @@ function is_par_file(io)
 end
 
 # column metadata
-function metadata(io, path::AbstractString, col::ColumnChunk)
+open(par::ParFile, col::ColumnChunk) = open(par.handle, par.path, col)
+close(par::ParFile, col::ColumnChunk, io) = (par.handle == io) || close(io)
+function open(io, path::AbstractString, col::ColumnChunk)
     if isfilled(col, :file_path)
         @logmsg("opening file $(col.file_path) to read column metadata at $(col.file_offset)")
-        closeio = true
-        fio = open(col.file_path)
+        open(col.file_path)
     else
         if io == nothing
             @logmsg("opening file $path to read column metadata at $(col.file_offset)")
-            closeio = true
-            fio = open(path)
+            open(path)
         else
             @logmsg("reading column metadata at $(col.file_offset)")
-            closeio = false
-            fio = io
+            io
         end
     end
+end
+
+function metadata(io, path::AbstractString, col::ColumnChunk)
+    fio = open(io, path, col)
     seek(fio, col.file_offset)
     meta = read_thrift(fio, ColumnMetaData)
-    closeio && close(fio)
+    (fio !== io) && close(fio)
     meta
 end
 

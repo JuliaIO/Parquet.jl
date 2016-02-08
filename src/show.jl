@@ -76,14 +76,24 @@ show(io::IO, hdr::IndexPageHeader, indent::AbstractString="") = nothing
 function show(io::IO, page::DictionaryPageHeader, indent::AbstractString="")
     println(io, indent, hdr.num_values, " values")
 end
+
 function show(io::IO, hdr::DataPageHeader, indent::AbstractString="")
     println(io, indent, hdr.num_values, " values")
     println(io, indent, "encoding:", Thrift.enumstr(Encoding, hdr.encoding), ", definition:", Thrift.enumstr(Encoding, hdr.definition_level_encoding), ", repetition:", Thrift.enumstr(Encoding, hdr.repetition_level_encoding))
+    Thrift.isfilled(hdr, :statistics) && show(io, hdr.statistics, indent)
+end
+
+function show(io::IO, hdr::DataPageHeaderV2, indent::AbstractString="")
+    compressed = Thrift.isfilled(hdr, :is_compressed) ? hdr.is_compressed : true
+    println(io, indent, hdr.num_values, " values, ", hdr.num_nulls, " nulls, ", hdr.num_rows, " rows, compressed:", compressed)
+    println(io, indent, "encoding:", Thrift.enumstr(Encoding, hdr.encoding), ", definition:", Thrift.enumstr(Encoding, hdr.definition_level_encoding), ", repetition:", Thrift.enumstr(Encoding, hdr.repetition_level_encoding))
+    Thrift.isfilled(hdr, :statistics) && show(io, hdr.statistics, indent)
 end
 
 function show(io::IO, page::PageHeader, indent::AbstractString="")
     println(io, indent, Thrift.enumstr(PageType, page._type), " compressed bytes:", page.compressed_page_size, " (", page.uncompressed_page_size, " uncompressed)")
     Thrift.isfilled(page, :data_page_header) && show(io, page.data_page_header, indent * "  ")
+    Thrift.isfilled(page, :data_page_header_v2) && show(io, page.data_page_header_v2, indent * "  ")
     Thrift.isfilled(page, :index_page_header) && show(io, page.index_page_header, indent * "  ")
     Thrift.isfilled(page, :dictionary_page_header) && show(io, page.dictionary_page_header, indent * "  ")
 end
@@ -95,14 +105,36 @@ function show(io::IO, pages::Vector{PageHeader}, indent::AbstractString="")
     end
 end
 
-function show(io::IO, colmeta::ColumnMetaData, indent::AbstractString="")
-    print(io, indent, Thrift.enumstr(_Type, colmeta._type), " ")
-    pfx = ""
-    for comp in colmeta.path_in_schema
-        print(io, pfx, comp)
-        pfx = "."
+show(io::IO, page::Page, indent::AbstractString="") = show(io, page.hdr, indent)
+show(io::IO, pages::Vector{Page}, indent::AbstractString="") = show(io, [page.hdr for page in pages], indent)
+
+function show(io::IO, stat::Statistics, indent::AbstractString="")
+    println(io, indent, "Statistics:")
+    if Thrift.isfilled(stat, :min) && Thrift.isfilled(stat, :max)
+        println(io, indent, "  range:", stat.min, ":", stat.max)
+    elseif Thrift.isfilled(stat, :min)
+        println(io, indent, "  min:", stat.min)
+    elseif Thrift.isfilled(stat, :max)
+        println(io, indent, "  max:", stat.max)
     end
-    println(io, ", num values:", colmeta.num_values)
+    Thrift.isfilled(stat, :null_count) && println(io, indent, "  null count:", stat.null_count)
+    Thrift.isfilled(stat, :distinct_count) && println(io, indent, "  distinct count:", stat.distinct_count)
+end
+
+function show(io::IO, page_enc::PageEncodingStats, indent::AbstractString="")
+    println(io, indent, page_enc.count, " ", Thrift.enumstr(Encoding, page_enc.encoding), " encoded ", Thrift.enumstr(PageType, page_enc.page_type), " pages")
+end
+
+function show(io::IO, page_encs::Vector{PageEncodingStats}, indent::AbstractString="")
+    isempty(page_encs) && return
+    println(io, indent, "Page encoding statistics:")
+    for page_enc in page_encs
+        show(io, page_enc, indent * "  ")
+    end
+end
+
+function show(io::IO, colmeta::ColumnMetaData, indent::AbstractString="")
+    print(io, indent, Thrift.enumstr(_Type, colmeta._type), " ", colname(colmeta), ", num values:", colmeta.num_values)
     show_encodings(io, colmeta.encodings, indent)
     if colmeta.codec != CompressionCodec.UNCOMPRESSED
         println(io, indent, Thrift.enumstr(CompressionCodec, colmeta.codec), " compressed bytes:", colmeta.total_compressed_size, " (", colmeta.total_uncompressed_size, " uncompressed)")
@@ -114,6 +146,8 @@ function show(io::IO, colmeta::ColumnMetaData, indent::AbstractString="")
     Thrift.isfilled(colmeta, :index_page_offset) && print(io, ", index:", colmeta.index_page_offset)
     Thrift.isfilled(colmeta, :dictionary_page_offset) && print(io, ", dictionary:", colmeta.dictionary_page_offset)
     println(io, "")
+    Thrift.isfilled(colmeta, :statistics) && show(io, colmeta.statistics, indent)
+    Thrift.isfilled(colmeta, :encoding_stats) && show(io, colmeta.encoding_stats, indent)
     Thrift.isfilled(colmeta, :key_value_metadata) && show(io, colmeta.key_value_metadata, indent)
 end
 
@@ -153,4 +187,5 @@ function show(io::IO, par::ParFile)
     println(io, "    version: $(meta.version)")
     println(io, "    nrows: $(meta.num_rows)")
     println(io, "    created by: $(meta.created_by)")
+    println(io, "    cached: $(length(par.page_meta_cache)) column chunks")
 end

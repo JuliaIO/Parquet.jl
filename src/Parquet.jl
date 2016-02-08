@@ -3,12 +3,13 @@ module Parquet
 using Thrift
 using ProtoBuf
 using Snappy
-using GZip
+using Zlib
+using LRUCache
 
-import Base: show
+import Base: show, open, close
 import Thrift: isfilled
 
-export is_par_file, ParFile, show, rowgroups, columns, pages
+export is_par_file, ParFile, show, rowgroups, columns, pages, bytes, colname, colnames
 
 # enable logging only during debugging
 using Logging
