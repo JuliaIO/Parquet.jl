@@ -4,7 +4,7 @@ const SZ_PAR_MAGIC = length(PAR_MAGIC)
 const SZ_FOOTER = 4
 const SZ_VALID_PAR = 2*SZ_PAR_MAGIC + SZ_FOOTER
 
-# unit of compression
+# page is the unit of compression
 type Page
     colchunk::ColumnChunk
     hdr::PageHeader
@@ -18,12 +18,40 @@ end
 #    pages::Vector{Page}
 #end
 
+# schema and helper methods
+type Schema
+    schema::Vector{SchemaElement}
+    name_lookup::Dict{AbstractString,SchemaElement}
+
+    function Schema(elems::Vector{SchemaElement})
+        name_lookup = Dict{AbstractString,SchemaElement}()
+        for sch in elems
+            name_lookup[sch.name] = sch
+        end
+        new(elems, name_lookup)
+    end
+end
+
+leafname(schname::AbstractString) = ('.' in schname) ? leafname(split(schname, '.')) : schname
+leafname(schname::Vector) = schname[end]
+elem(sch::Schema, schname) = sch.name_lookup[leafname(schname)]
+isrequired(sch::Schema, schname) = (elem(sch, schname).repetition_type == FieldRepetitionType.REQUIRED)
+
+max_repetition_level(sch::Schema, schname::AbstractString) = max_repetition_level(sch, split(schname, '.'))
+max_repetition_level(sch::Schema, schname) = sum([isrequired(sch, namepart) for namepart in schname])
+
+max_definition_level(sch::Schema, schname::AbstractString) = max_definition_level(sch, split(schname, '.'))
+max_definition_level(sch::Schema, schname) = sum([!isrequired(sch, namepart) for namepart in schname])
+
+# parquet file.
+# Keeps a handle to the open file and the file metadata.
+# Holds a LRU cache of raw bytes of the pages read.
 type ParFile
     path::AbstractString
     handle::IOStream
-    meta_len::Int32
     meta::FileMetaData
-    page_meta_cache::LRU{ColumnChunk,Vector{Page}}
+    schema::Schema
+    page_cache::LRU{ColumnChunk,Vector{Page}}
 end
 
 function ParFile(path::AbstractString)
@@ -40,7 +68,7 @@ function ParFile(path::AbstractString, handle::IOStream; maxcache::Integer=10)
     is_par_file(handle) || error("Not a parquet format file: $path")
     meta_len = metadata_length(handle)
     meta = metadata(handle, path, meta_len)
-    ParFile(path, handle, meta_len, meta, LRU{ColumnChunk,Vector{Page}}(maxcache))
+    ParFile(path, handle, meta, Schema(meta.schema), LRU{ColumnChunk,Vector{Page}}(maxcache))
 end
 
 colname(col::ColumnChunk) = colname(col.meta_data)
@@ -81,7 +109,7 @@ end
 pages(par::ParFile, rowgroupidx::Integer, colidx::Integer) = pages(par, columns(par, rowgroupidx), colidx)
 pages(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = pages(par, cols[colidx])
 function pages(par::ParFile, col::ColumnChunk)
-    (col in keys(par.page_meta_cache)) && (return par.page_meta_cache[col])
+    (col in keys(par.page_cache)) && (return par.page_cache[col])
     # read pages from the file
     pos = page_offset(col)
     endpos = end_offset(col)
@@ -98,7 +126,7 @@ function pages(par::ParFile, col::ColumnChunk)
         push!(pagevec, page)
         pos = position(io)
     end
-    par.page_meta_cache[col] = pagevec
+    par.page_cache[col] = pagevec
     pagevec
 end
 

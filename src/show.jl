@@ -134,7 +134,7 @@ function show(io::IO, page_encs::Vector{PageEncodingStats}, indent::AbstractStri
 end
 
 function show(io::IO, colmeta::ColumnMetaData, indent::AbstractString="")
-    print(io, indent, Thrift.enumstr(_Type, colmeta._type), " ", colname(colmeta), ", num values:", colmeta.num_values)
+    println(io, indent, Thrift.enumstr(_Type, colmeta._type), " ", colname(colmeta), ", num values:", colmeta.num_values)
     show_encodings(io, colmeta.encodings, indent)
     if colmeta.codec != CompressionCodec.UNCOMPRESSED
         println(io, indent, Thrift.enumstr(CompressionCodec, colmeta.codec), " compressed bytes:", colmeta.total_compressed_size, " (", colmeta.total_uncompressed_size, " uncompressed)")
@@ -187,5 +187,5 @@ function show(io::IO, par::ParFile)
     println(io, "    version: $(meta.version)")
     println(io, "    nrows: $(meta.num_rows)")
     println(io, "    created by: $(meta.created_by)")
-    println(io, "    cached: $(length(par.page_meta_cache)) column chunks")
+    println(io, "    cached: $(length(par.page_cache)) column chunks")
 end
