@@ -71,9 +71,16 @@ function ParFile(path::AbstractString, handle::IOStream; maxcache::Integer=10)
     ParFile(path, handle, meta, Schema(meta.schema), LRU{ColumnChunk,Vector{Page}}(maxcache))
 end
 
+##
+# layer 1 access
+# can access raw (uncompressed) bytes from pages
+
 colname(col::ColumnChunk) = colname(col.meta_data)
 colname(col::ColumnMetaData) = join(col.path_in_schema, '.')
 colnames(rowgroup::RowGroup) = [colname(col) for col in rowgroup.columns]
+
+coltype(col::ColumnChunk) = coltype(col.meta_data)
+coltype(col::ColumnMetaData) = col._type
 
 # return all rowgroups in the par file
 rowgroups(par::ParFile) = par.meta.row_groups
@@ -147,42 +154,78 @@ function bytes(page::Page, uncompressed::Bool=true)
     data
 end
 
-page_size(page::PageHeader) = Thrift.isfilled(page, :compressed_page_size) ? page.compressed_page_size : page.uncompressed_page_size
+##
+# layer 2 access
+# can access decoded values from pages
+# TODO: map dictionary encoded values
+function read_levels(io::IO, max_val::Integer, enc::Int32, num_values::Integer)
+    bw = bitwidth(max_val)
+    (bw == 0) && (return Int[])
+    @logmsg("reading levels. enc:$enc ($(Thrift.enumstr(Encoding,enc))), max_val:$max_val, num_values:$num_values")
 
-function page_offset(col::ColumnChunk)
-    colmeta = col.meta_data
-    offset = colmeta.data_page_offset
-    Thrift.isfilled(colmeta, :index_page_offset) && (offset = min(offset, colmeta.index_page_offset))
-    Thrift.isfilled(colmeta, :dictionary_page_offset) && (offset = min(offset, colmeta.dictionary_page_offset))
-    offset
-end
-end_offset(col::ColumnChunk) = page_offset(col) + col.meta_data.total_compressed_size
-
-# file format verification
-function is_par_file(fname::AbstractString)
-    open(fname) do io
-        return is_par_file(io)
+    if enc == Encoding.RLE
+        read_hybrid(io, num_values, bw)
+    elseif enc == Encoding.BIT_PACKED
+        read_bitpacked_run_old(io, num_values, bw)
+    elseif enc == Encoding.PLAIN
+        # levels should never be of this type though
+        read_plain(io, _Type.INT32, num_values)
+    else
+        error("unsupported encoding $enc ($(Thrift.enumstr(Encoding,enc))) for levels")
     end
 end
 
-function is_par_file(io)
-    magic = Array(UInt8, 4)
+function read_values(io::IO, enc::Int32, typ::Int32, num_values::Integer)
+    @logmsg("reading values. enc:$enc ($(Thrift.enumstr(Encoding,enc))), num_values:$num_values")
 
-    sz = filesize(io)
-    (sz > SZ_VALID_PAR) || return false
-
-    seekstart(io)
-    read!(io, magic)
-    (convert(ASCIIString, magic) == PAR_MAGIC) || return false
-
-    seek(io, sz - SZ_PAR_MAGIC)
-    read!(io, magic)
-    (convert(ASCIIString, magic) == PAR_MAGIC) || return false
-
-    true
+    if enc == Encoding.PLAIN
+        read_plain(io, typ, num_values)
+    elseif enc == Encoding.PLAIN_DICTIONARY
+        read_rle_dict(io, num_values)
+    else
+        #error("unsupported encoding $enc for pages")
+        @logmsg("unsupported encoding $enc ($(Thrift.enumstr(Encoding,enc))) for pages")
+        return Int[]
+    end
 end
 
-# column metadata
+function values(par::ParFile, page::Page)
+    ctype = coltype(page.colchunk)
+    rawbytes = bytes(page)
+    io = IOBuffer(rawbytes)
+    encs = page_encodings(page)
+    num_values = page_num_values(page)
+    typ = page.hdr._type
+
+    if (typ == PageType.DATA_PAGE) || (typ == PageType.DATA_PAGE_V2)
+        read_levels_and_values(io, encs, ctype, num_values, par, page)
+    elseif typ == PageType.DICTIONARY_PAGE
+        (read_plain_dict(io, num_values, ctype),)
+    else
+        ()
+    end
+end
+
+function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::Integer, par::ParFile, page::Page)
+    cname = colname(page.colchunk)
+    enc, defn_enc, rep_enc = encs
+
+    #@logmsg("before reading defn levels nb_available in page: $(nb_available(io))")
+    # read definition levels. skipped if column is required
+    defn_levels = isrequired(par.schema, cname) ? Int[] : read_levels(io, max_definition_level(par.schema, cname), defn_enc, num_values)
+
+    #@logmsg("before reading repn levels nb_available in page: $(nb_available(io))")
+    # read repetition levels. skipped if all columns are at 1st level
+    repn_levels = ('.' in cname) ? read_levels(io, max_repetition_level(par.schema, cname), rep_enc, num_values) : Int[]
+
+    #@logmsg("before reading values nb_available in page: $(nb_available(io))")
+    # read values
+    vals = read_values(io, enc, ctype, num_values)
+
+    vals, defn_levels, repn_levels
+end
+
+# column and page metadata
 open(par::ParFile, col::ColumnChunk) = open(par.handle, par.path, col)
 close(par::ParFile, col::ColumnChunk, io) = (par.handle == io) || close(io)
 function open(io, path::AbstractString, col::ColumnChunk)
@@ -207,6 +250,35 @@ function metadata(io, path::AbstractString, col::ColumnChunk)
     (fio !== io) && close(fio)
     meta
 end
+
+function page_offset(col::ColumnChunk)
+    colmeta = col.meta_data
+    offset = colmeta.data_page_offset
+    Thrift.isfilled(colmeta, :index_page_offset) && (offset = min(offset, colmeta.index_page_offset))
+    Thrift.isfilled(colmeta, :dictionary_page_offset) && (offset = min(offset, colmeta.dictionary_page_offset))
+    offset
+end
+end_offset(col::ColumnChunk) = page_offset(col) + col.meta_data.total_compressed_size
+
+page_size(page::PageHeader) = Thrift.isfilled(page, :compressed_page_size) ? page.compressed_page_size : page.uncompressed_page_size
+
+page_encodings(page::Page) = page_encodings(page.hdr)
+function page_encodings(page::PageHeader)
+    Thrift.isfilled(page, :data_page_header) ? page_encodings(page.data_page_header) :
+    Thrift.isfilled(page, :data_page_header_v2) ? page_encodings(page.data_page_header_v2) :
+    Thrift.isfilled(page, :dictionary_page_header) ? page_encodings(page.dictionary_page_header) : ()
+end
+page_encodings(page::DictionaryPageHeader) = (page.encoding,)
+page_encodings(page::DataPageHeader) = (page.encoding, page.definition_level_encoding, page.repetition_level_encoding)
+page_encodings(page::DataPageHeaderV2) = (page.encoding, Encoding.RLE, Encoding.RLE)
+
+page_num_values(page::Page) = page_num_values(page.hdr)
+function page_num_values(page::PageHeader)
+    Thrift.isfilled(page, :data_page_header) ? page_num_values(page.data_page_header) :
+    Thrift.isfilled(page, :data_page_header_v2) ? page_num_values(page.data_page_header_v2) :
+    Thrift.isfilled(page, :dictionary_page_header) ? page_num_values(page.dictionary_page_header) : 0
+end
+page_num_values(page::Union{DataPageHeader,DataPageHeaderV2,DictionaryPageHeader}) = page.num_values
 
 # file metadata
 read_thrift(buff::Array{UInt8}, typ) = read(TCompactProtocol(TMemoryTransport(buff)), typ)
@@ -239,3 +311,27 @@ function metadata(io, path::AbstractString, len::Integer=metadata_length(io))
 end
 
 metadata(par::ParFile) = par.meta
+
+# file format verification
+function is_par_file(fname::AbstractString)
+    open(fname) do io
+        return is_par_file(io)
+    end
+end
+
+function is_par_file(io)
+    magic = Array(UInt8, 4)
+
+    sz = filesize(io)
+    (sz > SZ_VALID_PAR) || return false
+
+    seekstart(io)
+    read!(io, magic)
+    (convert(ASCIIString, magic) == PAR_MAGIC) || return false
+
+    seek(io, sz - SZ_PAR_MAGIC)
+    read!(io, magic)
+    (convert(ASCIIString, magic) == PAR_MAGIC) || return false
+
+    true
+end

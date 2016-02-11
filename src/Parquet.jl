@@ -6,10 +6,10 @@ using Snappy
 using Zlib
 using LRUCache
 
-import Base: show, open, close
+import Base: show, open, close, values
 import Thrift: isfilled
 
-export is_par_file, ParFile, show, rowgroups, columns, pages, bytes, colname, colnames
+export is_par_file, ParFile, show, rowgroups, columns, pages, bytes, values, colname, colnames
 
 # enable logging only during debugging
 using Logging
@@ -26,6 +26,7 @@ end
 # package code goes here
 include("PAR2/PAR2.jl")
 using .PAR2
+include("codec.jl")
 include("reader.jl")
 include("show.jl")
 

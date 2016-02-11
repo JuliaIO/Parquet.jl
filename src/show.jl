@@ -79,7 +79,7 @@ end
 
 function show(io::IO, hdr::DataPageHeader, indent::AbstractString="")
     println(io, indent, hdr.num_values, " values")
-    println(io, indent, "encoding:", Thrift.enumstr(Encoding, hdr.encoding), ", definition:", Thrift.enumstr(Encoding, hdr.definition_level_encoding), ", repetition:", Thrift.enumstr(Encoding, hdr.repetition_level_encoding))
+    println(io, indent, "encodings: values as ", Thrift.enumstr(Encoding, hdr.encoding), ", definitions as ", Thrift.enumstr(Encoding, hdr.definition_level_encoding), ", repetitions as ", Thrift.enumstr(Encoding, hdr.repetition_level_encoding))
     Thrift.isfilled(hdr, :statistics) && show(io, hdr.statistics, indent)
 end
 
@@ -134,7 +134,7 @@ function show(io::IO, page_encs::Vector{PageEncodingStats}, indent::AbstractStri
 end
 
 function show(io::IO, colmeta::ColumnMetaData, indent::AbstractString="")
-    println(io, indent, Thrift.enumstr(_Type, colmeta._type), " ", colname(colmeta), ", num values:", colmeta.num_values)
+    println(io, indent, Thrift.enumstr(_Type, coltype(colmeta)), " ", colname(colmeta), ", num values:", colmeta.num_values)
     show_encodings(io, colmeta.encodings, indent)
     if colmeta.codec != CompressionCodec.UNCOMPRESSED
         println(io, indent, Thrift.enumstr(CompressionCodec, colmeta.codec), " compressed bytes:", colmeta.total_compressed_size, " (", colmeta.total_uncompressed_size, " uncompressed)")
