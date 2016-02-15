@@ -157,7 +157,38 @@ end
 ##
 # layer 2 access
 # can access decoded values from pages
-# TODO: map dictionary encoded values
+
+map_dict_vals{T1,T2}(valdict::Vector{T1}, vals::Vector{T2}) = isempty(valdict) ? vals : [valdict[v+1] for v in vals]
+
+values(par::ParFile, rowgroupidx::Integer, colidx::Integer) = values(par, columns(par, rowgroupidx), colidx)
+values(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = values(par, cols[colidx])
+function values(par::ParFile, col::ColumnChunk)
+    ctype = coltype(col)
+    pgs = pages(par, col)
+    valdict = Int[]
+    jtype = PLAIN_JTYPES[ctype+1]
+    vals = Array(jtype, 0)
+    defn_levels = Int[]
+    repn_levels = Int[]
+
+    for pg in pgs
+        typ = pg.hdr._type
+        valtup = values(par, pg)
+        if (typ == PageType.DATA_PAGE) || (typ == PageType.DATA_PAGE_V2)
+            @logmsg("reading a data page for columnchunk")
+            _vals, _defn_levels, _repn_levels = valtup
+            append!(vals, map_dict_vals(valdict, _vals))
+            append!(defn_levels, _defn_levels)
+            append!(repn_levels, _repn_levels)
+        elseif typ == PageType.DICTIONARY_PAGE
+            _vals = valtup[1]
+            @logmsg("read a dictionary page for columnchunk with $(length(_vals)) values")
+            valdict = isempty(valdict) ? _vals : append!(valdict, _vals)
+        end
+    end
+    vals, defn_levels, repn_levels
+end
+
 function read_levels(io::IO, max_val::Integer, enc::Int32, num_values::Integer)
     bw = bitwidth(max_val)
     (bw == 0) && (return Int[])
@@ -200,7 +231,7 @@ function values(par::ParFile, page::Page)
     if (typ == PageType.DATA_PAGE) || (typ == PageType.DATA_PAGE_V2)
         read_levels_and_values(io, encs, ctype, num_values, par, page)
     elseif typ == PageType.DICTIONARY_PAGE
-        (read_plain_dict(io, num_values, ctype),)
+        (read_plain_dict(io, num_values, ctype; read_len=false),)
     else
         ()
     end

@@ -54,12 +54,12 @@ end
 const PLAIN_JTYPES = (Bool, Int32, Int64, Int128, Float32, Float64, UInt8, UInt8)
 
 # read plain encoding (PLAIN = 0)
-function read_plain{T}(io::IO, typ::Int32, count::Integer=0, jtype::Type{T}=PLAIN_JTYPES[typ+1])
+function read_plain{T}(io::IO, typ::Int32, count::Integer=0, jtype::Type{T}=PLAIN_JTYPES[typ+1]; read_len::Bool=true)
     if typ == _Type.FIXED_LEN_BYTE_ARRAY
         @logmsg("reading fixedlenbytearray length:$count")
         read!(io, Array(UInt8, count))
     elseif typ == _Type.BYTE_ARRAY
-        count = read_fixed(io, Int32)
+        read_len && (count = read_fixed(io, Int32))
         @logmsg("reading bytearray length:$count")
         read!(io, Array(UInt8, count))
     elseif typ == _Type.BOOLEAN
@@ -75,9 +75,9 @@ function read_plain{T}(io::IO, typ::Int32, count::Integer=0, jtype::Type{T}=PLAI
 end
 
 # read plain dictionary (PLAIN_DICTIONARY = 2)
-function read_plain_dict(io::IO, count::Integer, typ::Int32)
-    @logmsg("reading plain dictionary type:$typ, count:$count")
-    arr = read_plain(io, typ, count)
+function read_plain_dict(io::IO, count::Integer, typ::Int32; read_len::Bool=true)
+    @logmsg("reading plain dictionary type:$typ, count:$count, read_len:$read_len")
+    arr = read_plain(io, typ, count; read_len=read_len)
     @logmsg("read $(length(arr)) dictionary values")
     arr
 end
