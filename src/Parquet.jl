@@ -27,6 +27,7 @@ end
 include("PAR2/PAR2.jl")
 using .PAR2
 include("codec.jl")
+include("schema.jl")
 include("reader.jl")
 include("show.jl")
 
