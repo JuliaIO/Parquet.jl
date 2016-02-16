@@ -50,6 +50,8 @@ end
 # layer 1 access
 # can access raw (uncompressed) bytes from pages
 
+schema(par::ParFile) = par.schema
+
 colname(col::ColumnChunk) = colname(col.meta_data)
 colname(col::ColumnMetaData) = join(col.path_in_schema, '.')
 colnames(rowgroup::RowGroup) = [colname(col) for col in rowgroup.columns]

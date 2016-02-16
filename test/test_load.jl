@@ -29,10 +29,50 @@ function test_load(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compati
     println("\tsuccess")
 end
 
+function print_names(indent, t)
+    for f in fieldnames(t)
+        ftype = fieldtype(t, f)
+        println("\t", indent, f, "::", ftype)
+        if isa(ftype, DataType)
+            print_names(indent * "    ", ftype)
+        end
+    end
+end
+
+function test_schema(file, schema_name::Symbol,  parcompat=joinpath(dirname(@__FILE__), "parquet-compatibility"))
+    p = ParFile(joinpath(parcompat, file))
+    println("loaded $file")
+
+    #mod_name = string(schema_name) * "Module"
+    #eval(Main, parse("module $mod_name end"))
+    #mod = getfield(Main, symbol(mod_name))
+
+    mod = Main
+    schema(JuliaConverter(mod), schema(p), schema_name)
+    @test schema_name in names(mod, true)
+    println("\tschema: \n\t", getfield(mod, schema_name))
+    print_names("    ", getfield(mod, schema_name))
+
+    io = IOBuffer()
+    schema(ThriftConverter(io), schema(p), schema_name)
+    thriftsch = strip(takebuf_string(io))
+    @test startswith(thriftsch, "struct " * string(schema_name))
+    @test endswith(thriftsch, "}")
+    println(thriftsch)
+
+    io = IOBuffer()
+    schema(ProtoConverter(io), schema(p), schema_name)
+    protosch = strip(takebuf_string(io))
+    @test startswith(protosch, "message " * string(schema_name))
+    @test endswith(protosch, "}")
+    println(protosch)
+end
+
 function test_load_all_pages()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
             test_load("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
+            test_schema("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", symbol(fname * "_" * encformat))
         end
     end
 end

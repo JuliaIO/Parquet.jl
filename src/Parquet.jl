@@ -10,6 +10,7 @@ import Base: show, open, close, values
 import Thrift: isfilled
 
 export is_par_file, ParFile, show, rowgroups, columns, pages, bytes, values, colname, colnames
+export SchemaConverter, schema, JuliaConverter, ThriftConverter, ProtoConverter
 
 # enable logging only during debugging
 using Logging

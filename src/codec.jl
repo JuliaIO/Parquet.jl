@@ -49,9 +49,17 @@ function _read_varint{T <: Integer}(io::IO, ::Type{T})
     res
 end
 
-# parquet types: BOOLEAN, INT32, INT64, INT96, FLOAT, DOUBLE, BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY
-# enum values:         0,     1,     2,     3,     4,      5,          6,                    7
-const PLAIN_JTYPES = (Bool, Int32, Int64, Int128, Float32, Float64, UInt8, UInt8)
+# parquet types:           BOOLEAN,      INT32,    INT64,    INT96,   FLOAT,   DOUBLE, BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY
+# enum values:                   0,          1,        2,        3,       4,        5,          6,                   7
+const PLAIN_PROTOBUF_TYPES = ("bool", "sint32", "sint64", "sint64", "float", "double",    "bytes",              "bytes")
+
+# parquet types:           BOOLEAN, INT32, INT64, INT96,    FLOAT,   DOUBLE, BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY
+# enum values:                   0,     1,     2,     3,        4,        5,          6,                    7
+const PLAIN_THRIFT_TYPES = ("bool", "i32", "i64", "i64", "double", "double",   "binary",            "binary")
+
+# parquet types:   BOOLEAN, INT32, INT64,  INT96,   FLOAT,  DOUBLE, BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY
+# enum values:           0,     1,     2,      3,       4,       5,          6,                    7
+const PLAIN_JTYPES = (Bool, Int32, Int64, Int128, Float32, Float64,      UInt8,               UInt8)
 
 # read plain encoding (PLAIN = 0)
 function read_plain{T}(io::IO, typ::Int32, count::Integer=0, jtype::Type{T}=PLAIN_JTYPES[typ+1]; read_len::Bool=true)

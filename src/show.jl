@@ -49,6 +49,8 @@ function show(io::IO, schema::Vector{SchemaElement}, indent::AbstractString="")
     end
 end
 
+show(io::IO, schema::Schema, indent::AbstractString="") = show(io, schema.schema, indent)
+
 function show(io::IO, kvmeta::KeyValue, indent::AbstractString="")
     println(io, indent, kvmeta.key, " => ", kvmeta.value)
 end

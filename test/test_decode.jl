@@ -16,7 +16,7 @@ function test_decode(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compa
 
         for cc in ccs
             pgs = pages(p, cc)
-            println("\t\treading column chunk with $(length(pgs)) pages")
+            println("\t\treading column chunk with $(length(pgs)) pages, $(colname(cc))")
 
             for pg in pgs
                 bpg = bytes(pg)
