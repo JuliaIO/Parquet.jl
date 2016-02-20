@@ -12,12 +12,6 @@ type Page
     data::Vector{UInt8}
 end
 
-#type Column
-#    rg::RowGroup
-#    chunks::Vector{ColumnChunk}
-#    pages::Vector{Page}
-#end
-
 # parquet file.
 # Keeps a handle to the open file and the file metadata.
 # Holds a LRU cache of raw bytes of the pages read.
@@ -51,10 +45,21 @@ end
 # can access raw (uncompressed) bytes from pages
 
 schema(par::ParFile) = par.schema
+schema{T<:SchemaConverter}(conv::T, par::ParFile, schema_name::Symbol) = schema(conv, par.schema, schema_name)
 
 colname(col::ColumnChunk) = colname(col.meta_data)
 colname(col::ColumnMetaData) = join(col.path_in_schema, '.')
 colnames(rowgroup::RowGroup) = [colname(col) for col in rowgroup.columns]
+function colnames(par::ParFile)
+    s = Set{AbstractString}()
+    for rg in rowgroups(par)
+        push!(s, colnames(rg)...)
+    end
+    collect(s)
+end
+
+ncols(par::ParFile) = length(colnames(par))
+nrows(par::ParFile) = par.meta.num_rows
 
 coltype(col::ColumnChunk) = coltype(col.meta_data)
 coltype(col::ColumnMetaData) = col._type
@@ -144,6 +149,9 @@ function values(par::ParFile, col::ColumnChunk)
     pgs = pages(par, col)
     valdict = Int[]
     jtype = PLAIN_JTYPES[ctype+1]
+    if (ctype == _Type.BYTE_ARRAY) || (ctype == _Type.FIXED_LEN_BYTE_ARRAY)
+        jtype = Vector{jtype}
+    end
     vals = Array(jtype, 0)
     defn_levels = Int[]
     repn_levels = Int[]
@@ -154,7 +162,12 @@ function values(par::ParFile, col::ColumnChunk)
         if (typ == PageType.DATA_PAGE) || (typ == PageType.DATA_PAGE_V2)
             @logmsg("reading a data page for columnchunk")
             _vals, _defn_levels, _repn_levels = valtup
-            append!(vals, map_dict_vals(valdict, _vals))
+            enc, defn_enc, rep_enc = page_encodings(pg)
+            if enc == Encoding.PLAIN_DICTIONARY
+                append!(vals, map_dict_vals(valdict, _vals))
+            else
+                append!(vals, _vals)
+            end
             append!(defn_levels, _defn_levels)
             append!(repn_levels, _repn_levels)
         elseif typ == PageType.DICTIONARY_PAGE
@@ -177,7 +190,7 @@ function read_levels(io::IO, max_val::Integer, enc::Int32, num_values::Integer)
         read_bitpacked_run_old(io, num_values, bw)
     elseif enc == Encoding.PLAIN
         # levels should never be of this type though
-        read_plain(io, _Type.INT32, num_values)
+        read_plain_values(io, _Type.INT32, num_values)
     else
         error("unsupported encoding $enc ($(Thrift.enumstr(Encoding,enc))) for levels")
     end
@@ -187,13 +200,13 @@ function read_values(io::IO, enc::Int32, typ::Int32, num_values::Integer)
     @logmsg("reading values. enc:$enc ($(Thrift.enumstr(Encoding,enc))), num_values:$num_values")
 
     if enc == Encoding.PLAIN
-        read_plain(io, typ, num_values)
+        read_plain_values(io, num_values, typ)
     elseif enc == Encoding.PLAIN_DICTIONARY
         read_rle_dict(io, num_values)
     else
-        #error("unsupported encoding $enc for pages")
-        @logmsg("unsupported encoding $enc ($(Thrift.enumstr(Encoding,enc))) for pages")
-        return Int[]
+        error("unsupported encoding $enc for pages")
+        #@logmsg("unsupported encoding $enc ($(Thrift.enumstr(Encoding,enc))) for pages")
+        #return Int[]
     end
 end
 
@@ -208,7 +221,7 @@ function values(par::ParFile, page::Page)
     if (typ == PageType.DATA_PAGE) || (typ == PageType.DATA_PAGE_V2)
         read_levels_and_values(io, encs, ctype, num_values, par, page)
     elseif typ == PageType.DICTIONARY_PAGE
-        (read_plain_dict(io, num_values, ctype; read_len=false),)
+        (read_plain_values(io, num_values, ctype),)
     else
         ()
     end
@@ -232,6 +245,7 @@ function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::I
 
     vals, defn_levels, repn_levels
 end
+
 
 # column and page metadata
 open(par::ParFile, col::ColumnChunk) = open(par.handle, par.path, col)
@@ -289,9 +303,9 @@ end
 page_num_values(page::Union{DataPageHeader,DataPageHeaderV2,DictionaryPageHeader}) = page.num_values
 
 # file metadata
-read_thrift(buff::Array{UInt8}, typ) = read(TCompactProtocol(TMemoryTransport(buff)), typ)
-read_thrift(io::IO, typ) = read(TCompactProtocol(TFileTransport(io)), typ)
-read_thrift{T<:TTransport}(t::T, typ) = read(TCompactProtocol(t), typ)
+read_thrift{T}(buff::Array{UInt8}, ::Type{T}) = read(TCompactProtocol(TMemoryTransport(buff)), T)
+read_thrift{T}(io::IO, ::Type{T}) = read(TCompactProtocol(TFileTransport(io)), T)
+read_thrift{TR<:TTransport,T}(t::TR, ::Type{T}) = read(TCompactProtocol(t), T)
 
 function metadata_length(io)
     sz = filesize(io)

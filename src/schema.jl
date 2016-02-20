@@ -7,6 +7,7 @@ type Schema
     function Schema(elems::Vector{SchemaElement})
         name_lookup = Dict{AbstractString,SchemaElement}()
         for sch in elems
+            # TODO: may be better to have fully qualified names here to avoid chashes
             name_lookup[sch.name] = sch
         end
         new(elems, name_lookup)

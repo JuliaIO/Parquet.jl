@@ -62,31 +62,27 @@ const PLAIN_THRIFT_TYPES = ("bool", "i32", "i64", "i64", "double", "double",   "
 const PLAIN_JTYPES = (Bool, Int32, Int64, Int128, Float32, Float64,      UInt8,               UInt8)
 
 # read plain encoding (PLAIN = 0)
-function read_plain{T}(io::IO, typ::Int32, count::Integer=0, jtype::Type{T}=PLAIN_JTYPES[typ+1]; read_len::Bool=true)
+function read_plain{T}(io::IO, typ::Int32, jtype::Type{T}=PLAIN_JTYPES[typ+1])
     if typ == _Type.FIXED_LEN_BYTE_ARRAY
-        @logmsg("reading fixedlenbytearray length:$count")
+        #@logmsg("reading fixedlenbytearray length:$count")
         read!(io, Array(UInt8, count))
     elseif typ == _Type.BYTE_ARRAY
-        read_len && (count = read_fixed(io, Int32))
-        @logmsg("reading bytearray length:$count")
+        count = read_fixed(io, Int32)
+        #@logmsg("reading bytearray length:$count")
         read!(io, Array(UInt8, count))
     elseif typ == _Type.BOOLEAN
         error("not implemented")
     else
-        @logmsg("reading type:$jtype, typenum:$typ")
-        if count == 0
-            read_fixed(io, jtype)
-        else
-            [read_fixed(io, jtype) for idx in 1:count]
-        end
+        #@logmsg("reading type:$jtype, typenum:$typ")
+        read_fixed(io, jtype)
     end
 end
 
-# read plain dictionary (PLAIN_DICTIONARY = 2)
-function read_plain_dict(io::IO, count::Integer, typ::Int32; read_len::Bool=true)
-    @logmsg("reading plain dictionary type:$typ, count:$count, read_len:$read_len")
-    arr = read_plain(io, typ, count; read_len=read_len)
-    @logmsg("read $(length(arr)) dictionary values")
+# read plain values or dictionary (PLAIN_DICTIONARY = 2)
+function read_plain_values(io::IO, count::Integer, typ::Int32)
+    @logmsg("reading plain values type:$typ, count:$count")
+    arr = [read_plain(io, typ) for i in 1:count]
+    @logmsg("read $(length(arr)) plain values")
     arr
 end
 

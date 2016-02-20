@@ -76,7 +76,7 @@ end
 
 show(io::IO, hdr::IndexPageHeader, indent::AbstractString="") = nothing
 function show(io::IO, page::DictionaryPageHeader, indent::AbstractString="")
-    println(io, indent, hdr.num_values, " values")
+    println(io, indent, page.num_values, " values")
 end
 
 function show(io::IO, hdr::DataPageHeader, indent::AbstractString="")
