@@ -6,24 +6,71 @@ type Schema
 
     function Schema(elems::Vector{SchemaElement})
         name_lookup = Dict{AbstractString,SchemaElement}()
-        for sch in elems
+        name_stack = AbstractString[]
+        nchildren_stack = Int[]
+
+        for idx in 1:length(elems)
+            sch = elems[idx]
             # TODO: may be better to have fully qualified names here to avoid chashes
-            name_lookup[sch.name] = sch
+            nested_name = (idx == 1) ? sch.name : join([name_stack; sch.name], '.')
+            name_lookup[nested_name] = sch
+
+            if !isempty(nchildren_stack)
+                @logmsg("$(sch.name) is a child. remaining $(nchildren_stack[end]-1) children")
+                if nchildren_stack[end] == 1
+                    pop!(nchildren_stack)
+                    pop!(name_stack)
+                else
+                    nchildren_stack[end] -= 1
+                end
+            end
+
+            if (idx > 1) && (Thrift.isfilled(sch, :num_children) && (sch.num_children > 0))
+                @logmsg("$(sch.name) has $(sch.num_children) children")
+                push!(nchildren_stack, sch.num_children)
+                push!(name_stack, sch.name)
+            end
         end
         new(elems, name_lookup)
     end
 end
 
-leafname(schname::AbstractString) = ('.' in schname) ? leafname(split(schname, '.')) : schname
+leafname(schname::AbstractString) = istoplevel(schname) ? schname : leafname(split(schname, '.'))
 leafname(schname::Vector) = schname[end]
-elem(sch::Schema, schname) = sch.name_lookup[leafname(schname)]
-isrequired(sch::Schema, schname) = (elem(sch, schname).repetition_type == FieldRepetitionType.REQUIRED)
 
-max_repetition_level(sch::Schema, schname::AbstractString) = max_repetition_level(sch, split(schname, '.'))
-max_repetition_level(sch::Schema, schname) = sum([isrequired(sch, namepart) for namepart in schname])
+parentname(schname::Vector) = istoplevel(schname) ? schname : schname[1:(end-1)]
+parentname(schname::AbstractString) = join(parentname(split(schname, '.')), '.')
 
-max_definition_level(sch::Schema, schname::AbstractString) = max_definition_level(sch, split(schname, '.'))
-max_definition_level(sch::Schema, schname) = sum([!isrequired(sch, namepart) for namepart in schname])
+istoplevel(schname::AbstractString) = !('.' in schname)
+istoplevel(schname::Vector) = !(length(schname) > 1)
+
+elem(sch::Schema, schname::AbstractString) = sch.name_lookup[schname]
+elem(sch::Schema, schname::Vector) = elem(sch, join(schname, '.'))
+
+function isrequired(sch::Schema, schname)
+    schelem = elem(sch, schname)
+    Thrift.isfilled(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REQUIRED)
+end
+
+function isrepeated(sch::Schema, schname)
+    schelem = elem(sch, schname)
+    Thrift.isfilled(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REPEATED)
+end
+
+function bit_or_byte_length(sch::Schema, schname)
+    schelem = elem(sch, schname)
+    Thrift.isfilled(schelem, :type_length) ? schelem.type_length : 0
+end
+
+function max_repetition_level(sch::Schema, schname)
+    lev = isrepeated(sch, schname) ? 1 : 0
+    istoplevel(schname) ? lev : (lev + max_repetition_level(sch, parentname(schname)))
+end 
+
+function max_definition_level(sch::Schema, schname)
+    lev = isrequired(sch, schname) ? 0 : 1
+    istoplevel(schname) ? lev : (lev + max_definition_level(sch, parentname(schname)))
+end 
 
 abstract SchemaConverter
 
