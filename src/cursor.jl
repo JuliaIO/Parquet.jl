@@ -6,10 +6,9 @@
 # - ProtoBuf types (use ProtoBuf.isfilled to check if member is set)
 #
 # Builder implementations do the appropriate translation from column chunks to types.
-# Iterator implementations use Builders for the result types.
+# RecordCursor uses Builders for the result types.
 
-abstract SchemaBuilder
-#abstract ParIterator
+abstract AbstractBuilder{T}
 #
 
 ##
@@ -234,26 +233,128 @@ function next{T}(cursor::ColCursor{T}, rowandlevel::Tuple{Int,Int})
     (val, defn_level, repn_level), (row, cursor.levelpos)
 end
 
-type JuliaSchemaBuilder{T} <: SchemaBuilder
+##
+# Record cursor iterates over multiple columns and returns rows as records
+type RecCursor{T}
+    colnames::Vector{AbstractString}
+    colcursors::Vector{ColCursor}
+    builder::T
+
+    colstates::Vector{Tuple{Int,Int}}
+    #colfilters::Vector{Function}
+    #recfilter::Function
+end
+
+function RecCursor{T <: AbstractBuilder}(par::ParFile, rows::Range, colnames::Vector{AbstractString}, builder::T, row::Int=first(rows))
+    colcursors = [ColCursor(par, rows, colname, row) for colname in colnames]
+    RecCursor{T}(colnames, colcursors, builder, Array(Tuple{Int,Int}, length(colcursors)))
+end
+
+function state(cursor::RecCursor)
+    col1state = cursor.colstates[1]
+    col1state[1] # return row as state
+end
+
+function start(cursor::RecCursor)
+    cursor.colstates = [start(colcursor) for colcursor in cursor.colcursors]
+    state(cursor)
+end
+done(cursor::RecCursor, row::Int) = done(cursor.colcursors[1].row, row)
+
+function next{T}(cursor::RecCursor{T}, row::Int)
+    states = cursor.colstates
+    cursors = cursor.colcursors
+    builder = cursor.builder
+
+    row = init(cursor.builder)
+    for colid in 1:length(states)                               # for each column
+        colcursor = cursors[colid]
+        colval, colstate = next(colcursor, states[colid])       # for each value, defn level, repn level in column
+        val, def, rep = colval
+        update(builder, row, colcursor.colname, val, def, rep)  # update record
+        states[colid] = colstate                                # set last state to states
+    end
+    row, state(cursor)
+end
+
+##
+# JuliaBuilder creates a plain Julia object
+function default_init{T}(::Type{T})
+    if issubtype(T, Array)
+        Array(eltype(T), 0)
+    else
+        ccall(:jl_new_struct_uninit, Any, (Any,), T)::T
+    end
+end
+
+type JuliaBuilder{T} <: AbstractBuilder{T}
     par::ParFile
-    cols::Vector{AbstractString}
-    rows::Range
+    rowtype::Type{T}
+    initfn::Function
+    col_repeat_state::Dict{AbstractString,Int}
+end
+JuliaBuilder(par::ParFile, T::DataType, initfn::Function=default_init) = JuliaBuilder{T}(par, T, initfn, Dict{AbstractString,Int}())
 
-    row::RowCursor
-    cursors::Vector{ColCursor}
+function init{T}(builder::JuliaBuilder{T})
+    empty!(builder.col_repeat_state)
+    builder.initfn(T)::T
 end
 
-function JuliaSchemaBuilder(par::ParFile, T::DataType, cols::Vector{AbstractString}=colnames(par), rows::Range=1:nrows(par))
-    JuliaSchemaBuilder{T}(par, cols, rows)
-end
+function update{T}(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val::Nullable, defn_level::Int, repn_level::Int)
+    #@logmsg("updating $fqcolname")
+    nameparts = split(fqcolname, '.')
+    sch = builder.par.schema
+    F = row  # the current field corresponding to the level in fqcolname
+    Fdefn = 0
+    Frepn = 0
 
-function build{T}(bldr::JuliaSchemaBuilder{T}, obj::T=T())
-    # filter out from the list of all row groups
-    #   - those not in range
-    #   - those with no matching columns
-    # while index within row range
-    #   get matching rowgroup
-    #     for every column in cols
-    #       advance cursor to matching row
-    #       set value to instance 
+    # for each name part of colname (a field)
+    for idx in 1:length(nameparts)
+        colname = join(nameparts[1:idx], '.')
+        #@logmsg("updating part $colname of $fqcolname isnull:$(isnull(val)), def:$(defn_level), rep:$(repn_level)")
+        leaf = nameparts[idx]
+        symleaf = symbol(leaf)
+
+        required = isrequired(sch, colname)         # determine whether field is optional and repeated
+        repeated = isrepeated(sch, colname)
+        required || (Fdefn += 1)                    # if field is optional, increment defn level
+        repeated && (Frepn += 1)                    # if field can repeat, increment repn level
+
+        defined = isnull(val) ? isdefined(F, symleaf) : false
+        mustdefine = defn_level >= Fdefn
+        mustrepeat = repeated && (repn_level == Frepn)
+        repkey = fqcolname * ":" * colname
+        repidx = get(builder.col_repeat_state, repkey, 0)
+        if mustrepeat
+            repidx += 1
+            builder.col_repeat_state[repkey] = repidx
+        end
+        nreps = defined ? length(getfield(F, symleaf)) : 0
+
+        #@logmsg("repeat:$mustrepeat, nreps:$nreps, repidx:$repidx, defined:$defined, mustdefine:$mustdefine")
+        if mustrepeat && (nreps < repidx)
+            if !defined && mustdefine
+                Vrep = builder.initfn(fieldtype(typeof(F), symleaf))
+                setfield!(F, symleaf, Vrep)
+            else
+                Vrep = getfield(F, symleaf)
+            end
+            if length(Vrep) < repidx
+                resize!(Vrep, repidx)
+                if !isbits(eltype(Vrep))
+                    Vrep[repidx] = builder.initfn(eltype(Vrep))
+                end
+            end
+            F = Vrep[repidx]
+        elseif !defined && mustdefine
+            if idx == length(nameparts)
+                V = get(val)
+            else
+                V = builder.initfn(fieldtype(typeof(F), symleaf))
+            end
+            setfield!(F, symleaf, V)
+            F = V
+        end
+    end
+    nothing
 end

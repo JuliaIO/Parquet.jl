@@ -1,7 +1,7 @@
 using Parquet
 using Base.Test
 
-function test_cursor(file::ByteString, parcompat::ByteString=joinpath(dirname(@__FILE__), "parquet-compatibility"))
+function test_col_cursor(file::ByteString, parcompat::ByteString=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     p = ParFile(joinpath(parcompat, file))
     println("loaded ", file)
 
@@ -25,12 +25,39 @@ function test_cursor(file::ByteString, parcompat::ByteString=joinpath(dirname(@_
     end
 end
 
-function test_cursor_all_files()
+function test_juliabuilder_row_cursor(file::ByteString, typename::Symbol, parcompat::ByteString=joinpath(dirname(@__FILE__), "parquet-compatibility"))
+    p = ParFile(joinpath(parcompat, file))
+    println("loaded ", file)
+
+    t1 = time()
+    nr = nrows(p)
+    cnames = colnames(p)
+    schema(JuliaConverter(Main), p, typename)
+    jb = JuliaBuilder(p, getfield(Main, typename))
+    rc = RecCursor(p, 1:nr, colnames(p), jb)
+    i = start(rc)
+    while !done(rc, i)
+        rec,i = next(rc, i)
+        done(rc, i) && println("\t\tlast record: $rec")
+    end
+    println("\t\tread $nr records in $(time()-t1) time")
+end
+
+function test_col_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
-            test_cursor("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
+            test_col_cursor("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
         end
     end
 end
 
-test_cursor_all_files()
+function test_juliabuilder_row_cursor_all_files()
+    for encformat in ("SNAPPY", "GZIP", "NONE")
+        for fname in ("nation", "customer")
+            test_juliabuilder_row_cursor("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", symbol(encformat * fname))
+        end
+    end
+end
+
+#test_col_cursor_all_files()
+test_juliabuilder_row_cursor_all_files()
