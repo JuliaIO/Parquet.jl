@@ -107,7 +107,9 @@ function read_hybrid{T<:Integer}(io::IO, count::Integer, bits::Integer, byt::Int
         nitems = isbitpack ? min(runhdr*8, count - arrpos + 1) : runhdr
         #@logmsg("nitems=$nitems, isbitpack:$isbitpack, runhdr:$runhdr, remaininglen: $(count - arrpos + 1)")
         #@logmsg("creating sub array for $nitems items at $arrpos, total length:$(length(arr))")
-        subarr = pointer_to_array(pointer(arr, arrpos), nitems)
+        #subarr = pointer_to_array(pointer(arr, arrpos), nitems)
+        subarr = unsafe_wrap(Array, pointer(arr, arrpos), nitems, false)
+
         if isbitpack
             read_bitpacked_run(io, runhdr, bits, byt, typ, subarr)
         else # rle

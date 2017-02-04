@@ -1,7 +1,7 @@
 using Parquet
 using Base.Test
 
-function test_col_cursor(file::ByteString, parcompat::ByteString=joinpath(dirname(@__FILE__), "parquet-compatibility"))
+function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     p = ParFile(joinpath(parcompat, file))
     println("loaded ", file)
 
@@ -25,7 +25,7 @@ function test_col_cursor(file::ByteString, parcompat::ByteString=joinpath(dirnam
     end
 end
 
-function test_juliabuilder_row_cursor(file::ByteString, typename::Symbol, parcompat::ByteString=joinpath(dirname(@__FILE__), "parquet-compatibility"))
+function test_juliabuilder_row_cursor(file::String, typename::Symbol, parcompat::String=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     p = ParFile(joinpath(parcompat, file))
     println("loaded ", file)
 
@@ -54,7 +54,7 @@ end
 function test_juliabuilder_row_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
-            test_juliabuilder_row_cursor("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", symbol(encformat * fname))
+            test_juliabuilder_row_cursor("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", Symbol(encformat * fname))
         end
     end
 end

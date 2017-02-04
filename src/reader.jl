@@ -349,11 +349,11 @@ function is_par_file(io)
 
     seekstart(io)
     read!(io, magic)
-    (convert(ASCIIString, magic) == PAR_MAGIC) || return false
+    (convert(String, magic) == PAR_MAGIC) || return false
 
     seek(io, sz - SZ_PAR_MAGIC)
     read!(io, magic)
-    (convert(ASCIIString, magic) == PAR_MAGIC) || return false
+    (convert(String, magic) == PAR_MAGIC) || return false
 
     true
 end

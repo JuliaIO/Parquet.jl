@@ -5,6 +5,7 @@ using ProtoBuf
 using Snappy
 using Zlib
 using LRUCache
+using Compat
 
 import Base: show, open, close, values, start, next, done
 import Thrift: isfilled

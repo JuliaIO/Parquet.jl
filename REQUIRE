@@ -1,6 +1,7 @@
-julia 0.4
+julia 0.5
 Thrift
 ProtoBuf
 Snappy
 Zlib
 LRUCache
+Compat

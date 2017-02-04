@@ -45,7 +45,7 @@ function test_schema(file, schema_name::Symbol,  parcompat=joinpath(dirname(@__F
 
     #mod_name = string(schema_name) * "Module"
     #eval(Main, parse("module $mod_name end"))
-    #mod = getfield(Main, symbol(mod_name))
+    #mod = getfield(Main, Symbol(mod_name))
 
     mod = Main
     schema(JuliaConverter(mod), schema(p), schema_name)
@@ -72,7 +72,7 @@ function test_load_all_pages()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
             test_load("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
-            test_schema("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", symbol(fname * "_" * encformat))
+            test_schema("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", Symbol(fname * "_" * encformat))
         end
     end
 end

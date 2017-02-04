@@ -186,7 +186,7 @@ function setrow{T}(cursor::ColCursor{T}, row::Int)
         if ccincr
             valpos = cursor.valpos
         else
-            valpos = sum(sub(defn_levels, 1:(levelpos-1)) .== maxdefn) + 1
+            valpos = sum(view(defn_levels, 1:(levelpos-1)) .== maxdefn) + 1
         end
         #nvals = sum(sub(defn_levels, levelrange) .== maxdefn)
         #valrange = valpos:(valpos+nvals-1)
@@ -313,7 +313,7 @@ function update{T}(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, 
         colname = join(nameparts[1:idx], '.')
         #@logmsg("updating part $colname of $fqcolname isnull:$(isnull(val)), def:$(defn_level), rep:$(repn_level)")
         leaf = nameparts[idx]
-        symleaf = symbol(leaf)
+        symleaf = Symbol(leaf)
 
         required = isrequired(sch, colname)         # determine whether field is optional and repeated
         repeated = isrepeated(sch, colname)

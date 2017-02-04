@@ -7,8 +7,9 @@ Load a parquet file. Only metadata is read initially, data is loaded in chunks o
 ````julia
 julia> using Parquet
 
-julia> # load a parquet file (only metadata is read)
-       p = ParFile("/home/tan/Work/julia/packages/Parquet/test/parquet-compatibility/parquet-testdata/impala/1.1.1-SNAPPY/customer.impala.parquet")
+julia> parfile = "customer.impala.parquet"
+
+julia> p = ParFile(parfile)
 Parquet file: /home/tan/Work/julia/packages/Parquet/test/parquet-compatibility/parquet-testdata/impala/1.1.1-SNAPPY/customer.impala.parquet
     version: 1
     nrows: 150000
@@ -95,7 +96,6 @@ Can inject the type dynamically to a module to have further methods working dire
 
 ````julia
 julia> schema(JuliaConverter(Main), p, :Customer)
-WARNING: Method definition (::Type{Main.Customer})() in module Main at none:3 overwritten at none:3.
 
 julia> Base.show(io::IO, cust::Customer) = println(io, bytestring(cust.c_name), " Phone#:", bytestring(cust.c_phone))
 ````
