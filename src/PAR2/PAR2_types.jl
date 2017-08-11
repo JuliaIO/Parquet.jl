@@ -90,7 +90,7 @@ type SchemaElement
   _type::Int32
   type_length::Int32
   repetition_type::Int32
-  name::Compat.UTF8String
+  name::String
   num_children::Int32
   converted_type::Int32
   scale::Int32
@@ -148,8 +148,8 @@ end # type PageHeader
 meta(t::Type{PageHeader}) = meta(t, Symbol[:crc,:data_page_header,:index_page_header,:dictionary_page_header,:data_page_header_v2], Int[], Dict{Symbol,Any}())
 
 type KeyValue
-  key::Compat.UTF8String
-  value::Compat.UTF8String
+  key::String
+  value::String
   KeyValue() = (o=new(); fillunset(o); o)
 end # type KeyValue
 meta(t::Type{KeyValue}) = meta(t, Symbol[:value], Int[], Dict{Symbol,Any}())
@@ -171,7 +171,7 @@ end # type PageEncodingStats
 type ColumnMetaData
   _type::Int32
   encodings::Vector{Int32}
-  path_in_schema::Vector{Compat.UTF8String}
+  path_in_schema::Vector{String}
   codec::Int32
   num_values::Int64
   total_uncompressed_size::Int64
@@ -187,7 +187,7 @@ end # type ColumnMetaData
 meta(t::Type{ColumnMetaData}) = meta(t, Symbol[:key_value_metadata,:index_page_offset,:dictionary_page_offset,:statistics,:encoding_stats], Int[], Dict{Symbol,Any}())
 
 type ColumnChunk
-  file_path::Compat.UTF8String
+  file_path::String
   file_offset::Int64
   meta_data::ColumnMetaData
   ColumnChunk() = (o=new(); fillunset(o); o)
@@ -209,7 +209,7 @@ type FileMetaData
   num_rows::Int64
   row_groups::Vector{RowGroup}
   key_value_metadata::Vector{KeyValue}
-  created_by::Compat.UTF8String
+  created_by::String
   FileMetaData() = (o=new(); fillunset(o); o)
 end # type FileMetaData
 meta(t::Type{FileMetaData}) = meta(t, Symbol[:key_value_metadata,:created_by], Int[], Dict{Symbol,Any}())
