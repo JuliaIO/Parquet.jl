@@ -127,7 +127,7 @@ function bytes(page::Page, uncompressed::Bool=true)
         if codec == CompressionCodec.SNAPPY
             data = Snappy.uncompress(data)
         elseif codec == CompressionCodec.GZIP
-            data = Zlib.decompress(data)
+            data = Libz.inflate(data)
         else
             error("Unknown compression codec for column chunk: $codec")
         end
