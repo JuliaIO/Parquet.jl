@@ -72,7 +72,7 @@ function max_definition_level(sch::Schema, schname)
     istoplevel(schname) ? lev : (lev + max_definition_level(sch, parentname(schname)))
 end 
 
-abstract SchemaConverter
+@compat abstract type SchemaConverter end
 
 # parquet schema to Protobuf schema converter
 type ProtoConverter <: SchemaConverter

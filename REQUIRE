@@ -4,4 +4,4 @@ ProtoBuf
 Snappy
 Libz
 LRUCache
-Compat 0.9.5
+Compat 0.17.0

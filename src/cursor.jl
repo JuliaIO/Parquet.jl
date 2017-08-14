@@ -8,7 +8,7 @@
 # Builder implementations do the appropriate translation from column chunks to types.
 # RecordCursor uses Builders for the result types.
 
-abstract AbstractBuilder{T}
+@compat abstract type AbstractBuilder{T} end
 #
 
 ##
@@ -84,9 +84,9 @@ type ColCursor{T}
     levelpos::Int
     levelrange::UnitRange{Int}
 
-    function ColCursor(row::RowCursor, colname::AbstractString)
+    function (::Type{ColCursor{T}}){T}(row::RowCursor, colname::AbstractString)
         maxdefn = max_definition_level(schema(row.par), colname)
-        cursor = new(row, colname, maxdefn)
+        new{T}(row, colname, maxdefn)
     end
 end
 
