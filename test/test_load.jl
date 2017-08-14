@@ -55,14 +55,14 @@ function test_schema(file, schema_name::Symbol,  parcompat=joinpath(dirname(@__F
 
     io = IOBuffer()
     schema(ThriftConverter(io), schema(p), schema_name)
-    thriftsch = strip(takebuf_string(io))
+    thriftsch = strip(String(take!(io)))
     @test startswith(thriftsch, "struct " * string(schema_name))
     @test endswith(thriftsch, "}")
     println(thriftsch)
 
     io = IOBuffer()
     schema(ProtoConverter(io), schema(p), schema_name)
-    protosch = strip(takebuf_string(io))
+    protosch = strip(String(take!(io)))
     @test startswith(protosch, "message " * string(schema_name))
     @test endswith(protosch, "}")
     println(protosch)

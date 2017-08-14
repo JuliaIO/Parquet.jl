@@ -92,7 +92,7 @@ function schema_to_proto_schema(io::IO, sch::Vector{SchemaElement}, schema_name:
     end
     lev0 = ios[end]
     println(lev0, "}")
-    write(io, takebuf_string(lev0))
+    write(io, String(take!(lev0)))
     nothing
 end
 
@@ -136,7 +136,7 @@ function _sch_to_proto(sch::SchemaElement, ios::Vector{IO}, nchildren::Vector{In
                 println(lvlio, "}")
                 prevlvlio = pop!(ios)
                 println(lvlio, "")
-                print(lvlio, takebuf_string(prevlvlio))
+                print(lvlio, String(take!(prevlvlio)))
             end
             push!(ios, lvlio)
         end
@@ -162,7 +162,7 @@ function schema_to_thrift_schema(io::IO, sch::Vector{SchemaElement}, schema_name
     end
     lev0 = ios[end]
     println(lev0, "}")
-    write(io, takebuf_string(lev0))
+    write(io, String(take!(lev0)))
     nothing
 end
 
@@ -209,7 +209,7 @@ function _sch_to_thrift(sch::SchemaElement, ios::Vector{IO}, nchildren::Vector{I
                 println(lvlio, "}")
                 prevlvlio = pop!(ios)
                 println(lvlio, "")
-                print(lvlio, takebuf_string(prevlvlio))
+                print(lvlio, String(take!(prevlvlio)))
             end
             push!(ios, lvlio)
         end
@@ -226,7 +226,7 @@ schema(conv::JuliaConverter, sch::Union{Schema, Vector{SchemaElement}}, schema_n
 function schema_to_julia_types(mod::Module, sch::Schema, schema_name::Symbol)
     io = IOBuffer()
     schema_to_julia_types(io, sch, schema_name)
-    typestr = "begin\n" * takebuf_string(io) * "\nend"
+    typestr = "begin\n" * String(take!(io)) * "\nend"
     parsedtypes = parse(typestr)
     eval(mod, parsedtypes)
 end
@@ -244,7 +244,7 @@ function schema_to_julia_types(io::IO, sch::Vector{SchemaElement}, schema_name::
     end
     lev0 = ios[end]
     println(lev0, "end")
-    write(io, takebuf_string(lev0))
+    write(io, String(take!(lev0)))
     nothing
 end
 
@@ -286,7 +286,7 @@ function _sch_to_julia(sch::SchemaElement, ios::Vector{IO}, nchildren::Vector{In
                 println(lvlio, "end")
                 prevlvlio = pop!(ios)
                 println(lvlio, "")
-                print(lvlio, takebuf_string(prevlvlio))
+                print(lvlio, String(take!(prevlvlio)))
             end
             push!(ios, lvlio)
         end

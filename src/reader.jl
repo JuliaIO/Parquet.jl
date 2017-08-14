@@ -108,7 +108,7 @@ function pages(par::ParFile, col::ColumnChunk)
         seek(io, pos)
         pagehdr = read_thrift(io, PageHeader)
 
-        buff = Array(UInt8, page_size(pagehdr))
+        buff = Array{UInt8}(page_size(pagehdr))
         page_data_pos = position(io)
         data = read!(io, buff)
         page = Page(col, pagehdr, page_data_pos, data)
@@ -152,7 +152,7 @@ function values(par::ParFile, col::ColumnChunk)
     if (ctype == _Type.BYTE_ARRAY) || (ctype == _Type.FIXED_LEN_BYTE_ARRAY)
         jtype = Vector{jtype}
     end
-    vals = Array(jtype, 0)
+    vals = Array{jtype}(0)
     defn_levels = Int[]
     repn_levels = Int[]
 
@@ -342,7 +342,7 @@ function is_par_file(fname::AbstractString)
 end
 
 function is_par_file(io)
-    magic = Array(UInt8, 4)
+    magic = Array{UInt8}(4)
 
     sz = filesize(io)
     (sz > SZ_VALID_PAR) || return false

@@ -117,7 +117,7 @@ function setrow{T}(cursor::ColCursor{T}, row::Int)
     if done(cursor.row, row)
         cursor.cc = length(cursor.colchunks) + 1
         cursor.ccrange = row:(row-1)
-        cursor.vals = Array(T, 0)
+        cursor.vals = Array{T}(0)
         cursor.repn_levels = cursor.defn_levels = Int[]
         cursor.valpos = cursor.levelpos = 0
         cursor.levelrange = 0:-1 #cursor.valrange = 0:-1
@@ -247,7 +247,7 @@ end
 
 function RecCursor{T <: AbstractBuilder}(par::ParFile, rows::Range, colnames::Vector{AbstractString}, builder::T, row::Int=first(rows))
     colcursors = [ColCursor(par, rows, colname, row) for colname in colnames]
-    RecCursor{T}(colnames, colcursors, builder, Array(Tuple{Int,Int}, length(colcursors)))
+    RecCursor{T}(colnames, colcursors, builder, Array{Tuple{Int,Int}}(length(colcursors)))
 end
 
 function state(cursor::RecCursor)
@@ -281,7 +281,7 @@ end
 # JuliaBuilder creates a plain Julia object
 function default_init{T}(::Type{T})
     if issubtype(T, Array)
-        Array(eltype(T), 0)
+        Array{eltype(T)}(0)
     else
         ccall(:jl_new_struct_uninit, Any, (Any,), T)::T
     end
