@@ -3,7 +3,7 @@ module Parquet
 using Thrift
 using ProtoBuf
 using Snappy
-using Zlib
+using Libz
 using LRUCache
 using Compat
 

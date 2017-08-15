@@ -1,6 +1,6 @@
 # Parquet
 
-[![Build Status](https://travis-ci.org/tanmaykm/Parquet.jl.svg?branch=master)](https://travis-ci.org/tanmaykm/Parquet.jl)
+[![Build Status](https://travis-ci.org/JuliaComputing/Parquet.jl.svg?branch=master)](https://travis-ci.org/JuliaComputing/Parquet.jl)
 
 Load a parquet file. Only metadata is read initially, data is loaded in chunks on demand.
 
