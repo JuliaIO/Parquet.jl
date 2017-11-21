@@ -4,7 +4,7 @@ using Thrift
 using ProtoBuf
 using Snappy
 using Libz
-using LRUCache
+using MemPool
 using Compat
 
 import Base: show, open, close, values, start, next, done
