@@ -97,7 +97,7 @@ Can inject the type dynamically to a module to have further methods working dire
 ````julia
 julia> schema(JuliaConverter(Main), p, :Customer)
 
-julia> Base.show(io::IO, cust::Customer) = println(io, bytestring(cust.c_name), " Phone#:", bytestring(cust.c_phone))
+julia> Base.show(io::IO, cust::Customer) = println(io, String(copy(cust.c_name)), " Phone#:", String(copy(cust.c_phone)))
 ````
 
 Create cursor to iterate over records. In parallel mode, multiple remote cursors can be created and iterated on in parallel.
