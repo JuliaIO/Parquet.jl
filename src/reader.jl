@@ -12,6 +12,23 @@ type Page
     data::Vector{UInt8}
 end
 
+type PageLRU
+    refs::Dict{ColumnChunk,DRef}
+    function PageLRU()
+        new(Dict{ColumnChunk,DRef}())
+    end
+end
+
+function cacheget(lru::PageLRU, chunk::ColumnChunk, nf)
+    if chunk in keys(lru.refs)
+        poolget(lru.refs[chunk])
+    else
+        data = nf(chunk)
+        lru.refs[chunk] = poolset(data)
+        data
+    end
+end
+
 # parquet file.
 # Keeps a handle to the open file and the file metadata.
 # Holds a LRU cache of raw bytes of the pages read.
@@ -20,7 +37,7 @@ type ParFile
     handle::IOStream
     meta::FileMetaData
     schema::Schema
-    page_cache::LRU{ColumnChunk,Vector{Page}}
+    page_cache::PageLRU
 end
 
 function ParFile(path::AbstractString)
@@ -34,10 +51,11 @@ function ParFile(path::AbstractString)
 end
 
 function ParFile(path::AbstractString, handle::IOStream; maxcache::Integer=10)
+    # TODO: maxcache should become a parameter to MemPool
     is_par_file(handle) || error("Not a parquet format file: $path")
     meta_len = metadata_length(handle)
     meta = metadata(handle, path, meta_len)
-    ParFile(path, handle, meta, Schema(meta.schema), LRU{ColumnChunk,Vector{Page}}(maxcache))
+    ParFile(path, handle, meta, Schema(meta.schema), PageLRU())
 end
 
 ##
@@ -95,10 +113,7 @@ function columns(par::ParFile, rowgroup::RowGroup, cnames)
     R
 end
 
-pages(par::ParFile, rowgroupidx::Integer, colidx::Integer) = pages(par, columns(par, rowgroupidx), colidx)
-pages(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = pages(par, cols[colidx])
-function pages(par::ParFile, col::ColumnChunk)
-    (col in keys(par.page_cache)) && (return par.page_cache[col])
+function _pagevec(par::ParFile, col::ColumnChunk)
     # read pages from the file
     pos = page_offset(col)
     endpos = end_offset(col)
@@ -115,9 +130,11 @@ function pages(par::ParFile, col::ColumnChunk)
         push!(pagevec, page)
         pos = position(io)
     end
-    par.page_cache[col] = pagevec
     pagevec
 end
+pages(par::ParFile, rowgroupidx::Integer, colidx::Integer) = pages(par, columns(par, rowgroupidx), colidx)
+pages(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = pages(par, cols[colidx])
+pages(par::ParFile, col::ColumnChunk) = cacheget(par.page_cache, col, col->_pagevec(par,col))
 
 function bytes(page::Page, uncompressed::Bool=true)
     data = page.data

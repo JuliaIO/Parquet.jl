@@ -1,7 +1,7 @@
-julia 0.5
+julia 0.6
 Thrift
 ProtoBuf
 Snappy
 Libz
-LRUCache
+MemPool
 Compat 0.17.0
