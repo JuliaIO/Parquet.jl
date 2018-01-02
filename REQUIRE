@@ -1,7 +1,7 @@
 julia 0.6
-Thrift
-ProtoBuf
-Snappy
-Libz
-MemPool
+Thrift 0.2.1
+ProtoBuf 0.4.0
+Snappy 0.2.0
+Libz 0.2.4
+MemPool 0.0.4
 Compat 0.17.0
