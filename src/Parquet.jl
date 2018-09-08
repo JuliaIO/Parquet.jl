@@ -15,18 +15,6 @@ export SchemaConverter, schema, JuliaConverter, ThriftConverter, ProtoConverter
 export RowCursor, ColCursor, RecCursor, start, next, done
 export AbstractBuilder, JuliaBuilder
 
-# enable logging only during debugging
-#using Logging
-#const logger = Logging.configure(level=DEBUG)
-##const logger = Logging.configure(filename="/tmp/parquet$(getpid()).log", level=DEBUG)
-#macro logmsg(s)
-#    quote
-#        debug($(esc(s)))
-#    end
-#end
-macro logmsg(s)
-end
-
 # package code goes here
 include("PAR2/PAR2.jl")
 using .PAR2

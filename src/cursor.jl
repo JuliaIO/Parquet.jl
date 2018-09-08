@@ -8,12 +8,12 @@
 # Builder implementations do the appropriate translation from column chunks to types.
 # RecordCursor uses Builders for the result types.
 
-@compat abstract type AbstractBuilder{T} end
+abstract type AbstractBuilder{T} end
 #
 
 ##
 # Row cursor iterates through row numbers of a column 
-type RowCursor
+mutable struct RowCursor
     par::ParFile
 
     rows::Range                     # rows to scan over
@@ -66,7 +66,7 @@ end
 # Column cursor iterates through all values of the column, including null values.
 # Each iteration returns the value (as a Nullable), definition level, and repetition level for each value.
 # Row can be deduced from repetition level.
-type ColCursor{T}
+mutable struct ColCursor{T}
     row::RowCursor
     colname::AbstractString
     maxdefn::Int
@@ -235,7 +235,7 @@ end
 
 ##
 # Record cursor iterates over multiple columns and returns rows as records
-type RecCursor{T}
+mutable struct RecCursor{T}
     colnames::Vector{AbstractString}
     colcursors::Vector{ColCursor}
     builder::T
@@ -287,7 +287,7 @@ function default_init{T}(::Type{T})
     end
 end
 
-type JuliaBuilder{T} <: AbstractBuilder{T}
+mutable struct JuliaBuilder{T} <: AbstractBuilder{T}
     par::ParFile
     rowtype::Type{T}
     initfn::Function
@@ -301,7 +301,7 @@ function init{T}(builder::JuliaBuilder{T})
 end
 
 function update{T}(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val::Nullable, defn_level::Int, repn_level::Int)
-    #@logmsg("updating $fqcolname")
+    #@debug("updating $fqcolname")
     nameparts = split(fqcolname, '.')
     sch = builder.par.schema
     F = row  # the current field corresponding to the level in fqcolname
@@ -311,7 +311,7 @@ function update{T}(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, 
     # for each name part of colname (a field)
     for idx in 1:length(nameparts)
         colname = join(nameparts[1:idx], '.')
-        #@logmsg("updating part $colname of $fqcolname isnull:$(isnull(val)), def:$(defn_level), rep:$(repn_level)")
+        #@debug("updating part $colname of $fqcolname isnull:$(isnull(val)), def:$(defn_level), rep:$(repn_level)")
         leaf = nameparts[idx]
         symleaf = Symbol(leaf)
 
@@ -331,7 +331,7 @@ function update{T}(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, 
         end
         nreps = defined ? length(getfield(F, symleaf)) : 0
 
-        #@logmsg("repeat:$mustrepeat, nreps:$nreps, repidx:$repidx, defined:$defined, mustdefine:$mustdefine")
+        #@debug("repeat:$mustrepeat, nreps:$nreps, repidx:$repidx, defined:$defined, mustdefine:$mustdefine")
         if mustrepeat && (nreps < repidx)
             if !defined && mustdefine
                 Vrep = builder.initfn(fieldtype(typeof(F), symleaf))
