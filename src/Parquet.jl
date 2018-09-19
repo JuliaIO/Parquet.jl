@@ -3,7 +3,7 @@ module Parquet
 using Thrift
 using ProtoBuf
 using Snappy
-using Libz
+using CodecZlib
 using MemPool
 using Compat
 

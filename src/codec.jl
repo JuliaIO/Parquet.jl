@@ -24,7 +24,7 @@ read_fixed(io::IO, typ::Type{Int64}) = reinterpret(Int64, _read_fixed(io, conver
 read_fixed(io::IO, typ::Type{Int128}) = reinterpret(Int128, _read_fixed(io, convert(UInt128, 0), 12))   # INT96: 12 bytes little endian
 read_fixed(io::IO, typ::Type{Float32}) = reinterpret(Float32, _read_fixed(io, convert(UInt32,0), 4))
 read_fixed(io::IO, typ::Type{Float64}) = reinterpret(Float64, _read_fixed(io, convert(UInt64,0), 8))
-function _read_fixed{T <: Unsigned}(io::IO, ret::T, N::Int)
+function _read_fixed(io::IO, ret::T, N::Int) where {T <: Unsigned}
     for n in 0:(N-1)
         byte = convert(T, read(io, UInt8))
         ret |= (byte << 8*n)
@@ -32,7 +32,7 @@ function _read_fixed{T <: Unsigned}(io::IO, ret::T, N::Int)
     ret
 end
 
-function _read_varint{T <: Integer}(io::IO, ::Type{T})
+function _read_varint(io::IO, ::Type{T}) where {T <: Integer}
     res = zero(T)
     n = 0
     byte = UInt8(MSB)
@@ -62,7 +62,7 @@ const PLAIN_THRIFT_TYPES = ("bool", "i32", "i64", "i64", "double", "double",   "
 const PLAIN_JTYPES = (Bool, Int32, Int64, Int128, Float32, Float64,      UInt8,               UInt8)
 
 # read plain encoding (PLAIN = 0)
-function read_plain{T}(io::IO, typ::Int32, jtype::Type{T}=PLAIN_JTYPES[typ+1])
+function read_plain(io::IO, typ::Int32, jtype::Type{T}=PLAIN_JTYPES[typ+1]) where {T}
     if typ == _Type.FIXED_LEN_BYTE_ARRAY
         #@debug("reading fixedlenbytearray length:$count")
         read!(io, Array{UInt8}(count))
@@ -96,7 +96,7 @@ function read_rle_dict(io::IO, count::Integer)
 end
 
 # read RLE or bit backed format (RLE = 3)
-function read_hybrid{T<:Integer}(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count); read_len::Bool=true)
+function read_hybrid(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count); read_len::Bool=true) where {T <: Integer}
     len = read_len ? read_fixed(io, Int32) : Int32(0)
     @debug("reading hybrid data length:$len, count:$count, bits:$bits")
     arrpos = 1
@@ -120,18 +120,18 @@ function read_hybrid{T<:Integer}(io::IO, count::Integer, bits::Integer, byt::Int
     arr
 end
 
-function read_rle_run{T<:Integer}(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count))
+function read_rle_run(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count)) where {T <: Integer}
     @debug("read_rle_run. count:$count, typ:$T, nbits:$bits, nbytes:$byt")
     arr[1:count] = reinterpret(T, _read_fixed(io, zero(byt2uitype(byt)), byt))
     arr
 end
 
-function read_bitpacked_run{T<:Integer}(io::IO, grp_count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(grp_count*8))
+function read_bitpacked_run(io::IO, grp_count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(grp_count*8)) where {T <: Integer}
     count = min(grp_count * 8, length(arr))
     # multiple of 8 values at a time are bit packed together
     nbytes = bits * grp_count # same as: round(Int, (bits * grp_count * 8) / 8)
-    #@debug("read_bitpacked_run. grp_count:$grp_count, count:$count, nbytes:$nbytes, nbits:$bits, available:$(nb_available(io))")
-    data = Array{UInt8}(min(nbytes, nb_available(io)))
+    #@debug("read_bitpacked_run. grp_count:$grp_count, count:$count, nbytes:$nbytes, nbits:$bits, available:$(bytesavailable(io))")
+    data = Array{UInt8}(min(nbytes, bytesavailable(io)))
     read!(io, data)
 
     mask = MASKN(bits)
@@ -182,7 +182,7 @@ function read_bitpacked_run{T<:Integer}(io::IO, grp_count::Integer, bits::Intege
 end
 
 # read bit packed in deprecated format (BIT_PACKED = 4)
-function read_bitpacked_run_old{T<:Integer}(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count))
+function read_bitpacked_run_old(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count)) where {T <: Integer}
     # multiple of 8 values at a time are bit packed together
     nbytes = round(Int, (bits * count) / 8)
     @debug("read_bitpacked_run. count:$count, nbytes:$nbytes, nbits:$bits")

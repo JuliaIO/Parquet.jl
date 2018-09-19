@@ -16,14 +16,14 @@ abstract type AbstractBuilder{T} end
 mutable struct RowCursor
     par::ParFile
 
-    rows::Range                     # rows to scan over
+    rows::UnitRange{Int}            # rows to scan over
     row::Int                        # current row
     
     rowgroups::Vector{RowGroup}     # row groups in range
     rg::Int                         # current row group
-    rgrange::Range                  # current rowrange
+    rgrange::UnitRange{Int}         # current rowrange
 
-    function RowCursor(par::ParFile, rows::Range, col::AbstractString, row::Int=first(rows))
+    function RowCursor(par::ParFile, rows::UnitRange{Int}, col::AbstractString, row::Int=first(rows))
         rgs = rowgroups(par, col, rows)
         cursor = new(par, rows, row, rgs)
         setrow(cursor, row)
@@ -73,7 +73,7 @@ mutable struct ColCursor{T}
 
     colchunks::Vector{ColumnChunk}
     cc::Int
-    ccrange::Range
+    ccrange::UnitRange{Int}
 
     vals::Vector{T}
     valpos::Int
@@ -83,14 +83,14 @@ mutable struct ColCursor{T}
     repn_levels::Vector{Int}
     levelpos::Int
     levelrange::UnitRange{Int}
-
-    function (::Type{ColCursor{T}}){T}(row::RowCursor, colname::AbstractString)
-        maxdefn = max_definition_level(schema(row.par), colname)
-        new{T}(row, colname, maxdefn)
-    end
 end
 
-function ColCursor(par::ParFile, rows::Range, colname::AbstractString, row::Int=first(rows))
+function (::Type{ColCursor{T}})(row::RowCursor, colname::AbstractString) where {T}
+    maxdefn = max_definition_level(schema(row.par), colname)
+    ColCursor{T}(row, colname, maxdefn)
+end
+
+function ColCursor(par::ParFile, rows::UnitRange{Int}, colname::AbstractString, row::Int=first(rows))
     rowcursor = RowCursor(par, rows, colname, row)
   
     rg = rowcursor.rowgroups[rowcursor.rg] 
@@ -106,7 +106,7 @@ function ColCursor(par::ParFile, rows::Range, colname::AbstractString, row::Int=
     cursor
 end
 
-function setrow{T}(cursor::ColCursor{T}, row::Int)
+function setrow(cursor::ColCursor{T}, row::Int) where {T}
     par = cursor.row.par
     rg = cursor.row.rowgroups[cursor.row.rg]
     ccincr = (row - cursor.row.row) == 1 # whether this is just an increment within the column chunk
@@ -208,7 +208,7 @@ function done(cursor::ColCursor, rowandlevel::Tuple{Int,Int})
     row, levelpos = rowandlevel
     (levelpos > last(cursor.levelrange)) && done(cursor.row, row)
 end
-function next{T}(cursor::ColCursor{T}, rowandlevel::Tuple{Int,Int})
+function next(cursor::ColCursor{T}, rowandlevel::Tuple{Int,Int}) where {T}
     # find values for current row and level in row
     row, levelpos = rowandlevel
     (levelpos == cursor.levelpos) || throw(InvalidStateException("Invalid column cursor state", :levelpos))
@@ -245,7 +245,7 @@ mutable struct RecCursor{T}
     #recfilter::Function
 end
 
-function RecCursor{T <: AbstractBuilder}(par::ParFile, rows::Range, colnames::Vector{AbstractString}, builder::T, row::Int=first(rows))
+function RecCursor(par::ParFile, rows::UnitRange{Int}, colnames::Vector{AbstractString}, builder::T, row::Int=first(rows)) where {T <: AbstractBuilder}
     colcursors = [ColCursor(par, rows, colname, row) for colname in colnames]
     RecCursor{T}(colnames, colcursors, builder, Array{Tuple{Int,Int}}(length(colcursors)))
 end
@@ -261,7 +261,7 @@ function start(cursor::RecCursor)
 end
 done(cursor::RecCursor, row::Int) = done(cursor.colcursors[1].row, row)
 
-function next{T}(cursor::RecCursor{T}, row::Int)
+function next(cursor::RecCursor{T}, row::Int) where {T}
     states = cursor.colstates
     cursors = cursor.colcursors
     builder = cursor.builder
@@ -279,7 +279,7 @@ end
 
 ##
 # JuliaBuilder creates a plain Julia object
-function default_init{T}(::Type{T})
+function default_init(::Type{T}) where {T}
     if issubtype(T, Array)
         Array{eltype(T)}(0)
     else
@@ -295,12 +295,12 @@ mutable struct JuliaBuilder{T} <: AbstractBuilder{T}
 end
 JuliaBuilder(par::ParFile, T::DataType, initfn::Function=default_init) = JuliaBuilder{T}(par, T, initfn, Dict{AbstractString,Int}())
 
-function init{T}(builder::JuliaBuilder{T})
+function init(builder::JuliaBuilder{T}) where {T}
     empty!(builder.col_repeat_state)
     builder.initfn(T)::T
 end
 
-function update{T}(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val::Nullable, defn_level::Int, repn_level::Int)
+function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val::Nullable, defn_level::Int, repn_level::Int) where {T}
     #@debug("updating $fqcolname")
     nameparts = split(fqcolname, '.')
     sch = builder.par.schema

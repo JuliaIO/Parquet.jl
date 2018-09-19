@@ -63,7 +63,7 @@ end
 # can access raw (uncompressed) bytes from pages
 
 schema(par::ParFile) = par.schema
-schema{T<:SchemaConverter}(conv::T, par::ParFile, schema_name::Symbol) = schema(conv, par.schema, schema_name)
+schema(conv::T, par::ParFile, schema_name::Symbol) where {T<:SchemaConverter} = schema(conv, par.schema, schema_name)
 
 colname(col::ColumnChunk) = colname(col.meta_data)
 colname(col::ColumnMetaData) = join(col.path_in_schema, '.')
@@ -144,7 +144,7 @@ function bytes(page::Page, uncompressed::Bool=true)
         if codec == CompressionCodec.SNAPPY
             data = Snappy.uncompress(data)
         elseif codec == CompressionCodec.GZIP
-            data = Libz.inflate(data)
+            data = transcode(GzipDecompressor, data)
         else
             error("Unknown compression codec for column chunk: $codec")
         end
@@ -157,7 +157,7 @@ end
 # layer 2 access
 # can access decoded values from pages
 
-map_dict_vals{T1,T2}(valdict::Vector{T1}, vals::Vector{T2}) = isempty(valdict) ? vals : [valdict[v+1] for v in vals]
+map_dict_vals(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v+1] for v in vals]
 
 values(par::ParFile, rowgroupidx::Integer, colidx::Integer) = values(par, columns(par, rowgroupidx), colidx)
 values(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = values(par, cols[colidx])
@@ -248,15 +248,15 @@ function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::I
     cname = colname(page.colchunk)
     enc, defn_enc, rep_enc = encs
 
-    #@debug("before reading defn levels nb_available in page: $(nb_available(io))")
+    #@debug("before reading defn levels bytesavailable in page: $(bytesavailable(io))")
     # read definition levels. skipped if column is required
     defn_levels = isrequired(par.schema, cname) ? Int[] : read_levels(io, max_definition_level(par.schema, cname), defn_enc, num_values)
 
-    #@debug("before reading repn levels nb_available in page: $(nb_available(io))")
+    #@debug("before reading repn levels bytesavailable in page: $(bytesavailable(io))")
     # read repetition levels. skipped if all columns are at 1st level
     repn_levels = ('.' in cname) ? read_levels(io, max_repetition_level(par.schema, cname), rep_enc, num_values) : Int[]
 
-    #@debug("before reading values nb_available in page: $(nb_available(io))")
+    #@debug("before reading values bytesavailable in page: $(bytesavailable(io))")
     # read values
     vals = read_values(io, enc, ctype, num_values)
 
@@ -320,9 +320,9 @@ end
 page_num_values(page::Union{DataPageHeader,DataPageHeaderV2,DictionaryPageHeader}) = page.num_values
 
 # file metadata
-read_thrift{T}(buff::Array{UInt8}, ::Type{T}) = read(TCompactProtocol(TMemoryTransport(buff)), T)
-read_thrift{T}(io::IO, ::Type{T}) = read(TCompactProtocol(TFileTransport(io)), T)
-read_thrift{TR<:TTransport,T}(t::TR, ::Type{T}) = read(TCompactProtocol(t), T)
+read_thrift(buff::Array{UInt8}, ::Type{T}) where {T} = read(TCompactProtocol(TMemoryTransport(buff)), T)
+read_thrift(io::IO, ::Type{T}) where {T} = read(TCompactProtocol(TFileTransport(io)), T)
+read_thrift(t::TR, ::Type{T}) where {TR<:TTransport,T} = read(TCompactProtocol(t), T)
 
 function metadata_length(io)
     sz = filesize(io)
