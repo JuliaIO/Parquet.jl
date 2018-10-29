@@ -23,7 +23,7 @@ mutable struct RowCursor
     rg::Union{Int,Nothing}          # current row group
     rgrange::Union{UnitRange{Int},Nothing} # current rowrange
 
-    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::AbstractString, row::Signed64=first(rows))
+    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::AbstractString, row::Signed=first(rows))
         rgs = rowgroups(par, col, rows)
         cursor = new(par, rows, row, rgs, nothing, nothing)
         setrow(cursor, row)
@@ -100,7 +100,7 @@ mutable struct ColCursor{T}
     end
 end
 
-function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::AbstractString, row::Signed64=first(rows))
+function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::AbstractString, row::Signed=first(rows))
     rowcursor = RowCursor(par, rows, colname, row)
 
     rg = rowcursor.rowgroups[rowcursor.rg] 
