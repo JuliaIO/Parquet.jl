@@ -1,5 +1,5 @@
 using Parquet
-using Base.Test
+using Test
 
 function test_decode(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     p = ParFile(joinpath(parcompat, file))

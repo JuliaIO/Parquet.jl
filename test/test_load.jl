@@ -1,5 +1,5 @@
 using Parquet
-using Base.Test
+using Test
 
 function test_load(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     p = ParFile(joinpath(parcompat, file))
@@ -49,7 +49,7 @@ function test_schema(file, schema_name::Symbol,  parcompat=joinpath(dirname(@__F
 
     mod = Main
     schema(JuliaConverter(mod), schema(p), schema_name)
-    @test schema_name in names(mod, true)
+    @test schema_name in names(mod, all=true)
     println("\tschema: \n\t", getfield(mod, schema_name))
     print_names("    ", getfield(mod, schema_name))
 

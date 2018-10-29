@@ -20,12 +20,12 @@ mutable struct RowCursor
     row::Int                        # current row
     
     rowgroups::Vector{RowGroup}     # row groups in range
-    rg::Int                         # current row group
-    rgrange::UnitRange{Int}         # current rowrange
+    rg::Union{Int,Nothing}          # current row group
+    rgrange::Union{UnitRange{Int},Nothing} # current rowrange
 
     function RowCursor(par::ParFile, rows::UnitRange{Int}, col::AbstractString, row::Int=first(rows))
         rgs = rowgroups(par, col, rows)
-        cursor = new(par, rows, row, rgs)
+        cursor = new(par, rows, row, rgs, nothing, nothing)
         setrow(cursor, row)
         cursor
     end
@@ -33,7 +33,7 @@ end
 
 function setrow(cursor::RowCursor, row::Int)
     cursor.row = row
-    isdefined(cursor, :rgrange) && (row in cursor.rgrange) && return
+    cursor.rgrange!==nothing && (row in cursor.rgrange) && return
     startrow = 1
     rgs = cursor.rowgroups
     for rg in 1:length(rgs)
@@ -51,15 +51,25 @@ end
 
 rowgroup_offset(cursor::RowCursor) = cursor.row - first(cursor.rgrange)
 
-function start(cursor::RowCursor)
+function _start(cursor::RowCursor)
     row = first(cursor.rows)
     setrow(cursor, row)
     row
 end
-done(cursor::RowCursor, row::Int) = (row > last(cursor.rows))
-function next(cursor::RowCursor, row::Int)
+_done(cursor::RowCursor, row::Int) = (row > last(cursor.rows))
+function _next(cursor::RowCursor, row::Int)
     setrow(cursor, row)
     row, (row+1)
+end
+
+function Base.iterate(cursor::RowCursor, state)
+    _done(cursor, state) && return nothing
+    return _next(cursor, state)
+end
+
+function Base.iterate(cursor::RowCursor)
+    r = iterate(x, _start(x))
+    return r
 end
 
 ##
@@ -71,9 +81,9 @@ mutable struct ColCursor{T}
     colname::AbstractString
     maxdefn::Int
 
-    colchunks::Vector{ColumnChunk}
-    cc::Int
-    ccrange::UnitRange{Int}
+    colchunks::Union{Vector{ColumnChunk},Nothing}
+    cc::Union{Int,Nothing}
+    ccrange::Union{UnitRange{Int},Nothing}
 
     vals::Vector{T}
     valpos::Int
@@ -83,16 +93,16 @@ mutable struct ColCursor{T}
     repn_levels::Vector{Int}
     levelpos::Int
     levelrange::UnitRange{Int}
-end
 
-function (::Type{ColCursor{T}})(row::RowCursor, colname::AbstractString) where {T}
-    maxdefn = max_definition_level(schema(row.par), colname)
-    ColCursor{T}(row, colname, maxdefn)
+    function ColCursor{T}(row::RowCursor, colname::AbstractString) where T
+        maxdefn = max_definition_level(schema(row.par), colname)
+        new{T}(row, colname, maxdefn,nothing,nothing,nothing)
+    end
 end
 
 function ColCursor(par::ParFile, rows::UnitRange{Int}, colname::AbstractString, row::Int=first(rows))
     rowcursor = RowCursor(par, rows, colname, row)
-  
+
     rg = rowcursor.rowgroups[rowcursor.rg] 
     colchunks = columns(par, rg, colname)
     ctype = coltype(colchunks[1])
@@ -111,13 +121,13 @@ function setrow(cursor::ColCursor{T}, row::Int) where {T}
     rg = cursor.row.rowgroups[cursor.row.rg]
     ccincr = (row - cursor.row.row) == 1 # whether this is just an increment within the column chunk
     setrow(cursor.row, row) # set the row cursor
-    isdefined(cursor, :colchunks) || (cursor.colchunks = columns(par, rg, cursor.colname))
+    cursor.colchunks!==nothing || (cursor.colchunks = columns(par, rg, cursor.colname))
 
     # check if cursor is done
-    if done(cursor.row, row)
+    if _done(cursor.row, row)
         cursor.cc = length(cursor.colchunks) + 1
         cursor.ccrange = row:(row-1)
-        cursor.vals = Array{T}(0)
+        cursor.vals = Array{T}(undef, 0)
         cursor.repn_levels = cursor.defn_levels = Int[]
         cursor.valpos = cursor.levelpos = 0
         cursor.levelrange = 0:-1 #cursor.valrange = 0:-1
@@ -125,7 +135,7 @@ function setrow(cursor::ColCursor{T}, row::Int) where {T}
     end
 
     # find the column chunk with the row
-    if !isdefined(cursor, :ccrange) || !(row in cursor.ccrange)
+    if cursor.ccrange===nothing || !(row in cursor.ccrange)
         offset = rowgroup_offset(cursor.row) # the offset of row from beginning of current rowgroup
         colchunks = cursor.colchunks
 
@@ -199,16 +209,16 @@ function setrow(cursor::ColCursor{T}, row::Int) where {T}
     nothing
 end
 
-function start(cursor::ColCursor)
-    row = start(cursor.row)
+function _start(cursor::ColCursor)
+    row = _start(cursor.row)
     setrow(cursor, row)
     row, cursor.levelpos
 end
-function done(cursor::ColCursor, rowandlevel::Tuple{Int,Int})
+function _done(cursor::ColCursor, rowandlevel::Tuple{Int,Int})
     row, levelpos = rowandlevel
-    (levelpos > last(cursor.levelrange)) && done(cursor.row, row)
+    (levelpos > last(cursor.levelrange)) && _done(cursor.row, row)
 end
-function next(cursor::ColCursor{T}, rowandlevel::Tuple{Int,Int}) where {T}
+function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int,Int}) where {T}
     # find values for current row and level in row
     row, levelpos = rowandlevel
     (levelpos == cursor.levelpos) || throw(InvalidStateException("Invalid column cursor state", :levelpos))
@@ -233,6 +243,16 @@ function next(cursor::ColCursor{T}, rowandlevel::Tuple{Int,Int}) where {T}
     (val, defn_level, repn_level), (row, cursor.levelpos)
 end
 
+function Base.iterate(cursor::ColCursor, state)
+    _done(cursor, state) && return nothing
+    return _next(cursor, state)
+end
+
+function Base.iterate(cursor::ColCursor)
+    r = iterate(x, _start(x))
+    return r
+end
+
 ##
 # Record cursor iterates over multiple columns and returns rows as records
 mutable struct RecCursor{T}
@@ -247,7 +267,7 @@ end
 
 function RecCursor(par::ParFile, rows::UnitRange{Int}, colnames::Vector{AbstractString}, builder::T, row::Int=first(rows)) where {T <: AbstractBuilder}
     colcursors = [ColCursor(par, rows, colname, row) for colname in colnames]
-    RecCursor{T}(colnames, colcursors, builder, Array{Tuple{Int,Int}}(length(colcursors)))
+    RecCursor{T}(colnames, colcursors, builder, Array{Tuple{Int,Int}}(undef, length(colcursors)))
 end
 
 function state(cursor::RecCursor)
@@ -255,13 +275,13 @@ function state(cursor::RecCursor)
     col1state[1] # return row as state
 end
 
-function start(cursor::RecCursor)
-    cursor.colstates = [start(colcursor) for colcursor in cursor.colcursors]
+function _start(cursor::RecCursor)
+    cursor.colstates = [_start(colcursor) for colcursor in cursor.colcursors]
     state(cursor)
 end
-done(cursor::RecCursor, row::Int) = done(cursor.colcursors[1].row, row)
+_done(cursor::RecCursor, row::Int) = _done(cursor.colcursors[1].row, row)
 
-function next(cursor::RecCursor{T}, row::Int) where {T}
+function _next(cursor::RecCursor{T}, row::Int) where {T}
     states = cursor.colstates
     cursors = cursor.colcursors
     builder = cursor.builder
@@ -269,7 +289,7 @@ function next(cursor::RecCursor{T}, row::Int) where {T}
     row = init(cursor.builder)
     for colid in 1:length(states)                               # for each column
         colcursor = cursors[colid]
-        colval, colstate = next(colcursor, states[colid])       # for each value, defn level, repn level in column
+        colval, colstate = _next(colcursor, states[colid])       # for each value, defn level, repn level in column
         val, def, rep = colval
         update(builder, row, colcursor.colname, val, def, rep)  # update record
         states[colid] = colstate                                # set last state to states
@@ -277,10 +297,20 @@ function next(cursor::RecCursor{T}, row::Int) where {T}
     row, state(cursor)
 end
 
+function Base.iterate(cursor::RecCursor, state)
+    _done(cursor, state) && return nothing
+    return _next(cursor, state)
+end
+
+function Base.iterate(cursor::RecCursor)
+    r = iterate(cursor, _start(cursor))
+    return r
+end
+
 ##
 # JuliaBuilder creates a plain Julia object
 function default_init(::Type{T}) where {T}
-    if issubtype(T, Array)
+    if T <: Array
         Array{eltype(T)}(0)
     else
         ccall(:jl_new_struct_uninit, Any, (Any,), T)::T

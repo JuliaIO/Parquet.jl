@@ -227,8 +227,8 @@ function schema_to_julia_types(mod::Module, sch::Schema, schema_name::Symbol)
     io = IOBuffer()
     schema_to_julia_types(io, sch, schema_name)
     typestr = "begin\n" * String(take!(io)) * "\nend"
-    parsedtypes = parse(typestr)
-    eval(mod, parsedtypes)
+    parsedtypes = Meta.parse(typestr)
+    Core.eval(mod, parsedtypes)
 end
 
 schema_to_julia_types(io::IO, sch::Schema, schema_name::Symbol) = schema_to_julia_types(io, sch.schema, schema_name)
@@ -237,7 +237,7 @@ function schema_to_julia_types(io::IO, sch::Vector{SchemaElement}, schema_name::
     nchildren = Int[]
     lev0 = IOBuffer()
     ios = IO[lev0]
-    println(lev0, "type ", schema_name)
+    println(lev0, "mutable struct ", schema_name)
     println(lev0, "    ", schema_name, "() = new()")
     for schemaelem in sch
         _sch_to_julia(schemaelem, ios, nchildren)

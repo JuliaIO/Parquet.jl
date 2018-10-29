@@ -27,7 +27,7 @@ read_fixed(io::IO, typ::Type{Float64}) = reinterpret(Float64, _read_fixed(io, co
 function _read_fixed(io::IO, ret::T, N::Int) where {T <: Unsigned}
     for n in 0:(N-1)
         byte = convert(T, read(io, UInt8))
-        ret |= (byte << 8*n)
+        ret |= (byte << *(8,n))
     end
     ret
 end
@@ -69,7 +69,7 @@ function read_plain(io::IO, typ::Int32, jtype::Type{T}=PLAIN_JTYPES[typ+1]) wher
     elseif typ == _Type.BYTE_ARRAY
         count = read_fixed(io, Int32)
         #@debug("reading bytearray length:$count")
-        read!(io, Array{UInt8}(count))
+        read!(io, Array{UInt8}(undef, count))
     elseif typ == _Type.BOOLEAN
         error("not implemented")
     else
@@ -96,7 +96,7 @@ function read_rle_dict(io::IO, count::Integer)
 end
 
 # read RLE or bit backed format (RLE = 3)
-function read_hybrid(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count); read_len::Bool=true) where {T <: Integer}
+function read_hybrid(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(undef, count); read_len::Bool=true) where {T <: Integer}
     len = read_len ? read_fixed(io, Int32) : Int32(0)
     @debug("reading hybrid data length:$len, count:$count, bits:$bits")
     arrpos = 1
@@ -108,7 +108,7 @@ function read_hybrid(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewid
         #@debug("nitems=$nitems, isbitpack:$isbitpack, runhdr:$runhdr, remaininglen: $(count - arrpos + 1)")
         #@debug("creating sub array for $nitems items at $arrpos, total length:$(length(arr))")
         #subarr = pointer_to_array(pointer(arr, arrpos), nitems)
-        subarr = unsafe_wrap(Array, pointer(arr, arrpos), nitems, false)
+        subarr = unsafe_wrap(Array, pointer(arr, arrpos), nitems, own=false)
 
         if isbitpack
             read_bitpacked_run(io, runhdr, bits, byt, typ, subarr)
@@ -122,16 +122,16 @@ end
 
 function read_rle_run(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count)) where {T <: Integer}
     @debug("read_rle_run. count:$count, typ:$T, nbits:$bits, nbytes:$byt")
-    arr[1:count] = reinterpret(T, _read_fixed(io, zero(byt2uitype(byt)), byt))
+    arr[1:count] .= reinterpret(T, _read_fixed(io, zero(byt2uitype(byt)), byt))
     arr
 end
 
-function read_bitpacked_run(io::IO, grp_count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(grp_count*8)) where {T <: Integer}
+function read_bitpacked_run(io::IO, grp_count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(undef, grp_count*8)) where {T <: Integer}
     count = min(grp_count * 8, length(arr))
     # multiple of 8 values at a time are bit packed together
     nbytes = bits * grp_count # same as: round(Int, (bits * grp_count * 8) / 8)
     #@debug("read_bitpacked_run. grp_count:$grp_count, count:$count, nbytes:$nbytes, nbits:$bits, available:$(bytesavailable(io))")
-    data = Array{UInt8}(min(nbytes, bytesavailable(io)))
+    data = Array{UInt8}(undef, min(nbytes, bytesavailable(io)))
     read!(io, data)
 
     mask = MASKN(bits)
@@ -182,11 +182,11 @@ function read_bitpacked_run(io::IO, grp_count::Integer, bits::Integer, byt::Int=
 end
 
 # read bit packed in deprecated format (BIT_PACKED = 4)
-function read_bitpacked_run_old(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count)) where {T <: Integer}
+function read_bitpacked_run_old(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(undef, count)) where {T <: Integer}
     # multiple of 8 values at a time are bit packed together
     nbytes = round(Int, (bits * count) / 8)
     @debug("read_bitpacked_run. count:$count, nbytes:$nbytes, nbits:$bits")
-    data = Array{UInt8}(nbytes)
+    data = Array{UInt8}(undef, nbytes)
     read!(io, data)
 
     # the mask is of the smallest bounding type for bits

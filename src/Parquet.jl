@@ -6,13 +6,14 @@ using Snappy
 using CodecZlib
 using MemPool
 using Compat
+using Nullables
 
-import Base: show, open, close, values, start, next, done
+import Base: show, open, close, values
 import Thrift: isfilled
 
 export is_par_file, ParFile, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
 export SchemaConverter, schema, JuliaConverter, ThriftConverter, ProtoConverter
-export RowCursor, ColCursor, RecCursor, start, next, done
+export RowCursor, ColCursor, RecCursor
 export AbstractBuilder, JuliaBuilder
 
 # package code goes here
