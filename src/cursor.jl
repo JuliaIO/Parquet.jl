@@ -23,7 +23,7 @@ mutable struct RowCursor
     rg::Union{Int,Nothing}          # current row group
     rgrange::Union{UnitRange{Int},Nothing} # current rowrange
 
-    function RowCursor(par::ParFile, rows::UnitRange{Int}, col::AbstractString, row::Int=first(rows))
+    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::AbstractString, row::Signed64=first(rows))
         rgs = rowgroups(par, col, rows)
         cursor = new(par, rows, row, rgs, nothing, nothing)
         setrow(cursor, row)
@@ -31,7 +31,7 @@ mutable struct RowCursor
     end
 end
 
-function setrow(cursor::RowCursor, row::Int)
+function setrow(cursor::RowCursor, row::Signed)
     cursor.row = row
     cursor.rgrange!==nothing && (row in cursor.rgrange) && return
     startrow = 1
@@ -56,8 +56,8 @@ function _start(cursor::RowCursor)
     setrow(cursor, row)
     row
 end
-_done(cursor::RowCursor, row::Int) = (row > last(cursor.rows))
-function _next(cursor::RowCursor, row::Int)
+_done(cursor::RowCursor, row::Signed) = (row > last(cursor.rows))
+function _next(cursor::RowCursor, row::Signed)
     setrow(cursor, row)
     row, (row+1)
 end
@@ -100,7 +100,7 @@ mutable struct ColCursor{T}
     end
 end
 
-function ColCursor(par::ParFile, rows::UnitRange{Int}, colname::AbstractString, row::Int=first(rows))
+function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::AbstractString, row::Signed64=first(rows))
     rowcursor = RowCursor(par, rows, colname, row)
 
     rg = rowcursor.rowgroups[rowcursor.rg] 
@@ -116,7 +116,7 @@ function ColCursor(par::ParFile, rows::UnitRange{Int}, colname::AbstractString, 
     cursor
 end
 
-function setrow(cursor::ColCursor{T}, row::Int) where {T}
+function setrow(cursor::ColCursor{T}, row::Signed) where {T}
     par = cursor.row.par
     rg = cursor.row.rowgroups[cursor.row.rg]
     ccincr = (row - cursor.row.row) == 1 # whether this is just an increment within the column chunk
@@ -265,7 +265,7 @@ mutable struct RecCursor{T}
     #recfilter::Function
 end
 
-function RecCursor(par::ParFile, rows::UnitRange{Int}, colnames::Vector{AbstractString}, builder::T, row::Int=first(rows)) where {T <: AbstractBuilder}
+function RecCursor(par::ParFile, rows::UnitRange{Int64}, colnames::Vector{AbstractString}, builder::T, row::Signed=first(rows)) where {T <: AbstractBuilder}
     colcursors = [ColCursor(par, rows, colname, row) for colname in colnames]
     RecCursor{T}(colnames, colcursors, builder, Array{Tuple{Int,Int}}(undef, length(colcursors)))
 end
@@ -279,9 +279,9 @@ function _start(cursor::RecCursor)
     cursor.colstates = [_start(colcursor) for colcursor in cursor.colcursors]
     state(cursor)
 end
-_done(cursor::RecCursor, row::Int) = _done(cursor.colcursors[1].row, row)
+_done(cursor::RecCursor, row::Signed) = _done(cursor.colcursors[1].row, row)
 
-function _next(cursor::RecCursor{T}, row::Int) where {T}
+function _next(cursor::RecCursor{T}, row::Signed) where {T}
     states = cursor.colstates
     cursors = cursor.colcursors
     builder = cursor.builder
@@ -330,7 +330,7 @@ function init(builder::JuliaBuilder{T}) where {T}
     builder.initfn(T)::T
 end
 
-function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val::Nullable, defn_level::Int, repn_level::Int) where {T}
+function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val::Nullable, defn_level::Signed, repn_level::Signed) where {T}
     #@debug("updating $fqcolname")
     nameparts = split(fqcolname, '.')
     sch = builder.par.schema
