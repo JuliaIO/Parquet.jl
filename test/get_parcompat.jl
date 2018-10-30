@@ -1,5 +1,5 @@
 using Parquet
-using Base.Test
+using Test
 
 function get_parcompat(parcompat=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     # look for parquet-compatibility in test folder, clone to tempdir if not found

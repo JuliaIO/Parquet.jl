@@ -1,5 +1,5 @@
 using Parquet
-using Base.Test
+using Test
 
 function test_codec()
     println("testing reading bitpacked run (old scheme)...")

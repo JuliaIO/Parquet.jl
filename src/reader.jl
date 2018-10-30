@@ -5,14 +5,14 @@ const SZ_FOOTER = 4
 const SZ_VALID_PAR = 2*SZ_PAR_MAGIC + SZ_FOOTER
 
 # page is the unit of compression
-type Page
+mutable struct Page
     colchunk::ColumnChunk
     hdr::PageHeader
     pos::Int
     data::Vector{UInt8}
 end
 
-type PageLRU
+mutable struct PageLRU
     refs::Dict{ColumnChunk,DRef}
     function PageLRU()
         new(Dict{ColumnChunk,DRef}())
@@ -32,7 +32,7 @@ end
 # parquet file.
 # Keeps a handle to the open file and the file metadata.
 # Holds a LRU cache of raw bytes of the pages read.
-type ParFile
+mutable struct ParFile
     path::AbstractString
     handle::IOStream
     meta::FileMetaData
@@ -63,7 +63,7 @@ end
 # can access raw (uncompressed) bytes from pages
 
 schema(par::ParFile) = par.schema
-schema{T<:SchemaConverter}(conv::T, par::ParFile, schema_name::Symbol) = schema(conv, par.schema, schema_name)
+schema(conv::T, par::ParFile, schema_name::Symbol) where {T<:SchemaConverter} = schema(conv, par.schema, schema_name)
 
 colname(col::ColumnChunk) = colname(col.meta_data)
 colname(col::ColumnMetaData) = join(col.path_in_schema, '.')
@@ -123,7 +123,7 @@ function _pagevec(par::ParFile, col::ColumnChunk)
         seek(io, pos)
         pagehdr = read_thrift(io, PageHeader)
 
-        buff = Array{UInt8}(page_size(pagehdr))
+        buff = Array{UInt8}(undef, page_size(pagehdr))
         page_data_pos = position(io)
         data = read!(io, buff)
         page = Page(col, pagehdr, page_data_pos, data)
@@ -144,7 +144,7 @@ function bytes(page::Page, uncompressed::Bool=true)
         if codec == CompressionCodec.SNAPPY
             data = Snappy.uncompress(data)
         elseif codec == CompressionCodec.GZIP
-            data = Libz.inflate(data)
+            data = transcode(GzipDecompressor, data)
         else
             error("Unknown compression codec for column chunk: $codec")
         end
@@ -157,7 +157,7 @@ end
 # layer 2 access
 # can access decoded values from pages
 
-map_dict_vals{T1,T2}(valdict::Vector{T1}, vals::Vector{T2}) = isempty(valdict) ? vals : [valdict[v+1] for v in vals]
+map_dict_vals(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v+1] for v in vals]
 
 values(par::ParFile, rowgroupidx::Integer, colidx::Integer) = values(par, columns(par, rowgroupidx), colidx)
 values(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = values(par, cols[colidx])
@@ -169,7 +169,7 @@ function values(par::ParFile, col::ColumnChunk)
     if (ctype == _Type.BYTE_ARRAY) || (ctype == _Type.FIXED_LEN_BYTE_ARRAY)
         jtype = Vector{jtype}
     end
-    vals = Array{jtype}(0)
+    vals = Array{jtype}(undef, 0)
     defn_levels = Int[]
     repn_levels = Int[]
 
@@ -177,7 +177,7 @@ function values(par::ParFile, col::ColumnChunk)
         typ = pg.hdr._type
         valtup = values(par, pg)
         if (typ == PageType.DATA_PAGE) || (typ == PageType.DATA_PAGE_V2)
-            @logmsg("reading a data page for columnchunk")
+            @debug("reading a data page for columnchunk")
             _vals, _defn_levels, _repn_levels = valtup
             enc, defn_enc, rep_enc = page_encodings(pg)
             if enc == Encoding.PLAIN_DICTIONARY
@@ -189,7 +189,7 @@ function values(par::ParFile, col::ColumnChunk)
             append!(repn_levels, _repn_levels)
         elseif typ == PageType.DICTIONARY_PAGE
             _vals = valtup[1]
-            @logmsg("read a dictionary page for columnchunk with $(length(_vals)) values")
+            @debug("read a dictionary page for columnchunk with $(length(_vals)) values")
             valdict = isempty(valdict) ? _vals : append!(valdict, _vals)
         end
     end
@@ -199,7 +199,7 @@ end
 function read_levels(io::IO, max_val::Integer, enc::Int32, num_values::Integer)
     bw = bitwidth(max_val)
     (bw == 0) && (return Int[])
-    @logmsg("reading levels. enc:$enc ($(Thrift.enumstr(Encoding,enc))), max_val:$max_val, num_values:$num_values")
+    @debug("reading levels. enc:$enc ($(Thrift.enumstr(Encoding,enc))), max_val:$max_val, num_values:$num_values")
 
     if enc == Encoding.RLE
         read_hybrid(io, num_values, bw)
@@ -214,7 +214,7 @@ function read_levels(io::IO, max_val::Integer, enc::Int32, num_values::Integer)
 end
 
 function read_values(io::IO, enc::Int32, typ::Int32, num_values::Integer)
-    @logmsg("reading values. enc:$enc ($(Thrift.enumstr(Encoding,enc))), num_values:$num_values")
+    @debug("reading values. enc:$enc ($(Thrift.enumstr(Encoding,enc))), num_values:$num_values")
 
     if enc == Encoding.PLAIN
         read_plain_values(io, num_values, typ)
@@ -222,7 +222,7 @@ function read_values(io::IO, enc::Int32, typ::Int32, num_values::Integer)
         read_rle_dict(io, num_values)
     else
         error("unsupported encoding $enc for pages")
-        #@logmsg("unsupported encoding $enc ($(Thrift.enumstr(Encoding,enc))) for pages")
+        #@debug("unsupported encoding $enc ($(Thrift.enumstr(Encoding,enc))) for pages")
         #return Int[]
     end
 end
@@ -248,15 +248,15 @@ function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::I
     cname = colname(page.colchunk)
     enc, defn_enc, rep_enc = encs
 
-    #@logmsg("before reading defn levels nb_available in page: $(nb_available(io))")
+    #@debug("before reading defn levels bytesavailable in page: $(bytesavailable(io))")
     # read definition levels. skipped if column is required
     defn_levels = isrequired(par.schema, cname) ? Int[] : read_levels(io, max_definition_level(par.schema, cname), defn_enc, num_values)
 
-    #@logmsg("before reading repn levels nb_available in page: $(nb_available(io))")
+    #@debug("before reading repn levels bytesavailable in page: $(bytesavailable(io))")
     # read repetition levels. skipped if all columns are at 1st level
     repn_levels = ('.' in cname) ? read_levels(io, max_repetition_level(par.schema, cname), rep_enc, num_values) : Int[]
 
-    #@logmsg("before reading values nb_available in page: $(nb_available(io))")
+    #@debug("before reading values bytesavailable in page: $(bytesavailable(io))")
     # read values
     vals = read_values(io, enc, ctype, num_values)
 
@@ -269,14 +269,14 @@ open(par::ParFile, col::ColumnChunk) = open(par.handle, par.path, col)
 close(par::ParFile, col::ColumnChunk, io) = (par.handle == io) || close(io)
 function open(io, path::AbstractString, col::ColumnChunk)
     if isfilled(col, :file_path)
-        @logmsg("opening file $(col.file_path) to read column metadata at $(col.file_offset)")
+        @debug("opening file $(col.file_path) to read column metadata at $(col.file_offset)")
         open(col.file_path)
     else
         if io == nothing
-            @logmsg("opening file $path to read column metadata at $(col.file_offset)")
+            @debug("opening file $path to read column metadata at $(col.file_offset)")
             open(path)
         else
-            @logmsg("reading column metadata at $(col.file_offset)")
+            @debug("reading column metadata at $(col.file_offset)")
             io
         end
     end
@@ -320,9 +320,9 @@ end
 page_num_values(page::Union{DataPageHeader,DataPageHeaderV2,DictionaryPageHeader}) = page.num_values
 
 # file metadata
-read_thrift{T}(buff::Array{UInt8}, ::Type{T}) = read(TCompactProtocol(TMemoryTransport(buff)), T)
-read_thrift{T}(io::IO, ::Type{T}) = read(TCompactProtocol(TFileTransport(io)), T)
-read_thrift{TR<:TTransport,T}(t::TR, ::Type{T}) = read(TCompactProtocol(t), T)
+read_thrift(buff::Array{UInt8}, ::Type{T}) where {T} = read(TCompactProtocol(TMemoryTransport(buff)), T)
+read_thrift(io::IO, ::Type{T}) where {T} = read(TCompactProtocol(TFileTransport(io)), T)
+read_thrift(t::TR, ::Type{T}) where {TR<:TTransport,T} = read(TCompactProtocol(t), T)
 
 function metadata_length(io)
     sz = filesize(io)
@@ -333,7 +333,7 @@ function metadata_length(io)
 end
 
 function metadata(io, path::AbstractString, len::Integer=metadata_length(io))
-    @logmsg("metadata len = $len")
+    @debug("metadata len = $len")
     sz = filesize(io)
     seek(io, sz - SZ_PAR_MAGIC - SZ_FOOTER - len)
     meta = read_thrift(io, FileMetaData)
@@ -359,18 +359,18 @@ function is_par_file(fname::AbstractString)
 end
 
 function is_par_file(io)
-    magic = Array{UInt8}(4)
-
     sz = filesize(io)
     (sz > SZ_VALID_PAR) || return false
 
     seekstart(io)
+    magic = Array{UInt8}(undef, 4)
     read!(io, magic)
-    (convert(String, magic) == PAR_MAGIC) || return false
-
+    (String(magic) == PAR_MAGIC) || return false
+    
     seek(io, sz - SZ_PAR_MAGIC)
+    magic = Array{UInt8}(undef, 4)
     read!(io, magic)
-    (convert(String, magic) == PAR_MAGIC) || return false
+    (String(magic) == PAR_MAGIC) || return false
 
     true
 end

@@ -1,5 +1,5 @@
 using Parquet
-using Base.Test
+using Test
 
 function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     p = ParFile(joinpath(parcompat, file))
@@ -13,14 +13,12 @@ function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FIL
         println("\tvalue, defn, repn, next idx")
         t1 = time()
         cc = ColCursor(p, rr, cname)
-        i = start(cc)
         num_read = 0
-        while !done(cc, i)
-            v,i = next(cc, i)
+        for (v,i) in enumerate(cc)
             val,defn,repn = v
-            done(cc, i) && println("\t\t", isnull(val) ? nothing : get(val), ", ", defn, ", ", repn, ", ", i)
             num_read += 1
         end
+        println("\t\t", isnull(val) ? nothing : get(val), ", ", defn, ", ", repn, ", ", i)
         println("\t\tread $num_read values in $(time()-t1) time")
     end
 end
@@ -35,11 +33,11 @@ function test_juliabuilder_row_cursor(file::String, typename::Symbol, parcompat:
     schema(JuliaConverter(Main), p, typename)
     jb = JuliaBuilder(p, getfield(Main, typename))
     rc = RecCursor(p, 1:nr, colnames(p), jb)
-    i = start(rc)
-    while !done(rc, i)
-        rec,i = next(rc, i)
-        done(rc, i) && println("\t\tlast record: $rec")
+    rec = nothing
+    for i in rc
+        rec = i
     end
+    println("\t\tlast record: $rec")
     println("\t\tread $nr records in $(time()-t1) time")
 end
 

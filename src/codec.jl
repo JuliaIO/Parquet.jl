@@ -24,15 +24,15 @@ read_fixed(io::IO, typ::Type{Int64}) = reinterpret(Int64, _read_fixed(io, conver
 read_fixed(io::IO, typ::Type{Int128}) = reinterpret(Int128, _read_fixed(io, convert(UInt128, 0), 12))   # INT96: 12 bytes little endian
 read_fixed(io::IO, typ::Type{Float32}) = reinterpret(Float32, _read_fixed(io, convert(UInt32,0), 4))
 read_fixed(io::IO, typ::Type{Float64}) = reinterpret(Float64, _read_fixed(io, convert(UInt64,0), 8))
-function _read_fixed{T <: Unsigned}(io::IO, ret::T, N::Int)
+function _read_fixed(io::IO, ret::T, N::Int) where {T <: Unsigned}
     for n in 0:(N-1)
         byte = convert(T, read(io, UInt8))
-        ret |= (byte << 8*n)
+        ret |= (byte << *(8,n))
     end
     ret
 end
 
-function _read_varint{T <: Integer}(io::IO, ::Type{T})
+function _read_varint(io::IO, ::Type{T}) where {T <: Integer}
     res = zero(T)
     n = 0
     byte = UInt8(MSB)
@@ -43,7 +43,7 @@ function _read_varint{T <: Integer}(io::IO, ::Type{T})
     end
     # in case of overflow, consider it as missing field and return default value
     if (n-1) > sizeof(T)
-        #logmsg("overflow reading $T. returning 0")
+        #@debug("overflow reading $T. returning 0")
         return zero(T)
     end
     res
@@ -62,53 +62,53 @@ const PLAIN_THRIFT_TYPES = ("bool", "i32", "i64", "i64", "double", "double",   "
 const PLAIN_JTYPES = (Bool, Int32, Int64, Int128, Float32, Float64,      UInt8,               UInt8)
 
 # read plain encoding (PLAIN = 0)
-function read_plain{T}(io::IO, typ::Int32, jtype::Type{T}=PLAIN_JTYPES[typ+1])
+function read_plain(io::IO, typ::Int32, jtype::Type{T}=PLAIN_JTYPES[typ+1]) where {T}
     if typ == _Type.FIXED_LEN_BYTE_ARRAY
-        #@logmsg("reading fixedlenbytearray length:$count")
+        #@debug("reading fixedlenbytearray length:$count")
         read!(io, Array{UInt8}(count))
     elseif typ == _Type.BYTE_ARRAY
         count = read_fixed(io, Int32)
-        #@logmsg("reading bytearray length:$count")
-        read!(io, Array{UInt8}(count))
+        #@debug("reading bytearray length:$count")
+        read!(io, Array{UInt8}(undef, count))
     elseif typ == _Type.BOOLEAN
         error("not implemented")
     else
-        #@logmsg("reading type:$jtype, typenum:$typ")
+        #@debug("reading type:$jtype, typenum:$typ")
         read_fixed(io, jtype)
     end
 end
 
 # read plain values or dictionary (PLAIN_DICTIONARY = 2)
 function read_plain_values(io::IO, count::Integer, typ::Int32)
-    @logmsg("reading plain values type:$typ, count:$count")
+    @debug("reading plain values type:$typ, count:$count")
     arr = [read_plain(io, typ) for i in 1:count]
-    @logmsg("read $(length(arr)) plain values")
+    @debug("read $(length(arr)) plain values")
     arr
 end
 
 # read rle dictionary (RLE_DICTIONARY = 8, or PLAIN_DICTIONARY = 2 in a data page)
 function read_rle_dict(io::IO, count::Integer)
     bits = read(io, UInt8)
-    @logmsg("reading rle dictionary bits:$bits")
+    @debug("reading rle dictionary bits:$bits")
     arr = read_hybrid(io, count, bits; read_len=false)
-    @logmsg("read $(length(arr)) dictionary values")
+    @debug("read $(length(arr)) dictionary values")
     arr
 end
 
 # read RLE or bit backed format (RLE = 3)
-function read_hybrid{T<:Integer}(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count); read_len::Bool=true)
+function read_hybrid(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(undef, count); read_len::Bool=true) where {T <: Integer}
     len = read_len ? read_fixed(io, Int32) : Int32(0)
-    @logmsg("reading hybrid data length:$len, count:$count, bits:$bits")
+    @debug("reading hybrid data length:$len, count:$count, bits:$bits")
     arrpos = 1
     while arrpos <= count
         runhdr = _read_varint(io, Int)
         isbitpack = ((runhdr & 0x1) == 0x1)
         runhdr >>= 1
         nitems = isbitpack ? min(runhdr*8, count - arrpos + 1) : runhdr
-        #@logmsg("nitems=$nitems, isbitpack:$isbitpack, runhdr:$runhdr, remaininglen: $(count - arrpos + 1)")
-        #@logmsg("creating sub array for $nitems items at $arrpos, total length:$(length(arr))")
+        #@debug("nitems=$nitems, isbitpack:$isbitpack, runhdr:$runhdr, remaininglen: $(count - arrpos + 1)")
+        #@debug("creating sub array for $nitems items at $arrpos, total length:$(length(arr))")
         #subarr = pointer_to_array(pointer(arr, arrpos), nitems)
-        subarr = unsafe_wrap(Array, pointer(arr, arrpos), nitems, false)
+        subarr = unsafe_wrap(Array, pointer(arr, arrpos), nitems, own=false)
 
         if isbitpack
             read_bitpacked_run(io, runhdr, bits, byt, typ, subarr)
@@ -120,18 +120,18 @@ function read_hybrid{T<:Integer}(io::IO, count::Integer, bits::Integer, byt::Int
     arr
 end
 
-function read_rle_run{T<:Integer}(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count))
-    @logmsg("read_rle_run. count:$count, typ:$T, nbits:$bits, nbytes:$byt")
-    arr[1:count] = reinterpret(T, _read_fixed(io, zero(byt2uitype(byt)), byt))
+function read_rle_run(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count)) where {T <: Integer}
+    @debug("read_rle_run. count:$count, typ:$T, nbits:$bits, nbytes:$byt")
+    arr[1:count] .= reinterpret(T, _read_fixed(io, zero(byt2uitype(byt)), byt))
     arr
 end
 
-function read_bitpacked_run{T<:Integer}(io::IO, grp_count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(grp_count*8))
+function read_bitpacked_run(io::IO, grp_count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(undef, grp_count*8)) where {T <: Integer}
     count = min(grp_count * 8, length(arr))
     # multiple of 8 values at a time are bit packed together
     nbytes = bits * grp_count # same as: round(Int, (bits * grp_count * 8) / 8)
-    #@logmsg("read_bitpacked_run. grp_count:$grp_count, count:$count, nbytes:$nbytes, nbits:$bits, available:$(nb_available(io))")
-    data = Array{UInt8}(min(nbytes, nb_available(io)))
+    #@debug("read_bitpacked_run. grp_count:$grp_count, count:$count, nbytes:$nbytes, nbits:$bits, available:$(bytesavailable(io))")
+    data = Array{UInt8}(undef, min(nbytes, bytesavailable(io)))
     read!(io, data)
 
     mask = MASKN(bits)
@@ -143,7 +143,7 @@ function read_bitpacked_run{T<:Integer}(io::IO, grp_count::Integer, bits::Intege
     arridx = 1
     dataidx = 1
     while arridx <= count
-        #@logmsg("arridx:$arridx nbitsbuff:$nbitsbuff shift:$shift bits:$bits")
+        #@debug("arridx:$arridx nbitsbuff:$nbitsbuff shift:$shift bits:$bits")
         if nbitsbuff > 0
             # we have leftover bits, which must be appended
             arr[arridx] = bitbuff & MASKN(nbitsbuff)
@@ -164,13 +164,13 @@ function read_bitpacked_run{T<:Integer}(io::IO, grp_count::Integer, bits::Intege
         while ((nbitsbuff + shift) >= bits) && (arridx <= count)
             if shift > 0
                 remshift = bits - shift
-                #@logmsg("setting part from bitbuff nbitsbuff:$nbitsbuff, shift:$shift, remshift:$remshift")
+                #@debug("setting part from bitbuff nbitsbuff:$nbitsbuff, shift:$shift, remshift:$remshift")
                 arr[arridx] |= convert(T, (bitbuff << shift) & mask)
                 bitbuff >>= remshift
                 nbitsbuff -= remshift
                 shift = 0
             else
-                #@logmsg("setting all from bitbuff nbitsbuff:$nbitsbuff")
+                #@debug("setting all from bitbuff nbitsbuff:$nbitsbuff")
                 arr[arridx] = convert(T, bitbuff & mask)
                 bitbuff >>= bits
                 nbitsbuff -= bits
@@ -182,11 +182,11 @@ function read_bitpacked_run{T<:Integer}(io::IO, grp_count::Integer, bits::Intege
 end
 
 # read bit packed in deprecated format (BIT_PACKED = 4)
-function read_bitpacked_run_old{T<:Integer}(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count))
+function read_bitpacked_run_old(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(undef, count)) where {T <: Integer}
     # multiple of 8 values at a time are bit packed together
     nbytes = round(Int, (bits * count) / 8)
-    @logmsg("read_bitpacked_run. count:$count, nbytes:$nbytes, nbits:$bits")
-    data = Array{UInt8}(nbytes)
+    @debug("read_bitpacked_run. count:$count, nbytes:$nbytes, nbits:$bits")
+    data = Array{UInt8}(undef, nbytes)
     read!(io, data)
 
     # the mask is of the smallest bounding type for bits

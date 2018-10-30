@@ -1,6 +1,6 @@
 
 # schema and helper methods
-type Schema
+mutable struct Schema
     schema::Vector{SchemaElement}
     name_lookup::Dict{AbstractString,SchemaElement}
 
@@ -16,7 +16,7 @@ type Schema
             name_lookup[nested_name] = sch
 
             if !isempty(nchildren_stack)
-                @logmsg("$(sch.name) is a child. remaining $(nchildren_stack[end]-1) children")
+                @debug("$(sch.name) is a child. remaining $(nchildren_stack[end]-1) children")
                 if nchildren_stack[end] == 1
                     pop!(nchildren_stack)
                     pop!(name_stack)
@@ -26,7 +26,7 @@ type Schema
             end
 
             if (idx > 1) && (Thrift.isfilled(sch, :num_children) && (sch.num_children > 0))
-                @logmsg("$(sch.name) has $(sch.num_children) children")
+                @debug("$(sch.name) has $(sch.num_children) children")
                 push!(nchildren_stack, sch.num_children)
                 push!(name_stack, sch.name)
             end
@@ -72,10 +72,10 @@ function max_definition_level(sch::Schema, schname)
     istoplevel(schname) ? lev : (lev + max_definition_level(sch, parentname(schname)))
 end 
 
-@compat abstract type SchemaConverter end
+abstract type SchemaConverter end
 
 # parquet schema to Protobuf schema converter
-type ProtoConverter <: SchemaConverter
+mutable struct ProtoConverter <: SchemaConverter
     to::IO
 end
 
@@ -145,7 +145,7 @@ end
 
 
 # parquet schema to Thrift schema converter
-type ThriftConverter <: SchemaConverter
+mutable struct ThriftConverter <: SchemaConverter
     to::IO
 end
 
@@ -217,7 +217,7 @@ function _sch_to_thrift(sch::SchemaElement, ios::Vector{IO}, nchildren::Vector{I
 end
 
 # parquet schema to Julia types
-type JuliaConverter <: SchemaConverter
+mutable struct JuliaConverter <: SchemaConverter
     to::Union{Module,IO}
 end
 
@@ -227,8 +227,8 @@ function schema_to_julia_types(mod::Module, sch::Schema, schema_name::Symbol)
     io = IOBuffer()
     schema_to_julia_types(io, sch, schema_name)
     typestr = "begin\n" * String(take!(io)) * "\nend"
-    parsedtypes = parse(typestr)
-    eval(mod, parsedtypes)
+    parsedtypes = Meta.parse(typestr)
+    Core.eval(mod, parsedtypes)
 end
 
 schema_to_julia_types(io::IO, sch::Schema, schema_name::Symbol) = schema_to_julia_types(io, sch.schema, schema_name)
@@ -237,7 +237,7 @@ function schema_to_julia_types(io::IO, sch::Vector{SchemaElement}, schema_name::
     nchildren = Int[]
     lev0 = IOBuffer()
     ios = IO[lev0]
-    println(lev0, "type ", schema_name)
+    println(lev0, "mutable struct ", schema_name)
     println(lev0, "    ", schema_name, "() = new()")
     for schemaelem in sch
         _sch_to_julia(schemaelem, ios, nchildren)
