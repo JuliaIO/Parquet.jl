@@ -3,7 +3,7 @@
 [![Build Status](https://travis-ci.org/JuliaComputing/Parquet.jl.svg?branch=master)](https://travis-ci.org/JuliaComputing/Parquet.jl)
 [![Build status](https://ci.appveyor.com/api/projects/status/vrqg01w2sj3mfk3d/branch/master?svg=true)](https://ci.appveyor.com/project/tanmaykm/parquet-jl/branch/master)
 
-Load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet). Only metadata is read initially, data is loaded in chunks on demand.
+Load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet). Only metadata is read initially, data is loaded in chunks on demand. (Note: [ParquetFiles.jl](https://github.com/queryverse/ParquetFiles.jl) also provides load support for Parquet files under the FileIO.jl package.)
 
 ````julia
 julia> using Parquet
@@ -123,3 +123,4 @@ Customer#000000642 Phone#:32-925-597-9911
 Customer#000000161 Phone#:17-805-718-2449
 
 ````
+
