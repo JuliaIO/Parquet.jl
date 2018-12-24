@@ -26,6 +26,13 @@ function test_load(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compati
     cc1 = columns(p, rg[1], cnames[1:2:3])
     @test length(cc) > length(cc1)
     @test length(rowgroups(p, [cnames[1], "xyz"])) == 0
+
+    iob = IOBuffer()
+    show(iob, p)
+    sb = take!(iob)
+    @test !isempty(sb)
+    println("\t" * String(sb))
+
     println("\tsuccess")
 end
 
