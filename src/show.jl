@@ -197,5 +197,5 @@ function show(io::IO, par::ParFile)
     println(io, "    version: $(meta.version)")
     println(io, "    nrows: $(meta.num_rows)")
     println(io, "    created by: $(meta.created_by)")
-    println(io, "    cached: $(length(par.page_cache)) column chunks")
+    println(io, "    cached: $(length(par.page_cache.refs)) column chunks")
 end
