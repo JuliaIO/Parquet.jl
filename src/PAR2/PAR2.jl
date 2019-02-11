@@ -6,7 +6,6 @@
 
 module PAR2
 
-using Compat
 using Thrift
 import Thrift.process, Thrift.meta, Thrift.distribute
 
@@ -20,7 +19,25 @@ export FieldRepetitionType # enum
 export Encoding # enum
 export CompressionCodec # enum
 export PageType # enum
+export BoundaryOrder # enum
 export Statistics # struct
+export StringType # struct
+export UUIDType # struct
+export MapType # struct
+export ListType # struct
+export EnumType # struct
+export DateType # struct
+export NullType # struct
+export DecimalType # struct
+export MilliSeconds # struct
+export MicroSeconds # struct
+export TimeUnit # struct
+export TimestampType # struct
+export TimeType # struct
+export IntType # struct
+export JsonType # struct
+export BsonType # struct
+export LogicalType # struct
 export SchemaElement # struct
 export DataPageHeader # struct
 export IndexPageHeader # struct
@@ -31,9 +48,21 @@ export KeyValue # struct
 export SortingColumn # struct
 export PageEncodingStats # struct
 export ColumnMetaData # struct
+export EncryptionWithFooterKey # struct
+export EncryptionWithColumnKey # struct
+export ColumnCryptoMetaData # struct
 export ColumnChunk # struct
 export RowGroup # struct
+export TypeDefinedOrder # struct
+export ColumnOrder # struct
+export PageLocation # struct
+export OffsetIndex # struct
+export ColumnIndex # struct
 export FileMetaData # struct
+export AesGcmV1 # struct
+export AesGcmCtrV1 # struct
+export EncryptionAlgorithm # struct
+export FileCryptoMetaData # struct
 
 include("PAR2_constants.jl")
 include("PAR2_types.jl")
