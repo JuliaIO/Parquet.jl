@@ -180,7 +180,7 @@ function values(par::ParFile, col::ColumnChunk)
             @debug("reading a data page for columnchunk")
             _vals, _defn_levels, _repn_levels = valtup
             enc, defn_enc, rep_enc = page_encodings(pg)
-            if enc == Encoding.PLAIN_DICTIONARY
+            if enc == Encoding.PLAIN_DICTIONARY || enc == Encoding.RLE_DICTIONARY
                 append!(vals, map_dict_vals(valdict, _vals))
             else
                 append!(vals, _vals)
@@ -218,7 +218,7 @@ function read_values(io::IO, enc::Int32, typ::Int32, num_values::Integer)
 
     if enc == Encoding.PLAIN
         read_plain_values(io, num_values, typ)
-    elseif enc == Encoding.PLAIN_DICTIONARY
+    elseif enc == Encoding.PLAIN_DICTIONARY || enc == Encoding.RLE_DICTIONARY
         read_rle_dict(io, num_values)
     else
         error("unsupported encoding $enc for pages")
