@@ -5,8 +5,6 @@ using ProtoBuf
 using Snappy
 using CodecZlib
 using MemPool
-using Compat
-using Nullables
 
 import Base: show, open, close, values
 import Thrift: isfilled
