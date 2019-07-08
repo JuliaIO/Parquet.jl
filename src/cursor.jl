@@ -74,7 +74,7 @@ end
 
 ##
 # Column cursor iterates through all values of the column, including null values.
-# Each iteration returns the value (as a Nullable), definition level, and repetition level for each value.
+# Each iteration returns the value (as a Union{T,Nothing}), definition level, and repetition level for each value.
 # Row can be deduced from repetition level.
 mutable struct ColCursor{T}
     row::RowCursor
@@ -228,10 +228,10 @@ function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int,Int}) where {T}
     repn_level = isempty(cursor.repn_levels) ? 0 : cursor.repn_levels[levelpos]
     cursor.levelpos += 1
     if defn_level == maxdefn
-        val = Nullable{T}(cursor.vals[cursor.valpos])
+        val = (cursor.vals[cursor.valpos])::Union{Nothing,T}
         cursor.valpos += 1
     else
-        val = Nullable{T}()
+        val = (nothing)::Union{Nothing,T}
     end
 
     # advance row
@@ -330,7 +330,7 @@ function init(builder::JuliaBuilder{T}) where {T}
     builder.initfn(T)::T
 end
 
-function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val::Nullable, defn_level::Signed, repn_level::Signed) where {T}
+function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val, defn_level::Signed, repn_level::Signed) where {T}
     #@debug("updating $fqcolname")
     nameparts = split(fqcolname, '.')
     sch = builder.par.schema
@@ -341,7 +341,7 @@ function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val
     # for each name part of colname (a field)
     for idx in 1:length(nameparts)
         colname = join(nameparts[1:idx], '.')
-        #@debug("updating part $colname of $fqcolname isnull:$(isnull(val)), def:$(defn_level), rep:$(repn_level)")
+        #@debug("updating part $colname of $fqcolname isnull:$(val === nothing), def:$(defn_level), rep:$(repn_level)")
         leaf = nameparts[idx]
         symleaf = Symbol(leaf)
 
@@ -350,7 +350,7 @@ function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val
         required || (Fdefn += 1)                    # if field is optional, increment defn level
         repeated && (Frepn += 1)                    # if field can repeat, increment repn level
 
-        defined = isnull(val) ? isdefined(F, symleaf) : false
+        defined = (val === nothing) ? isdefined(F, symleaf) : false
         mustdefine = defn_level >= Fdefn
         mustrepeat = repeated && (repn_level == Frepn)
         repkey = fqcolname * ":" * colname
@@ -378,7 +378,7 @@ function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val
             F = Vrep[repidx]
         elseif !defined && mustdefine
             if idx == length(nameparts)
-                V = get(val)
+                V = val
             else
                 V = builder.initfn(fieldtype(typeof(F), symleaf))
             end
