@@ -1,5 +1,9 @@
 name = "Parquet"
 uuid = "626c502c-15b0-58ad-a749-f091afb673ae"
+keywords = ["parquet", "julia", "columnar-storage"]
+license = "MIT"
+desc = "Julia implementation of parquet columnar file format reader"
+version = "0.3.0"
 
 [deps]
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
