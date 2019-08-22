@@ -54,6 +54,8 @@ Schema:
 
 Can convert the parquet schema to different forms:
 
+(For Julia 1.0 or later, use stdout instead of STDOUT)
+
 ````julia
 julia> schema(JuliaConverter(STDOUT), p, :Customer)
 type Customer
