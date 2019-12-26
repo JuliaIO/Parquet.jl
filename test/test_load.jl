@@ -76,7 +76,7 @@ function test_schema(file, schema_name::Symbol,  parcompat=joinpath(dirname(@__F
 end
 
 function test_load_all_pages()
-    for encformat in ("SNAPPY", "GZIP", "NONE")
+    for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
         for fname in ("nation", "customer")
             test_load("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
             test_schema("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", Symbol(fname * "_" * encformat))

@@ -42,7 +42,7 @@ function test_juliabuilder_row_cursor(file::String, typename::Symbol, parcompat:
 end
 
 function test_col_cursor_all_files()
-    for encformat in ("SNAPPY", "GZIP", "NONE")
+    for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
         for fname in ("nation", "customer")
             test_col_cursor("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
         end
@@ -50,7 +50,7 @@ function test_col_cursor_all_files()
 end
 
 function test_juliabuilder_row_cursor_all_files()
-    for encformat in ("SNAPPY", "GZIP", "NONE")
+    for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
         for fname in ("nation", "customer")
             test_juliabuilder_row_cursor("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", Symbol(encformat * fname))
         end

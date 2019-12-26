@@ -46,7 +46,7 @@ function test_decode(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compa
 end
 
 function test_decode_all_pages()
-    for encformat in ("SNAPPY", "GZIP", "NONE")
+    for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
         for fname in ("nation", "customer")
             test_decode("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
         end
