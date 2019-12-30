@@ -77,9 +77,12 @@ end
 
 function test_load_all_pages()
     for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
-        for fname in ("nation", "customer")
-            test_load("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
-            test_schema("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", Symbol(fname * "_" * encformat))
+        for source in ("_pandas_pyarrow_")
+            for fname in ("nation", "customer")
+                parquet_filename = "parquet-testdata/Parquet_Files/" * encformat * source * fname * ".parquet"
+                test_load(parquet_filename)
+                test_schema(parquet_filename, Symbol(fname * "_" * encformat))
+            end
         end
     end
 end

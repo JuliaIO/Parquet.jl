@@ -47,8 +47,11 @@ end
 
 function test_decode_all_pages()
     for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
-        for fname in ("nation", "customer")
-            test_decode("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
+        for source in ("_pandas_pyarrow_")
+            for fname in ("nation", "customer")
+                parquet_filename = "parquet-testdata/Parquet_Files/" * encformat * source * fname * ".parquet"
+                test_decode(parquet_filename)
+            end
         end
     end
 end
