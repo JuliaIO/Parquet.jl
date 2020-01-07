@@ -159,7 +159,7 @@ end
 # layer 2 access
 # can access decoded values from pages
 
-map_dict_vals(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v+1] for v in vals] #! BUG to fix here
+map_dict_vals_1(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v+1] for v in vals] #! BUG to fix here
 map_dict_vals(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v] for v in vals] #! BUG to fix here
 
 values(par::ParFile, rowgroupidx::Integer, colidx::Integer) = values(par, columns(par, rowgroupidx), colidx)
@@ -184,7 +184,11 @@ function values(par::ParFile, col::ColumnChunk)
             _vals, _defn_levels, _repn_levels = valtup
             enc, defn_enc, rep_enc = page_encodings(pg)
             if enc == Encoding.PLAIN_DICTIONARY || enc == Encoding.RLE_DICTIONARY
-                append!(vals, map_dict_vals(valdict, _vals)) #! BUG to fix here
+                try
+                    append!(vals, map_dict_vals_1(valdict, _vals)) #! BUG to fix here
+                catch
+                    append!(vals, map_dict_vals(valdict, _vals)) #! BUG to fix here
+                end
             else
                 append!(vals, _vals)
             end
