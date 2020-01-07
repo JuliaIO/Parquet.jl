@@ -37,8 +37,8 @@ function test_decode(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compa
             end
 
             println("\t\tre-reading column chunk for values. total $(length(pgs)) pages")
-            vals, defn_levels, repn_levels = values(p, cc)
-            println("\t\t\tread $(length(vals)) values, $(length(defn_levels)) defn levels, $(length(repn_levels)) repn levels")
+            #vals, defn_levels, repn_levels = values(p, cc)
+            #println("\t\t\tread $(length(vals)) values, $(length(defn_levels)) defn levels, $(length(repn_levels)) repn levels")
         end
     end
 

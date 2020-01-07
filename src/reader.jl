@@ -159,14 +159,14 @@ end
 # layer 2 access
 # can access decoded values from pages
 
-map_dict_vals_1(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v+1] for v in vals] #! BUG to fix here
-map_dict_vals(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v] for v in vals] #! BUG to fix here
+map_dict_vals(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v+1] for v in vals]
 
 values(par::ParFile, rowgroupidx::Integer, colidx::Integer) = values(par, columns(par, rowgroupidx), colidx)
 values(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = values(par, cols[colidx])
 function values(par::ParFile, col::ColumnChunk)
     ctype = coltype(col)
     pgs = pages(par, col)
+
     valdict = Int[]
     jtype = PLAIN_JTYPES[ctype+1]
     if (ctype == _Type.BYTE_ARRAY) || (ctype == _Type.FIXED_LEN_BYTE_ARRAY)
@@ -184,11 +184,7 @@ function values(par::ParFile, col::ColumnChunk)
             _vals, _defn_levels, _repn_levels = valtup
             enc, defn_enc, rep_enc = page_encodings(pg)
             if enc == Encoding.PLAIN_DICTIONARY || enc == Encoding.RLE_DICTIONARY
-                try
-                    append!(vals, map_dict_vals_1(valdict, _vals)) #! BUG to fix here
-                catch
-                    append!(vals, map_dict_vals(valdict, _vals)) #! BUG to fix here
-                end
+                append!(vals, map_dict_vals(valdict, _vals))
             else
                 append!(vals, _vals)
             end
