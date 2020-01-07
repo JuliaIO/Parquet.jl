@@ -3,6 +3,7 @@ using Test
 
 function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     p = ParFile(joinpath(parcompat, file))
+    println("SandsTest", p)
     println("loaded ", file)
 
     nr = nrows(p)
