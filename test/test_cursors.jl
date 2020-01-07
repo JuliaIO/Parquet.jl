@@ -43,9 +43,10 @@ end
 
 function test_col_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
-        for source in ("_pandas_pyarrow_")
+        for source in ("_pandas_pyarrow_",)
             for fname in ("nation", "customer")
-                test_col_cursor("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
+                parquet_filename = "parquet-compatibility/Parquet_Files/" * encformat * source * fname * ".parquet"
+                test_col_cursor(parquet_filename)
             end
         end
     end
@@ -53,13 +54,14 @@ end
 
 function test_juliabuilder_row_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
-        for source in ("_pandas_pyarrow_")
+        for source in ("_pandas_pyarrow_",)
             for fname in ("nation", "customer")
-                test_juliabuilder_row_cursor("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", Symbol(encformat * fname))
+                parquet_filename = "parquet-compatibility/Parquet_Files/" * encformat * source * fname * ".parquet"
+                test_juliabuilder_row_cursor(parquet_filename)
             end
         end
     end
 end
 
 #test_col_cursor_all_files()
-test_juliabuilder_row_cursor_all_files()
+#test_juliabuilder_row_cursor_all_files()
