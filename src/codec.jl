@@ -153,7 +153,7 @@ function read_bitpacked_run(io::IO, grp_count::Integer, bits::Integer, byt::Int=
 
         # fill buffer
         while (nbitsbuff + shift) < bits
-             # shift 8 bits and read directly into bitbuff
+            # shift 8 bits and read directly into bitbuff
             bitbuff <<= 8
             bitbuff |= data[dataidx]
             dataidx += 1
