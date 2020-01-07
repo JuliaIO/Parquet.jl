@@ -5,7 +5,7 @@ function get_parcompat(parcompat=joinpath(dirname(@__FILE__), "parquet-compatibi
     # look for parquet-compatibility in test folder, clone to tempdir if not found
     if !isdir(parcompat)
         parcompat = joinpath(dirname(@__FILE__), "parquet-compatibility")
-        run(`git clone https://github.com/JuliaIO/parquet-compatibility.git $parcompat`)
+        run(`git clone https://github.com/ldsands/parquet-compatibility.git $parcompat`)
     end
 end
 
