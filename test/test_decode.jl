@@ -49,7 +49,7 @@ function test_decode_all_pages()
     for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
         for source in ("_pandas_pyarrow_",)
             for fname in ("nation", "customer")
-                parquet_filename = "parquet-testdata/Parquet_Files/" * encformat * source * fname * ".parquet"
+                parquet_filename = "Parquet_Files/" * encformat * source * fname * ".parquet"
                 test_decode(parquet_filename)
             end
         end

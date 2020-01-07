@@ -79,7 +79,7 @@ function test_load_all_pages()
     for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
         for source in ("_pandas_pyarrow_",)
             for fname in ("nation", "customer")
-                parquet_filename = "parquet-compatibility/Parquet_Files/" * encformat * source * fname * ".parquet"
+                parquet_filename = "Parquet_Files/" * encformat * source * fname * ".parquet"
                 test_load(parquet_filename)
                 #test_schema(parquet_filename, Symbol(fname * "_" * encformat))
             end
