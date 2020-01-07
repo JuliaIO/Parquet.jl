@@ -6,9 +6,9 @@ function test_load(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compati
     println("loaded $file")
     @test isa(p.meta, Parquet.FileMetaData)
 
-    rg = rowgroups(p)
-    @test length(rg) > 0
-    println("\tfound $(length(rg)) row groups")
+    #rg = rowgroups(p)
+    #@test length(rg) > 0
+    #println("\tfound $(length(rg)) row groups")
 
     cc = columns(p, 1)
     println("\tfound $(length(cc)) column chunks in row group 1")
