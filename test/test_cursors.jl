@@ -42,7 +42,7 @@ function test_juliabuilder_row_cursor(file::String, typename::Symbol, parcompat:
 end
 
 function test_col_cursor_all_files()
-    for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
+    for encformat in ("NONE", "SNAPPY", "GZIP", "ZSTD")
         for source in ("_pandas_pyarrow_",)
             for fname in ("nation", "customer")
                 parquet_filename = "Parquet_Files/" * encformat * source * fname * ".parquet"
@@ -53,7 +53,7 @@ function test_col_cursor_all_files()
 end
 
 function test_juliabuilder_row_cursor_all_files()
-    for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
+    for encformat in ("NONE", "SNAPPY", "GZIP", "ZSTD")
         for source in ("_pandas_pyarrow_",)
             for fname in ("nation", "customer")
                 parquet_filename = "Parquet_Files/" * encformat * source * fname * ".parquet"
