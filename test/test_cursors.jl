@@ -3,7 +3,7 @@ using Test
 
 function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     p = ParFile(joinpath(parcompat, file))
-    println("SandsTest", p)
+    println("EasytofindString", p)
     println("loaded ", file)
 
     nr = nrows(p)
@@ -15,7 +15,7 @@ function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FIL
         t1 = time()
         cc = ColCursor(p, rr, cname)
         num_read = 0
-        for (v,i) in enumerate(cc)
+        for (v,i) in enumerate(cc) #! bug here traces to cursor.jl line 252
             val,defn,repn = v
             num_read += 1
         end

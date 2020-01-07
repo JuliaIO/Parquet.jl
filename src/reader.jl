@@ -159,7 +159,7 @@ end
 # layer 2 access
 # can access decoded values from pages
 
-map_dict_vals(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v+1] for v in vals]
+map_dict_vals(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v+1] for v in vals] #! bug traces here where it is trying to access an array with a value that is too long for that array
 
 values(par::ParFile, rowgroupidx::Integer, colidx::Integer) = values(par, columns(par, rowgroupidx), colidx)
 values(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = values(par, cols[colidx])
