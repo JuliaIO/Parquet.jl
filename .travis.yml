@@ -2,20 +2,20 @@
 language: julia
 os:
   - linux
-  - osx
-  - windows
+#  - osx
+#  - windows
 julia:
-  - 1.0
-  - 1.1
-  - 1.2
+#  - 1.0
+#  - 1.1
+#  - 1.2
   - 1.3
-  - nightly
+#  - nightly
 matrix:
   fast_finish: true
-  allow_failures:
-    - julia: nightly
-    - os: osx
-    - os: windows
+#  allow_failures:
+#    - julia: nightly
+#    - os: osx
+#    - os: windows
 notifications:
   email: false
 # uncomment the following lines to override the default test script
