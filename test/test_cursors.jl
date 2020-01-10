@@ -5,6 +5,7 @@ function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FIL
     p = ParFile(joinpath(parcompat, file))
     println("EasytofindString", p)
     println("loaded ", file)
+    println("easytofind")
 
     nr = nrows(p)
     cnames = colnames(p)
@@ -16,7 +17,7 @@ function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FIL
         cc = ColCursor(p, rr, cname)
         num_read = 0
         for (v,i) in enumerate(cc)
-            val,defn,repn = v
+            val,defn,repn = v #! leads to cursor line 235
             num_read += 1
         end
         println("\t\t", isnull(val) ? nothing : get(val), ", ", defn, ", ", repn, ", ", i)
