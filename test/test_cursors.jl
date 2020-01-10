@@ -15,7 +15,7 @@ function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FIL
         t1 = time()
         cc = ColCursor(p, rr, cname)
         num_read = 0
-        for (v,i) in enumerate(cc) #! bug here traces to cursor.jl line 252
+        for (v,i) in enumerate(cc)
             val,defn,repn = v
             num_read += 1
         end
@@ -45,7 +45,7 @@ end
 function test_col_cursor_all_files()
     for encformat in ("NONE", "SNAPPY", "GZIP", "ZSTD")
         for source in ("_pandas_pyarrow_",)
-            for fname in ("customer", "nation")
+            for fname in ("nation", "customer")
                 parquet_filename = "Parquet_Files/" * encformat * source * fname * ".parquet"
                 test_col_cursor(parquet_filename)
             end
@@ -56,7 +56,7 @@ end
 function test_juliabuilder_row_cursor_all_files()
     for encformat in ("NONE", "SNAPPY", "GZIP", "ZSTD")
         for source in ("_pandas_pyarrow_",)
-            for fname in ("customer", "nation")
+            for fname in ("nation", "customer")
                 parquet_filename = "Parquet_Files/" * encformat * source * fname * ".parquet"
                 test_juliabuilder_row_cursor(parquet_filename)
             end

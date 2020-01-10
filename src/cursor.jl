@@ -249,7 +249,7 @@ function Base.iterate(cursor::ColCursor, state)
 end
 
 function Base.iterate(cursor::ColCursor)
-    r = iterate(cursor, _start(cursor)) #! Bug traces to here as x is not defined when opening a none compressed file (changed x to cursor to test)
+    r = iterate(cursor, _start(cursor))
     return r
 end
 
