@@ -56,7 +56,7 @@ end
 function test_juliabuilder_row_cursor_all_files()
     for encformat in ("NONE", "SNAPPY", "GZIP", "ZSTD")
         for source in ("_pandas_pyarrow_",)
-            for fname in ("nation", "customer")
+            for fname in ("customer", "nation")
                 parquet_filename = "Parquet_Files/" * encformat * source * fname * ".parquet"
                 test_juliabuilder_row_cursor(parquet_filename)
             end
