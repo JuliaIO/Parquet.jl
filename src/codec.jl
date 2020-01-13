@@ -146,16 +146,19 @@ function read_bitpacked_run(io::IO, grp_count::Integer, bits::Integer, byt::Int=
         #@debug("arridx:$arridx nbitsbuff:$nbitsbuff shift:$shift bits:$bits")
         if nbitsbuff > 0
             # we have leftover bits, which must be appended
-            arr[arridx] = bitbuff & MASKN(nbitsbuff)
-            shift = nbitsbuff
-            nbitsbuff = 0
+            if nbitsbuff < bits
+                # but only append if we need to read more in this cycle
+                arr[arridx] = bitbuff & MASKN(nbitsbuff)
+                shift = nbitsbuff
+                nbitsbuff = 0
+                bitbuff = zero(V)
+            end
         end
 
         # fill buffer
         while (nbitsbuff + shift) < bits
              # shift 8 bits and read directly into bitbuff
-            bitbuff <<= 8
-            bitbuff |= data[dataidx]
+            bitbuff |= (V(data[dataidx]) << nbitsbuff)
             dataidx += 1
             nbitsbuff += 8
         end
