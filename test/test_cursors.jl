@@ -13,13 +13,13 @@ function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FIL
         println("\tvalue, defn, repn, next idx")
         t1 = time()
         cc = ColCursor(p, rr, cname)
-        #num_read = 0
-        #for (v,i) in enumerate(cc)
-        #    val,defn,repn = v
-        #    num_read += 1
-        #end
-        #println("\t\t", isnull(val) ? nothing : get(val), ", ", defn, ", ", repn, ", ", i)
-        #println("\t\tread $num_read values in $(time()-t1) time")
+        num_read = 0
+        for (v,i) in enumerate(cc)
+            val,defn,repn = v
+            num_read += 1
+        end
+        println("\t\t", isnull(val) ? nothing : get(val), ", ", defn, ", ", repn, ", ", i)
+        println("\t\tread $num_read values in $(time()-t1) time")
     end
 end
 
