@@ -3,7 +3,6 @@ using Test
 
 function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     p = ParFile(joinpath(parcompat, file))
-    println("easy to find text", p)
     println("loaded ", file)
 
     nr = nrows(p)
@@ -26,7 +25,6 @@ end
 
 function test_juliabuilder_row_cursor(file::String, typename::Symbol, parcompat::String=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     p = ParFile(joinpath(parcompat, file))
-    println("easy to find text", p)
     println("loaded ", file)
 
     t1 = time()
@@ -59,7 +57,7 @@ function test_juliabuilder_row_cursor_all_files()
         for source in ("_pandas_pyarrow_",)
             for fname in ("nation", "customer")
                 parquet_filename = "Parquet_Files/" * encformat * source * fname * ".parquet"
-                test_juliabuilder_row_cursor(parquet_filename)
+                #test_juliabuilder_row_cursor(parquet_filename)
             end
         end
     end
