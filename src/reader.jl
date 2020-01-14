@@ -166,6 +166,7 @@ values(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = values(par, c
 function values(par::ParFile, col::ColumnChunk)
     ctype = coltype(col)
     pgs = pages(par, col)
+
     valdict = Int[]
     jtype = PLAIN_JTYPES[ctype+1]
     if (ctype == _Type.BYTE_ARRAY) || (ctype == _Type.FIXED_LEN_BYTE_ARRAY)
