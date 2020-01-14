@@ -68,7 +68,7 @@ function Base.iterate(cursor::RowCursor, state)
 end
 
 function Base.iterate(cursor::RowCursor)
-    r = iterate(cursor, _start(cursor)) #! adding this here in case it also becomes an issue
+    r = iterate(x, _start(x)) #! adding this here in case it also becomes an issue
     return r
 end
 
