@@ -46,7 +46,7 @@ function test_decode(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compa
 end
 
 function test_decode_all_pages()
-    for encformat in ("NONE", "SNAPPY", "GZIP", "ZSTD")
+    for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
         for source in ("_pandas_pyarrow_",)
             for fname in ("nation", "customer")
                 parquet_filename = "Parquet_Files/" * encformat * source * fname * ".parquet"

@@ -76,12 +76,12 @@ function test_schema(file, schema_name::Symbol,  parcompat=joinpath(dirname(@__F
 end
 
 function test_load_all_pages()
-    for encformat in ("NONE", "SNAPPY", "GZIP", "ZSTD")
+    for encformat in ("SNAPPY", "GZIP", "ZSTD", "NONE")
         for source in ("_pandas_pyarrow_",)
             for fname in ("nation", "customer")
                 parquet_filename = "Parquet_Files/" * encformat * source * fname * ".parquet"
                 test_load(parquet_filename)
-                test_schema(parquet_filename)
+                #test_schema(parquet_filename)
             end
         end
     end
