@@ -46,7 +46,7 @@ function test_col_cursor_all_files()
         for source in ("_pandas_pyarrow_",)
             for fname in ("nation", "customer")
                 parquet_filename = "Parquet_Files/" * encformat * source * fname * ".parquet"
-                #test_col_cursor(parquet_filename)
+                test_col_cursor(parquet_filename)
             end
         end
     end
