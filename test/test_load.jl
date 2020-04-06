@@ -84,4 +84,29 @@ function test_load_all_pages()
     end
 end
 
+function test_load_boolean()
+    p = ParFile("booltest/alltypes_plain.snappy.parquet")
+    schema(JuliaConverter(Main), p, :AllTypes)
+    rg = rowgroups(p)
+    @test length(rg) == 1
+    cc = columns(p, 1)
+    @test length(cc) == 11
+    cnames = colnames(rg[1])
+    @test length(cnames) == length(cc)
+    @test cnames[2] == "bool_col"
+    pg = pages(p, 1, 1)
+    @test length(pg) == 2
+    rc = RecCursor(p, 1:2, colnames(p), JuliaBuilder(p, AllTypes))
+
+    values = AllTypes[]
+    for rec in rc
+       push!(values, rec)
+    end
+
+    @test [v.bool_col for v in values] == [true,false]
+    #dlm,headers=readdlm("booltest/alltypes.csv", ','; header=true)
+    #@test [v.bool_col for v in values] == dlm[:,2]  # skipping for now as this needs additional dependency on DelimitedFiles
+end
+
 test_load_all_pages()
+test_load_boolean()

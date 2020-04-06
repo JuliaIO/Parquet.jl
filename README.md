@@ -54,10 +54,8 @@ Schema:
 
 Can convert the parquet schema to different forms:
 
-(For Julia 1.0 or later, use stdout instead of STDOUT)
-
 ````julia
-julia> schema(JuliaConverter(STDOUT), p, :Customer)
+julia> schema(JuliaConverter(stdout), p, :Customer)
 type Customer
     Customer() = new()
     c_custkey::Int64
@@ -70,7 +68,7 @@ type Customer
     c_comment::Vector{UInt8}
 end
 
-julia> schema(ThriftConverter(STDOUT), p, :Customer)
+julia> schema(ThriftConverter(stdout), p, :Customer)
 struct Customer {
      optional i64 c_custkey
      optional binary c_name
@@ -82,7 +80,7 @@ struct Customer {
      optional binary c_comment
 }
 
-julia> schema(ProtoConverter(STDOUT), p, :Customer)
+julia> schema(ProtoConverter(stdout), p, :Customer)
 message Customer {
     optional sint64 c_custkey;
     optional bytes c_name;
