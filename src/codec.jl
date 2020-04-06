@@ -63,15 +63,16 @@ const PLAIN_JTYPES = (Bool, Int32, Int64, Int128, Float32, Float64,      UInt8, 
 
 # read plain encoding (PLAIN = 0)
 function read_plain(io::IO, typ::Int32, jtype::Type{T}=PLAIN_JTYPES[typ+1]) where {T}
-    if typ == _Type.FIXED_LEN_BYTE_ARRAY
-        #@debug("reading fixedlenbytearray length:$count")
-        read!(io, Array{UInt8}(count))
-    elseif typ == _Type.BYTE_ARRAY
+    if typ == _Type.BYTE_ARRAY
         count = read_fixed(io, Int32)
         #@debug("reading bytearray length:$count")
         read!(io, Array{UInt8}(undef, count))
     elseif typ == _Type.BOOLEAN
-        error("not implemented")
+        error("not implemented") # reading single boolean values is not possible, vectors are read via read_bitpacked_booleans
+    elseif typ == _Type.FIXED_LEN_BYTE_ARRAY
+        #@debug("reading fixedlenbytearray length:$count")
+        #read!(io, Array{UInt8}(count))
+        error("not implemented") # this is likely same as BYTE_ARRAY for decoding purpose
     else
         #@debug("reading type:$jtype, typenum:$typ")
         read_fixed(io, jtype)
@@ -80,9 +81,33 @@ end
 
 # read plain values or dictionary (PLAIN_DICTIONARY = 2)
 function read_plain_values(io::IO, count::Integer, typ::Int32)
-    @debug("reading plain values type:$typ, count:$count")
-    arr = [read_plain(io, typ) for i in 1:count]
+    @debug("reading plain values", type=typ, count=count)
+    if typ == _Type.BOOLEAN
+        arr = read_bitpacked_booleans(io, count)
+    else
+        arr = [read_plain(io, typ) for i in 1:count]
+    end
     @debug("read $(length(arr)) plain values")
+    arr
+end
+
+function read_bitpacked_booleans(io::IO, count::Integer) #, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(undef, count); read_len::Bool=true) where {T <: Integer}
+    @debug("reading bitpacked booleans", count)
+    arr = falses(count)
+    arrpos = 1
+    bits = UInt8(0)
+    bitpos = 9
+    while arrpos <= count
+        if bitpos > 8
+            bits = read(io, UInt8)
+            @debug("bits", bits, bitstring(bits))
+            bitpos = 1
+        end
+        arr[arrpos] = Bool(bits & 0x1)
+        arrpos += 1
+        bits >>= 1
+        bitpos += 1
+    end
     arr
 end
 
@@ -98,7 +123,7 @@ end
 # read RLE or bit backed format (RLE = 3)
 function read_hybrid(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(undef, count); read_len::Bool=true) where {T <: Integer}
     len = read_len ? read_fixed(io, Int32) : Int32(0)
-    @debug("reading hybrid data length:$len, count:$count, bits:$bits")
+    @debug("reading hybrid data", len, count, bits)
     arrpos = 1
     while arrpos <= count
         runhdr = _read_varint(io, Int)
