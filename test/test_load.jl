@@ -1,5 +1,6 @@
 using Parquet
 using Test
+using Dates
 
 function test_load(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compatibility"))
     p = ParFile(joinpath(parcompat, file))
@@ -84,7 +85,8 @@ function test_load_all_pages()
     end
 end
 
-function test_load_boolean()
+function test_load_boolean_and_ts()
+    println("testing booleans and timestamps...")
     p = ParFile("booltest/alltypes_plain.snappy.parquet")
     schema(JuliaConverter(Main), p, :AllTypes)
     rg = rowgroups(p)
@@ -104,9 +106,11 @@ function test_load_boolean()
     end
 
     @test [v.bool_col for v in values] == [true,false]
+    @test [logical_timestamp(v.timestamp_col) for v in values] == [DateTime("2009-04-01T12:00:00"), DateTime("2009-04-01T12:01:00")]
+    @test [logical_string(v.date_string_col) for v in values] == ["04/01/09", "04/01/09"]
     #dlm,headers=readdlm("booltest/alltypes.csv", ','; header=true)
     #@test [v.bool_col for v in values] == dlm[:,2]  # skipping for now as this needs additional dependency on DelimitedFiles
 end
 
 test_load_all_pages()
-test_load_boolean()
+test_load_boolean_and_ts()

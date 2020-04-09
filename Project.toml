@@ -3,7 +3,7 @@ uuid = "626c502c-15b0-58ad-a749-f091afb673ae"
 keywords = ["parquet", "julia", "columnar-storage"]
 license = "MIT"
 desc = "Julia implementation of parquet columnar file format reader"
-version = "0.3.2"
+version = "0.4.0"
 
 [deps]
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
@@ -11,6 +11,7 @@ MemPool = "f9f48841-c794-520a-933b-121f7ba6ed94"
 ProtoBuf = "3349acd9-ac6a-5e09-bcdb-63829b23a429"
 Snappy = "59d4ed8c-697a-5b28-a4c7-fe95c22820f9"
 Thrift = "8d9c9c80-f77e-5080-9541-c6f69d204e22"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 
 [compat]
 CodecZlib = "0.5,0.6,0.7"
