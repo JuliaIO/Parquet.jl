@@ -272,7 +272,7 @@ function _sch_to_julia(sch::SchemaElement, ios::Vector{IO}, nchildren::Vector{In
     if isfilled(sch, :num_children)
         if lchildren > 0
             lvlio = IOBuffer()
-            println(lvlio, "type ", jtypestr)
+            println(lvlio, "mutable struct ", jtypestr)
             println(lvlio, "    ", jtypestr, "() = new()")
             push!(ios, lvlio)
         end
