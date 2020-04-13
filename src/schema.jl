@@ -256,7 +256,7 @@ function _sch_to_julia(sch::SchemaElement, ios::Vector{IO}, nchildren::Vector{In
         jtypestr = string(jtype)
     else
         # this is a composite type
-        jtypestr = sch.name * "Type"
+        jtypestr = "var\"" * replace(sch.name, "\""=>"\\\"") * "Type\""
     end
     # we are not looking at converted types yet
 
@@ -266,7 +266,7 @@ function _sch_to_julia(sch::SchemaElement, ios::Vector{IO}, nchildren::Vector{In
     end
 
     if lchildren > 0
-        println(ios[end], "    ", sch.name, "::", jtypestr)
+        println(ios[end], "    var\"", replace(sch.name, "\""=>"\\\""), "\"::", jtypestr)
     end
 
     if isfilled(sch, :num_children)
