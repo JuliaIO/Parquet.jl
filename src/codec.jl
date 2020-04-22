@@ -257,3 +257,17 @@ function read_bitpacked_run_old(io::IO, count::Integer, bits::Integer, byt::Int=
     end
     arr
 end
+
+function logical_timestamp(barr; offset::Dates.Period=Dates.Second(0))
+    nanos = read(IOBuffer(barr[1:8]), Int64)
+    julian_days = read(IOBuffer(barr[9:12]), Int32)
+    Dates.julian2datetime(julian_days) + Dates.Nanosecond(nanos) + offset
+end
+
+function logical_timestamp(i128::Int128; offset::Dates.Period=Dates.Second(0))
+    iob = IOBuffer()
+    write(iob, i128)
+    logical_timestamp(take!(iob); offset=offset)
+end
+
+logical_string(bytes::Vector{UInt8}) = String(copy(bytes))
