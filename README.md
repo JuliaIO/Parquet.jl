@@ -110,12 +110,15 @@ Record Cursor on /home/tan/Work/julia/packages/Parquet/test/parquet-compatibilit
     cols: c_acctbal.c_mktsegment.c_nationkey.c_name.c_address.c_custkey.c_phone.c_comment
 
 
-julia> i = start(rc);
+julia> record_state = iterate(rc);
 
-julia> while !done(rc, i)
-        v,i = next(rc, i)
-        show(v)
-       end
+julia> while record_state != nothing
+        global record_state
+        record = record_state[1]
+        state = record_state[2]
+        println(record)
+        record_state = iterate(rc, state)
+    end
 Customer#000000033 Phone#:27-375-391-1280
 Customer#000000065 Phone#:33-733-623-5267
 Customer#000000001 Phone#:25-989-741-2988
