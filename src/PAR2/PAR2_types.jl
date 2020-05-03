@@ -57,8 +57,9 @@ struct _enum_Encoding
   DELTA_LENGTH_BYTE_ARRAY::Int32
   DELTA_BYTE_ARRAY::Int32
   RLE_DICTIONARY::Int32
+  BYTE_STREAM_SPLIT::Int32
 end
-const Encoding = _enum_Encoding(Int32(0), Int32(2), Int32(3), Int32(4), Int32(5), Int32(6), Int32(7), Int32(8))
+const Encoding = _enum_Encoding(Int32(0), Int32(2), Int32(3), Int32(4), Int32(5), Int32(6), Int32(7), Int32(8), Int32(9))
 
 struct _enum_CompressionCodec
   UNCOMPRESSED::Int32
@@ -131,12 +132,16 @@ end # mutable struct MilliSeconds
 mutable struct MicroSeconds <: Thrift.TMsg
 end # mutable struct MicroSeconds
 
+mutable struct NanoSeconds <: Thrift.TMsg
+end # mutable struct NanoSeconds
+
 mutable struct TimeUnit <: Thrift.TMsg
   MILLIS::MilliSeconds
   MICROS::MicroSeconds
+  NANOS::NanoSeconds
   TimeUnit() = (o=new(); fillunset(o); o)
 end # mutable struct TimeUnit
-meta(t::Type{TimeUnit}) = meta(t, Symbol[:MILLIS,:MICROS], Int[], Dict{Symbol,Any}())
+meta(t::Type{TimeUnit}) = meta(t, Symbol[:MILLIS,:MICROS,:NANOS], Int[], Dict{Symbol,Any}())
 
 mutable struct TimestampType <: Thrift.TMsg
   isAdjustedToUTC::Bool
@@ -175,9 +180,10 @@ mutable struct LogicalType <: Thrift.TMsg
   UNKNOWN::NullType
   JSON::JsonType
   BSON::BsonType
+  UUID::UUIDType
   LogicalType() = (o=new(); fillunset(o); o)
 end # mutable struct LogicalType
-meta(t::Type{LogicalType}) = meta(t, Symbol[:STRING,:MAP,:LIST,:ENUM,:DECIMAL,:DATE,:TIME,:TIMESTAMP,:INTEGER,:UNKNOWN,:JSON,:BSON], Int[1,2,3,4,5,6,7,8,10,11,12,13], Dict{Symbol,Any}())
+meta(t::Type{LogicalType}) = meta(t, Symbol[:STRING,:MAP,:LIST,:ENUM,:DECIMAL,:DATE,:TIME,:TIMESTAMP,:INTEGER,:UNKNOWN,:JSON,:BSON,:UUID], Int[1,2,3,4,5,6,7,8,10,11,12,13,14], Dict{Symbol,Any}())
 
 mutable struct SchemaElement <: Thrift.TMsg
   _type::Int32
@@ -228,6 +234,41 @@ mutable struct DataPageHeaderV2 <: Thrift.TMsg
 end # mutable struct DataPageHeaderV2
 meta(t::Type{DataPageHeaderV2}) = meta(t, Symbol[:is_compressed,:statistics], Int[], Dict{Symbol,Any}(:is_compressed => true))
 
+mutable struct SplitBlockAlgorithm <: Thrift.TMsg
+end # mutable struct SplitBlockAlgorithm
+
+mutable struct BloomFilterAlgorithm <: Thrift.TMsg
+  BLOCK::SplitBlockAlgorithm
+  BloomFilterAlgorithm() = (o=new(); fillunset(o); o)
+end # mutable struct BloomFilterAlgorithm
+meta(t::Type{BloomFilterAlgorithm}) = meta(t, Symbol[:BLOCK], Int[], Dict{Symbol,Any}())
+
+mutable struct XxHash <: Thrift.TMsg
+end # mutable struct XxHash
+
+mutable struct BloomFilterHash <: Thrift.TMsg
+  XXHASH::XxHash
+  BloomFilterHash() = (o=new(); fillunset(o); o)
+end # mutable struct BloomFilterHash
+meta(t::Type{BloomFilterHash}) = meta(t, Symbol[:XXHASH], Int[], Dict{Symbol,Any}())
+
+mutable struct Uncompressed <: Thrift.TMsg
+end # mutable struct Uncompressed
+
+mutable struct BloomFilterCompression <: Thrift.TMsg
+  UNCOMPRESSED::Uncompressed
+  BloomFilterCompression() = (o=new(); fillunset(o); o)
+end # mutable struct BloomFilterCompression
+meta(t::Type{BloomFilterCompression}) = meta(t, Symbol[:UNCOMPRESSED], Int[], Dict{Symbol,Any}())
+
+mutable struct BloomFilterHeader <: Thrift.TMsg
+  numBytes::Int32
+  algorithm::BloomFilterAlgorithm
+  hash::BloomFilterHash
+  compression::BloomFilterCompression
+  BloomFilterHeader() = (o=new(); fillunset(o); o)
+end # mutable struct BloomFilterHeader
+
 mutable struct PageHeader <: Thrift.TMsg
   _type::Int32
   uncompressed_page_size::Int32
@@ -276,19 +317,20 @@ mutable struct ColumnMetaData <: Thrift.TMsg
   dictionary_page_offset::Int64
   statistics::Statistics
   encoding_stats::Vector{PageEncodingStats}
+  bloom_filter_offset::Int64
   ColumnMetaData() = (o=new(); fillunset(o); o)
 end # mutable struct ColumnMetaData
-meta(t::Type{ColumnMetaData}) = meta(t, Symbol[:key_value_metadata,:index_page_offset,:dictionary_page_offset,:statistics,:encoding_stats], Int[], Dict{Symbol,Any}())
+meta(t::Type{ColumnMetaData}) = meta(t, Symbol[:key_value_metadata,:index_page_offset,:dictionary_page_offset,:statistics,:encoding_stats,:bloom_filter_offset], Int[], Dict{Symbol,Any}())
 
 mutable struct EncryptionWithFooterKey <: Thrift.TMsg
 end # mutable struct EncryptionWithFooterKey
 
 mutable struct EncryptionWithColumnKey <: Thrift.TMsg
   path_in_schema::Vector{String}
-  column_key_metadata::Vector{UInt8}
+  key_metadata::Vector{UInt8}
   EncryptionWithColumnKey() = (o=new(); fillunset(o); o)
 end # mutable struct EncryptionWithColumnKey
-meta(t::Type{EncryptionWithColumnKey}) = meta(t, Symbol[:column_key_metadata], Int[], Dict{Symbol,Any}())
+meta(t::Type{EncryptionWithColumnKey}) = meta(t, Symbol[:key_metadata], Int[], Dict{Symbol,Any}())
 
 mutable struct ColumnCryptoMetaData <: Thrift.TMsg
   ENCRYPTION_WITH_FOOTER_KEY::EncryptionWithFooterKey
@@ -305,19 +347,23 @@ mutable struct ColumnChunk <: Thrift.TMsg
   offset_index_length::Int32
   column_index_offset::Int64
   column_index_length::Int32
-  crypto_meta_data::ColumnCryptoMetaData
+  crypto_metadata::ColumnCryptoMetaData
+  encrypted_column_metadata::Vector{UInt8}
   ColumnChunk() = (o=new(); fillunset(o); o)
 end # mutable struct ColumnChunk
-meta(t::Type{ColumnChunk}) = meta(t, Symbol[:file_path,:meta_data,:offset_index_offset,:offset_index_length,:column_index_offset,:column_index_length,:crypto_meta_data], Int[], Dict{Symbol,Any}())
+meta(t::Type{ColumnChunk}) = meta(t, Symbol[:file_path,:meta_data,:offset_index_offset,:offset_index_length,:column_index_offset,:column_index_length,:crypto_metadata,:encrypted_column_metadata], Int[], Dict{Symbol,Any}())
 
 mutable struct RowGroup <: Thrift.TMsg
   columns::Vector{ColumnChunk}
   total_byte_size::Int64
   num_rows::Int64
   sorting_columns::Vector{SortingColumn}
+  file_offset::Int64
+  total_compressed_size::Int64
+  ordinal::Int16
   RowGroup() = (o=new(); fillunset(o); o)
 end # mutable struct RowGroup
-meta(t::Type{RowGroup}) = meta(t, Symbol[:sorting_columns], Int[], Dict{Symbol,Any}())
+meta(t::Type{RowGroup}) = meta(t, Symbol[:sorting_columns,:file_offset,:total_compressed_size,:ordinal], Int[], Dict{Symbol,Any}())
 
 mutable struct TypeDefinedOrder <: Thrift.TMsg
 end # mutable struct TypeDefinedOrder
@@ -350,29 +396,21 @@ mutable struct ColumnIndex <: Thrift.TMsg
 end # mutable struct ColumnIndex
 meta(t::Type{ColumnIndex}) = meta(t, Symbol[:null_counts], Int[], Dict{Symbol,Any}())
 
-mutable struct FileMetaData <: Thrift.TMsg
-  version::Int32
-  schema::Vector{SchemaElement}
-  num_rows::Int64
-  row_groups::Vector{RowGroup}
-  key_value_metadata::Vector{KeyValue}
-  created_by::String
-  column_orders::Vector{ColumnOrder}
-  FileMetaData() = (o=new(); fillunset(o); o)
-end # mutable struct FileMetaData
-meta(t::Type{FileMetaData}) = meta(t, Symbol[:key_value_metadata,:created_by,:column_orders], Int[], Dict{Symbol,Any}())
-
 mutable struct AesGcmV1 <: Thrift.TMsg
-  aad_metadata::Vector{UInt8}
+  aad_prefix::Vector{UInt8}
+  aad_file_unique::Vector{UInt8}
+  supply_aad_prefix::Bool
   AesGcmV1() = (o=new(); fillunset(o); o)
 end # mutable struct AesGcmV1
-meta(t::Type{AesGcmV1}) = meta(t, Symbol[:aad_metadata], Int[], Dict{Symbol,Any}())
+meta(t::Type{AesGcmV1}) = meta(t, Symbol[:aad_prefix,:aad_file_unique,:supply_aad_prefix], Int[], Dict{Symbol,Any}())
 
 mutable struct AesGcmCtrV1 <: Thrift.TMsg
-  aad_metadata::Vector{UInt8}
+  aad_prefix::Vector{UInt8}
+  aad_file_unique::Vector{UInt8}
+  supply_aad_prefix::Bool
   AesGcmCtrV1() = (o=new(); fillunset(o); o)
 end # mutable struct AesGcmCtrV1
-meta(t::Type{AesGcmCtrV1}) = meta(t, Symbol[:aad_metadata], Int[], Dict{Symbol,Any}())
+meta(t::Type{AesGcmCtrV1}) = meta(t, Symbol[:aad_prefix,:aad_file_unique,:supply_aad_prefix], Int[], Dict{Symbol,Any}())
 
 mutable struct EncryptionAlgorithm <: Thrift.TMsg
   AES_GCM_V1::AesGcmV1
@@ -381,12 +419,23 @@ mutable struct EncryptionAlgorithm <: Thrift.TMsg
 end # mutable struct EncryptionAlgorithm
 meta(t::Type{EncryptionAlgorithm}) = meta(t, Symbol[:AES_GCM_V1,:AES_GCM_CTR_V1], Int[], Dict{Symbol,Any}())
 
+mutable struct FileMetaData <: Thrift.TMsg
+  version::Int32
+  schema::Vector{SchemaElement}
+  num_rows::Int64
+  row_groups::Vector{RowGroup}
+  key_value_metadata::Vector{KeyValue}
+  created_by::String
+  column_orders::Vector{ColumnOrder}
+  encryption_algorithm::EncryptionAlgorithm
+  footer_signing_key_metadata::Vector{UInt8}
+  FileMetaData() = (o=new(); fillunset(o); o)
+end # mutable struct FileMetaData
+meta(t::Type{FileMetaData}) = meta(t, Symbol[:key_value_metadata,:created_by,:column_orders,:encryption_algorithm,:footer_signing_key_metadata], Int[], Dict{Symbol,Any}())
+
 mutable struct FileCryptoMetaData <: Thrift.TMsg
   encryption_algorithm::EncryptionAlgorithm
-  encrypted_footer::Bool
-  footer_key_metadata::Vector{UInt8}
-  footer_offset::Int64
-  iv_prefix::Vector{UInt8}
+  key_metadata::Vector{UInt8}
   FileCryptoMetaData() = (o=new(); fillunset(o); o)
 end # mutable struct FileCryptoMetaData
-meta(t::Type{FileCryptoMetaData}) = meta(t, Symbol[:footer_key_metadata,:iv_prefix], Int[], Dict{Symbol,Any}())
+meta(t::Type{FileCryptoMetaData}) = meta(t, Symbol[:key_metadata], Int[], Dict{Symbol,Any}())
