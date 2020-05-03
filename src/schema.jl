@@ -39,9 +39,11 @@ leafname(schname::AbstractString) = istoplevel(schname) ? schname : leafname(spl
 leafname(schname::Vector) = schname[end]
 
 parentname(schname::Vector) = istoplevel(schname) ? schname : schname[1:(end-1)]
-parentname(schname::AbstractString) = join(parentname(split(schname, '.')), '.')
+#parentname(schname::AbstractString) = join(parentname(split(schname, '.')), '.')
+parentname(schname::AbstractString) = schname
 
-istoplevel(schname::AbstractString) = !('.' in schname)
+#istoplevel(schname::AbstractString) = !('.' in schname)
+istoplevel(schname::AbstractString) = true
 istoplevel(schname::Vector) = !(length(schname) > 1)
 
 elem(sch::Schema, schname::AbstractString) = sch.name_lookup[schname]
@@ -65,12 +67,12 @@ end
 function max_repetition_level(sch::Schema, schname)
     lev = isrepeated(sch, schname) ? 1 : 0
     istoplevel(schname) ? lev : (lev + max_repetition_level(sch, parentname(schname)))
-end 
+end
 
 function max_definition_level(sch::Schema, schname)
     lev = isrequired(sch, schname) ? 0 : 1
     istoplevel(schname) ? lev : (lev + max_definition_level(sch, parentname(schname)))
-end 
+end
 
 abstract type SchemaConverter end
 
@@ -260,7 +262,7 @@ function _sch_to_julia(sch::SchemaElement, ios::Vector{IO}, nchildren::Vector{In
     end
     # we are not looking at converted types yet
 
-    if (isfilled(sch, :_type) && (sch._type == _Type.BYTE_ARRAY || sch._type == _Type.FIXED_LEN_BYTE_ARRAY)) || 
+    if (isfilled(sch, :_type) && (sch._type == _Type.BYTE_ARRAY || sch._type == _Type.FIXED_LEN_BYTE_ARRAY)) ||
        (isfilled(sch, :repetition_type) && (sch.repetition_type == FieldRepetitionType.REPEATED))  # array type
         jtypestr = "Vector{" * jtypestr * "}"
     end

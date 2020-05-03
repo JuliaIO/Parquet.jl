@@ -249,7 +249,7 @@ function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::I
     enc, defn_enc, rep_enc = encs
 
     #@debug("before reading defn levels bytesavailable in page: $(bytesavailable(io))")
-    # read definition levels. skipped if column is required
+    # read definition levels. skipped if column is required    
     defn_levels = isrequired(par.schema, cname) ? Int[] : read_levels(io, max_definition_level(par.schema, cname), defn_enc, num_values)
 
     #@debug("before reading repn levels bytesavailable in page: $(bytesavailable(io))")

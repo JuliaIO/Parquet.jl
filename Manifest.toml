@@ -105,6 +105,8 @@ uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 [[Thrift]]
 deps = ["BinaryProvider", "Distributed", "Sockets"]
 git-tree-sha1 = "c3dd01c6067985a77fef761839203838ac12825b"
+repo-rev = "master"
+repo-url = "https://github.com/tanmaykm/Thrift.jl.git"
 uuid = "8d9c9c80-f77e-5080-9541-c6f69d204e22"
 version = "0.6.2"
 
