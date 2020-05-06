@@ -3,7 +3,7 @@ module Parquet
 using Thrift
 using ProtoBuf
 using Snappy
-using CodecZlib
+using CodecZlib, CodecZstd
 using MemPool
 
 import Base: show, open, close, values
