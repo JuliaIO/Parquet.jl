@@ -248,13 +248,18 @@ function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::I
     cname = colname(page.colchunk)
     enc, defn_enc, rep_enc = encs
 
-    #@debug("before reading defn levels bytesavailable in page: $(bytesavailable(io))")
-    # read definition levels. skipped if column is required    
-    defn_levels = isrequired(par.schema, cname) ? Int[] : read_levels(io, max_definition_level(par.schema, cname), defn_enc, num_values)
-
     #@debug("before reading repn levels bytesavailable in page: $(bytesavailable(io))")
     # read repetition levels. skipped if all columns are at 1st level
+    # TODO ZJ why is it checking for a "." in the name
+    @warn "ZJ why is it checking for a "." in the name"
     repn_levels = ('.' in cname) ? read_levels(io, max_repetition_level(par.schema, cname), rep_enc, num_values) : Int[]
+
+    #@debug("before reading defn levels bytesavailable in page: $(bytesavailable(io))")
+    # read definition levels. skipped if column is required
+    defn_levels = isrequired(par.schema, cname) ? Int[] : read_levels(io, max_definition_level(par.schema, cname), defn_enc, num_values)
+
+    # TODO I don't know how to deal with anything else; so below
+    @assert all(<=(1), defn_levels)
 
     #@debug("before reading values bytesavailable in page: $(bytesavailable(io))")
     # read values

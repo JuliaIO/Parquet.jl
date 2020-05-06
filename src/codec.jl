@@ -122,6 +122,7 @@ end
 
 # read RLE or bit backed format (RLE = 3)
 function read_hybrid(io::IO, count::Integer, bits::Integer, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(undef, count); read_len::Bool=true) where {T <: Integer}
+    # ZJ: Len is never used if read, so what's the point of reading?
     len = read_len ? read_fixed(io, Int32) : Int32(0)
     @debug("reading hybrid data", len, count, bits)
     arrpos = 1
