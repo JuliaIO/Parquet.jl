@@ -253,7 +253,6 @@ function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::I
     #@debug("before reading repn levels bytesavailable in page: $(bytesavailable(io))")
     # read repetition levels. skipped if all columns are at 1st level
     # TODO ZJ why is it checking for a "." in the name
-    # @warn "ZJ why is it checking for a "." in the name"
     repn_levels = ('.' in cname) ? read_levels(io, max_repetition_level(par.schema, cname), rep_enc, num_values) : Int[]
 
     #@debug("before reading defn levels bytesavailable in page: $(bytesavailable(io))")
