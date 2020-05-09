@@ -77,4 +77,4 @@ include("PAR2_types.jl")
 include("PAR2_impl.jl")  # server methods to be hand coded
 
 
-end # module parquet
+end # module PAR2
