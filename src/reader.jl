@@ -1,4 +1,3 @@
-
 const PAR_MAGIC = "PAR1"
 const SZ_PAR_MAGIC = length(PAR_MAGIC)
 const SZ_FOOTER = 4
@@ -147,6 +146,8 @@ function bytes(page::Page, uncompressed::Bool=true)
             data = transcode(GzipDecompressor, data)
         elseif codec == CompressionCodec.ZSTD
             data = transcode(ZstdDecompressor, data)
+        elseif codec == CompressionCodec.LZ4
+            error("Codec LZ4 is not supported as https://github.com/JuliaIO/CodecLz4.jl seems to not the same compression used in Python and R")
         else
             error("Unknown compression codec for column chunk: $codec")
         end
