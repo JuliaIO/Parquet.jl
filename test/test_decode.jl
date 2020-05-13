@@ -55,4 +55,4 @@ end
 
 test_decode_all_pages()
 
-test_decode("parquet-testdata/synthetic_data.parquet")
+test_decode("synthetic_data.parquet", "missingvalues")
