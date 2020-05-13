@@ -499,7 +499,7 @@ function write_parquet(path, tbl; compression_codec = "SNAPPY")
     Thrift.set_field!(filemetadata, :version, 1)
     Thrift.set_field!(filemetadata, :schema, schemas)
     Thrift.set_field!(filemetadata, :num_rows, nrows)
-    Thrift.set_field!(filemetadata, :created_by, "Parquet.jl")
+    Thrift.set_field!(filemetadata, :created_by, "Parquet.jl $(Parquet.PARQUET_JL_VERSION)")
 
     # create row_groups
     # TODO do multiple row_groups

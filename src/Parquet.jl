@@ -7,6 +7,9 @@ using CodecZlib
 using MemPool
 using Dates
 
+using Pkg
+const PARQUET_JL_VERSION = VersionNumber(Pkg.TOML.parsefile(joinpath(@__DIR__, "..", "Project.toml"))["version"])
+
 import Base: show, open, close, values
 import Thrift: isfilled
 
