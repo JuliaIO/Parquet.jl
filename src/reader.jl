@@ -258,7 +258,12 @@ function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::I
 
     #@debug("before reading values bytesavailable in page: $(bytesavailable(io))")
     # read values
-    vals = read_values(io, enc, ctype, num_values)
+    # if there are missing values in the data then
+    # where defn_levels's elements == 1 are present and only
+    # sum(defn_levels) values can be read.
+    # because defn_levels == 0 are where the missing vlaues are
+    nmissing = sum(==(0), defn_levels)
+    vals = read_values(io, enc, ctype, num_values - nmissing)
 
     vals, defn_levels, repn_levels
 end
