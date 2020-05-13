@@ -13,6 +13,7 @@ export is_par_file, ParFile, show, nrows, ncols, rowgroups, columns, pages, byte
 export SchemaConverter, schema, JuliaConverter, ThriftConverter, ProtoConverter
 export RowCursor, ColCursor, RecCursor
 export AbstractBuilder, JuliaBuilder
+export write_parquet
 
 # package code goes here
 include("PAR2/PAR2.jl")
@@ -22,5 +23,6 @@ include("schema.jl")
 include("reader.jl")
 include("cursor.jl")
 include("show.jl")
+include("writer.jl")
 
 end # module
