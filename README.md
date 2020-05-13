@@ -3,6 +3,8 @@
 [![Build Status](https://travis-ci.org/JuliaIO/Parquet.jl.svg?branch=master)](https://travis-ci.org/JuliaIO/Parquet.jl)
 [![Build status](https://ci.appveyor.com/api/projects/status/vrqg01w2sj3mfk3d/branch/master?svg=true)](https://ci.appveyor.com/project/tanmaykm/parquet-jl/branch/master)
 
+## Reader
+
 Load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet). Only metadata is read initially, data is loaded in chunks on demand. (Note: [ParquetFiles.jl](https://github.com/queryverse/ParquetFiles.jl) also provides load support for Parquet files under the FileIO.jl package.)
 
 ```julia
@@ -31,7 +33,7 @@ julia> colnames(p)
 8-element Array{AbstractString,1}:
  "c_acctbal"   
  "c_mktsegment"
- "c_nationkey" 
+ "c_nationkey"
  "c_name"      
  "c_address"   
  "c_custkey"   
@@ -140,3 +142,28 @@ julia> for v in values
 04/01/09, 2009-04-01T12:01:00
 ```
 
+## Writer
+
+You can write any Tables.jl column accessible tables that contains columns of these types and their union with `Missing`: `Int32`, `Int64`, `String`, `Bool`, `Float32`, `Float64`
+
+### Writer Example
+
+```julia
+tbl = (
+    int32 = Int32.(1:1000),
+    int64 = Int64.(1:1000),
+    float32 = Float32.(1:1000),
+    float64 = Float64.(1:1000),
+    bool = rand(Bool, 1000),
+    string = [randstring(8) for i in 1:1000],
+    int32m = rand([missing, 1:100...], 1000),
+    int64m = rand([missing, 1:100...], 1000),
+    float32m = rand([missing, Float32.(1:100)...], 1000),
+    float64m = rand([missing, Float64.(1:100)...], 1000),
+    boolm = rand([missing, true, false], 1000),
+    stringm = rand([missing, "abc", "def", "ghi"], 1000)
+)
+
+file = tempname()*".parquet"
+write_parquet(file, tbl)
+```

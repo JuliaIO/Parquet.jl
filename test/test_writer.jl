@@ -20,9 +20,10 @@ function test_write()
         stringm = rand([missing, "abc", "def", "ghi"], 1000)
     )
 
-    write_parquet("tmp_plsdel.parquet", tbl)
+    tmpfile = tempname()*".parquet"
+    write_parquet(tmpfile, tbl)
 
-    pf = ParFile("tmp_plsdel.parquet")
+    pf = ParFile(tmpfile)
 
     # the file is very smalll so only one rowgroup
     col_chunks = columns(pf, 1)
@@ -45,7 +46,7 @@ function test_write()
     # clean up
     close(pf)
 
-    #rm("tmp_plsdel.parquet")
+    #rm(tmpfile)
 end
 
 test_write()
