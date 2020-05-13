@@ -8,6 +8,10 @@ using CodecZstd
 using MemPool
 using Dates
 
+if VERSION < v"1.3"
+    using Missings: nonmissingtype
+end
+
 using Pkg
 const PARQUET_JL_VERSION = VersionNumber(Pkg.TOML.parsefile(joinpath(@__DIR__, "..", "Project.toml"))["version"])
 
