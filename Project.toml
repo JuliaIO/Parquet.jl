@@ -16,7 +16,7 @@ Thrift = "8d9c9c80-f77e-5080-9541-c6f69d204e22"
 
 [compat]
 CodecZlib = "0.5,0.6,0.7"
-CodecZstd = "0.7"
+CodecZstd = "0.6,0.7"
 MemPool = "0.2"
 ProtoBuf = "0.7,0.8"
 Snappy = "0.3"
