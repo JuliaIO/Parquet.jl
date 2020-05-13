@@ -5,7 +5,7 @@
 
 Load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet). Only metadata is read initially, data is loaded in chunks on demand. (Note: [ParquetFiles.jl](https://github.com/queryverse/ParquetFiles.jl) also provides load support for Parquet files under the FileIO.jl package.)
 
-````julia
+```julia
 julia> using Parquet
 
 julia> parfile = "customer.impala.parquet"
@@ -16,11 +16,11 @@ Parquet file: /home/tan/Work/julia/packages/Parquet/test/parquet-compatibility/p
     nrows: 150000
     created by: impala version 1.2-INTERNAL (build a462ec42e550c75fccbff98c720f37f3ee9d55a3)
     cached: 0 column chunks
-````
+```
 
 Examine the schema.
 
-````julia
+```julia
 julia> nrows(p)
 150000
 
@@ -50,11 +50,11 @@ Schema:
       optional BYTE_ARRAY c_mktsegment
       optional BYTE_ARRAY c_comment
     }
-````
+```
 
 Can convert the parquet schema to different forms:
 
-````julia
+```julia
 julia> schema(JuliaConverter(stdout), p, :Customer)
 type Customer
     Customer() = new()
@@ -91,36 +91,52 @@ message Customer {
     optional bytes c_mktsegment;
     optional bytes c_comment;
 }
-````
+```
 
 Can inject the type dynamically to a module to have further methods working directly on the Julia type.
 
-````julia
+```julia
 julia> schema(JuliaConverter(Main), p, :Customer)
 
 julia> Base.show(io::IO, cust::Customer) = println(io, String(copy(cust.c_name)), " Phone#:", String(copy(cust.c_phone)))
-````
+```
 
 Create cursor to iterate over records. In parallel mode, multiple remote cursors can be created and iterated on in parallel.
 
-````julia
+```julia
 julia> rc = RecCursor(p, 1:5, colnames(p), JuliaBuilder(p, Customer))
 Record Cursor on /home/tan/Work/julia/packages/Parquet/test/parquet-compatibility/parquet-testdata/impala/1.1.1-SNAPPY/customer.impala.parquet
     rows: 1:5
     cols: c_acctbal.c_mktsegment.c_nationkey.c_name.c_address.c_custkey.c_phone.c_comment
 
 
-julia> i = start(rc);
+julia> record_state = iterate(rc);
 
-julia> while !done(rc, i)
-        v,i = next(rc, i)
-        show(v)
-       end
+julia> while record_state != nothing
+        global record_state
+        record = record_state[1]
+        state = record_state[2]
+        println(record)
+        record_state = iterate(rc, state)
+    end
 Customer#000000033 Phone#:27-375-391-1280
 Customer#000000065 Phone#:33-733-623-5267
 Customer#000000001 Phone#:25-989-741-2988
 Customer#000000642 Phone#:32-925-597-9911
 Customer#000000161 Phone#:17-805-718-2449
 
-````
+```
+
+The reader does not interpret any logical types by default. For example, timestamps that are `INT96` values will be represented by default as Julia Int128 types. There will be additional methods provided to interpret such fields which can be applied on the values after they are read. As of now methods are available for:
+
+- timestamp: `logical_timestamp`
+- string: `logical_string`
+
+```
+julia> for v in values
+        println(logical_string(v.date_string_col), ", ", logical_timestamp(v.timestamp_col))
+       end
+04/01/09, 2009-04-01T12:00:00
+04/01/09, 2009-04-01T12:01:00
+```
 

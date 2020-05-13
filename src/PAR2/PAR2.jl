@@ -31,6 +31,7 @@ export NullType # struct
 export DecimalType # struct
 export MilliSeconds # struct
 export MicroSeconds # struct
+export NanoSeconds # struct
 export TimeUnit # struct
 export TimestampType # struct
 export TimeType # struct
@@ -43,6 +44,13 @@ export DataPageHeader # struct
 export IndexPageHeader # struct
 export DictionaryPageHeader # struct
 export DataPageHeaderV2 # struct
+export SplitBlockAlgorithm # struct
+export BloomFilterAlgorithm # struct
+export XxHash # struct
+export BloomFilterHash # struct
+export Uncompressed # struct
+export BloomFilterCompression # struct
+export BloomFilterHeader # struct
 export PageHeader # struct
 export KeyValue # struct
 export SortingColumn # struct
@@ -58,10 +66,10 @@ export ColumnOrder # struct
 export PageLocation # struct
 export OffsetIndex # struct
 export ColumnIndex # struct
-export FileMetaData # struct
 export AesGcmV1 # struct
 export AesGcmCtrV1 # struct
 export EncryptionAlgorithm # struct
+export FileMetaData # struct
 export FileCryptoMetaData # struct
 
 include("PAR2_constants.jl")
