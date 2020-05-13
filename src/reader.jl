@@ -1,4 +1,3 @@
-
 const PAR_MAGIC = "PAR1"
 const SZ_PAR_MAGIC = length(PAR_MAGIC)
 const SZ_FOOTER = 4
@@ -56,6 +55,10 @@ function ParFile(path::AbstractString, handle::IOStream; maxcache::Integer=10)
     meta_len = metadata_length(handle)
     meta = metadata(handle, path, meta_len)
     ParFile(path, handle, meta, Schema(meta.schema), PageLRU())
+end
+
+function Base.close(par::ParFile)
+    close(par.handle)
 end
 
 ##
@@ -371,7 +374,7 @@ function is_par_file(io)
     magic = Array{UInt8}(undef, 4)
     read!(io, magic)
     (String(magic) == PAR_MAGIC) || return false
-    
+
     seek(io, sz - SZ_PAR_MAGIC)
     magic = Array{UInt8}(undef, 4)
     read!(io, magic)
