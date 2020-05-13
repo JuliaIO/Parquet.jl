@@ -2,8 +2,8 @@ using Parquet
 using Test
 using Dates
 
-function test_load(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compatibility"))
-    p = ParFile(joinpath(parcompat, file))
+function test_load(file::String)
+    p = ParFile(file)
     println("loaded $file")
     @test isa(p.meta, Parquet.FileMetaData)
 
@@ -47,8 +47,8 @@ function print_names(indent, t)
     end
 end
 
-function test_schema(file, schema_name::Symbol,  parcompat=joinpath(dirname(@__FILE__), "parquet-compatibility"))
-    p = ParFile(joinpath(parcompat, file))
+function test_schema(file, schema_name::Symbol)
+    p = ParFile(file)
     println("loaded $file")
 
     #mod_name = string(schema_name) * "Module"
@@ -77,10 +77,21 @@ function test_schema(file, schema_name::Symbol,  parcompat=joinpath(dirname(@__F
 end
 
 function test_load_all_pages()
+    testfolder = joinpath(@__DIR__, "parquet-compatibility")
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
-            test_load("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
-            test_schema("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", Symbol(fname * "_" * encformat))
+            testfile = joinpath(testfolder, "parquet-testdata", "impala", "1.1.1-$encformat", "$fname.impala.parquet")
+            test_load(testfile)
+            test_schema(testfile, Symbol(fname * "_" * encformat))
+        end
+    end
+
+    testfolder = joinpath(@__DIR__, "julia-parquet-compatibility")
+    for encformat in ("ZSTD", "SNAPPY", "GZIP", "NONE")
+        for fname in ("nation", "customer")
+            testfile = joinpath(testfolder, "Parquet_Files", "$(encformat)_pandas_pyarrow_$(fname).parquet")
+            test_load(testfile)
+            test_schema(testfile, Symbol(fname * "_jl_" * encformat))
         end
     end
 end
