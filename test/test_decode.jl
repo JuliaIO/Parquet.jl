@@ -54,3 +54,5 @@ function test_decode_all_pages()
 end
 
 test_decode_all_pages()
+
+test_decode("synthetic_data.parquet", "missingvalues")
