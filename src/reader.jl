@@ -148,6 +148,8 @@ function bytes(page::Page, uncompressed::Bool=true)
             data = Snappy.uncompress(data)
         elseif codec == CompressionCodec.GZIP
             data = transcode(GzipDecompressor, data)
+        elseif codec == CompressionCodec.ZSTD
+            data = transcode(ZstdDecompressor, data)
         else
             error("Unknown compression codec for column chunk: $codec")
         end
