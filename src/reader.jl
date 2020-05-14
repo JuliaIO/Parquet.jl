@@ -69,11 +69,10 @@ colname(col::ColumnChunk) = colname(col.meta_data)
 colname(col::ColumnMetaData) = join(col.path_in_schema, '.')
 colnames(rowgroup::RowGroup) = [colname(col) for col in rowgroup.columns]
 function colnames(par::ParFile)
-    s = Set{AbstractString}()
-    for rg in rowgroups(par)
-        push!(s, colnames(rg)...)
-    end
-    collect(s)
+    # the metadata's schema is always present and is structured in a
+    # tree-as-array strucutre where the first element is a root node
+    # hence we start extract the name from 2nd schema element
+    [sch.name for sch in par.meta.schema[2:end]]
 end
 
 ncols(par::ParFile) = length(colnames(par))
