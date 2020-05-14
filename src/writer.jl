@@ -22,7 +22,7 @@ const COL_TYPE_CODE = Dict{DataType, Int32}(
     )
 
 function write_thrift(fileio, thrift_obj)
-    """write thrift defiition to file"""
+    """write thrift definition to file"""
     p = TCompactProtocol(TFileTransport(fileio))
     Thrift.write(p, thrift_obj)
 end
