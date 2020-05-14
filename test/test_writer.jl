@@ -2,6 +2,10 @@ using Parquet
 using Test
 using Random
 
+if VERSION < v"1.3"
+    using Missings: nonmissingtype
+end
+
 Random.seed!(1234567)
 
 function test_write()
