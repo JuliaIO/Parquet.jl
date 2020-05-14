@@ -110,5 +110,34 @@ function test_load_boolean_and_ts()
     #@test [v.bool_col for v in values] == dlm[:,2]  # skipping for now as this needs additional dependency on DelimitedFiles
 end
 
+function test_load_nested()
+    println("testing nested columns...")
+    p = ParFile("nested/nested1.parquet")
+    schema(JuliaConverter(Main), p, :Nested1)
+    @test nrows(p) == 100
+    @test ncols(p) == 5
+
+    rc = RecCursor(p, 1:100, colnames(p), JuliaBuilder(p, Nested1))
+    values = Nested1[]
+    for rec in rc
+        push!(values, rec)
+    end
+
+    v = values[1]._adobe_corpnew
+    @test v.frequency == 3
+    @test v.id == 1375
+    @test v.max_len == 64192.0
+    @test v.reduced_max_len == 64
+    @test String(copy(v.vocab)) == "10385911_a"
+
+    v = values[100]._adobe_corpnew
+    @test v.frequency == 61322
+    @test v.id == 724
+    @test v.max_len == 64192.0
+    @test v.reduced_max_len == 64
+    @test String(copy(v.vocab)) == "12400277_a"
+end
+
 test_load_all_pages()
 test_load_boolean_and_ts()
+test_load_nested()
