@@ -348,7 +348,7 @@ function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val
         required || (Fdefn += 1)                    # if field is optional, increment defn level
         repeated && (Frepn += 1)                    # if field can repeat, increment repn level
 
-        defined = (val === nothing) ? isdefined(F, symleaf) : false
+        defined = ((val === nothing) || (idx < length(nameparts))) ? isdefined(F, symleaf) : false
         mustdefine = defn_level >= Fdefn
         mustrepeat = repeated && (repn_level == Frepn)
         repkey = fqcolname * ":" * colname
@@ -357,7 +357,7 @@ function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val
             repidx += 1
             builder.col_repeat_state[repkey] = repidx
         end
-        nreps = defined ? length(getfield(F, symleaf)) : 0
+        nreps = (defined && isa(getfield(F, symleaf), Vector)) ? length(getfield(F, symleaf)) : 0
 
         #@debug("repeat:$mustrepeat, nreps:$nreps, repidx:$repidx, defined:$defined, mustdefine:$mustdefine")
         if mustrepeat && (nreps < repidx)
@@ -382,6 +382,8 @@ function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val
             end
             setfield!(F, symleaf, V)
             F = V
+        else
+            F = getfield(F, symleaf)
         end
     end
     nothing

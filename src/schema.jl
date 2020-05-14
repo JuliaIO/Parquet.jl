@@ -15,20 +15,16 @@ mutable struct Schema
             nested_name = (idx == 1) ? sch.name : join([name_stack; sch.name], '.')
             name_lookup[nested_name] = sch
 
-            if !isempty(nchildren_stack)
-                @debug("$(sch.name) is a child. remaining $(nchildren_stack[end]-1) children")
+            if (idx > 1) && (Thrift.isfilled(sch, :num_children) && (sch.num_children > 0))
+                push!(nchildren_stack, sch.num_children)
+                push!(name_stack, sch.name)
+            elseif !isempty(nchildren_stack)
                 if nchildren_stack[end] == 1
                     pop!(nchildren_stack)
                     pop!(name_stack)
                 else
                     nchildren_stack[end] -= 1
                 end
-            end
-
-            if (idx > 1) && (Thrift.isfilled(sch, :num_children) && (sch.num_children > 0))
-                @debug("$(sch.name) has $(sch.num_children) children")
-                push!(nchildren_stack, sch.num_children)
-                push!(name_stack, sch.name)
             end
         end
         new(elems, name_lookup)
@@ -100,9 +96,15 @@ function schema_to_julia_types(io::IO, sch::Vector{SchemaElement}, schema_name::
     for schemaelem in sch
         _sch_to_julia(schemaelem, ios, nchildren)
     end
-    lev0 = ios[end]
-    println(lev0, "end")
-    write(io, String(take!(lev0)))
+
+    while !isempty(ios)
+        lev0 = pop!(ios)
+        bytes = take!(lev0)
+        if !isempty(bytes)
+            write(io, String(bytes))
+            println(io, "end")
+        end
+    end
     nothing
 end
 
@@ -118,9 +120,14 @@ function _sch_to_julia(sch::SchemaElement, ios::Vector{IO}, nchildren::Vector{In
     end
     # we are not looking at converted types yet
 
+    isvec = false
+    jeltypestr = ""
+
     if (isfilled(sch, :_type) && (sch._type == _Type.BYTE_ARRAY || sch._type == _Type.FIXED_LEN_BYTE_ARRAY)) || 
        (isfilled(sch, :repetition_type) && (sch.repetition_type == FieldRepetitionType.REPEATED))  # array type
+        jeltypestr = jtypestr
         jtypestr = "Vector{" * jtypestr * "}"
+        isvec = true
     end
 
     if lchildren > 0
@@ -130,8 +137,8 @@ function _sch_to_julia(sch::SchemaElement, ios::Vector{IO}, nchildren::Vector{In
     if isfilled(sch, :num_children)
         if lchildren > 0
             lvlio = IOBuffer()
-            println(lvlio, "type ", jtypestr)
-            println(lvlio, "    ", jtypestr, "() = new()")
+            println(lvlio, "mutable struct ", isvec ? jeltypestr : jtypestr)
+            println(lvlio, "    ", isvec ? jeltypestr : jtypestr, "() = new()")
             push!(ios, lvlio)
         end
         push!(nchildren, sch.num_children)
