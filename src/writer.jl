@@ -8,7 +8,6 @@ using CodecZlib: GzipCompressor
 using LittleEndianBase128
 using Base.Iterators: partition
 using CategoricalArrays: CategoricalArray, CategoricalValue
-using ProgressMeter
 
 # a mapping of Julia types to _Type codes in Parquet format
 const COL_TYPE_CODE = Dict{DataType, Int32}(
@@ -429,7 +428,7 @@ function write_parquet(path, tbl; compression_codec = "SNAPPY")
         recommended_chunks = 1
     end
 
-    @showprogress for (coli, colname_sym) in enumerate(colnames)
+    for (coli, colname_sym) in enumerate(colnames)
         colvals = Tables.getcolumn(tbl, colname_sym)
         colname = String(colname_sym)
 
