@@ -2,8 +2,6 @@
 # layer 3 access
 # read data as records, in the following forms:
 # - plain Julia types (use isdefined to check if member is set, but can't do this check for members that are primitive type)
-# - Thrift types (use Thrift.isfilled to check if member is set)
-# - ProtoBuf types (use ProtoBuf.isfilled to check if member is set)
 #
 # Builder implementations do the appropriate translation from column chunks to types.
 # RecordCursor uses Builders for the result types.

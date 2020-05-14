@@ -52,7 +52,7 @@ Schema:
     }
 ```
 
-Can convert the parquet schema to different forms:
+Can convert the parquet schema to Julia struct:
 
 ```julia
 julia> schema(JuliaConverter(stdout), p, :Customer)
@@ -67,30 +67,6 @@ type Customer
     c_mktsegment::Vector{UInt8}
     c_comment::Vector{UInt8}
 end
-
-julia> schema(ThriftConverter(stdout), p, :Customer)
-struct Customer {
-     optional i64 c_custkey
-     optional binary c_name
-     optional binary c_address
-     optional i32 c_nationkey
-     optional binary c_phone
-     optional double c_acctbal
-     optional binary c_mktsegment
-     optional binary c_comment
-}
-
-julia> schema(ProtoConverter(stdout), p, :Customer)
-message Customer {
-    optional sint64 c_custkey;
-    optional bytes c_name;
-    optional bytes c_address;
-    optional sint32 c_nationkey;
-    optional bytes c_phone;
-    optional double c_acctbal;
-    optional bytes c_mktsegment;
-    optional bytes c_comment;
-}
 ```
 
 Can inject the type dynamically to a module to have further methods working directly on the Julia type.

@@ -60,20 +60,6 @@ function test_schema(file, schema_name::Symbol)
     @test schema_name in names(mod, all=true)
     println("\tschema: \n\t", getfield(mod, schema_name))
     print_names("    ", getfield(mod, schema_name))
-
-    io = IOBuffer()
-    schema(ThriftConverter(io), schema(p), schema_name)
-    thriftsch = strip(String(take!(io)))
-    @test startswith(thriftsch, "struct " * string(schema_name))
-    @test endswith(thriftsch, "}")
-    println(thriftsch)
-
-    io = IOBuffer()
-    schema(ProtoConverter(io), schema(p), schema_name)
-    protosch = strip(String(take!(io)))
-    @test startswith(protosch, "message " * string(schema_name))
-    @test endswith(protosch, "}")
-    println(protosch)
 end
 
 function test_load_all_pages()
