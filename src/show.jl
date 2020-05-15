@@ -4,12 +4,12 @@ function print_indent(io, n)
     end
 end
 
-function show(io::IO, cursor::RecCursor)
-    par = cursor.builder.par
+function show(io::IO, cursor::RecordCursor)
+    par = cursor.par
     rows = cursor.colcursors[1].row.rows
     println(io, "Record Cursor on $(par.path)")
-    println(io, "\trows: $rows")
-    println(io, "\tcols: $(join(cursor.colnames, '.'))")
+    println(io, "    rows: $rows")
+    println(io, "    cols: $(join(cursor.colnames, ", "))")
 end
 
 function show(io::IO, schema::SchemaElement, indent::AbstractString="", nchildren::Vector{Int}=Int[])

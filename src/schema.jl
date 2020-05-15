@@ -3,6 +3,8 @@
 mutable struct Schema
     schema::Vector{SchemaElement}
     name_lookup::Dict{AbstractString,SchemaElement}
+    type_lookup::Dict{AbstractString,Union{DataType,Union}}
+    nttype_lookup::Dict{AbstractString,Union{DataType,Union}}
 
     function Schema(elems::Vector{SchemaElement})
         name_lookup = Dict{AbstractString,SchemaElement}()
@@ -15,7 +17,7 @@ mutable struct Schema
             nested_name = (idx == 1) ? sch.name : join([name_stack; sch.name], '.')
             name_lookup[nested_name] = sch
 
-            if (idx > 1) && (Thrift.isfilled(sch, :num_children) && (sch.num_children > 0))
+            if (idx > 1) && (num_children(sch) > 0)
                 push!(nchildren_stack, sch.num_children)
                 push!(name_stack, sch.name)
             elseif !isempty(nchildren_stack)
@@ -27,7 +29,7 @@ mutable struct Schema
                 end
             end
         end
-        new(elems, name_lookup)
+        new(elems, name_lookup, Dict{AbstractString,Union{DataType,Union}}(), Dict{AbstractString,Union{DataType,Union}}())
     end
 end
 
@@ -43,20 +45,57 @@ istoplevel(schname::Vector) = !(length(schname) > 1)
 elem(sch::Schema, schname::AbstractString) = sch.name_lookup[schname]
 elem(sch::Schema, schname::Vector) = elem(sch, join(schname, '.'))
 
-function isrequired(sch::Schema, schname)
-    schelem = elem(sch, schname)
-    Thrift.isfilled(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REQUIRED)
+isrepetitiontype(schelem::SchemaElement, repetition_type) = Thrift.isfilled(schelem, :repetition_type) && (schelem.repetition_type == repetition_type)
+
+isrequired(sch::Schema, schname) = isrequired(elem(sch, schname))
+isrequired(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.REQUIRED)
+
+isoptional(sch::Schema, schname) = isoptional(elem(sch, schname))
+isoptional(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.OPTIONAL)
+
+isrepeated(sch::Schema, schname) = isrepeated(elem(sch, schname))
+isrepeated(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.REPEATED)
+
+elemtype(sch::Schema, schname::AbstractString) = get!(sch.type_lookup, schname) do
+    elemtype(sch.name_lookup[schname])
+end
+elemtype(sch::Schema, schname::Vector) = elemtype(sch, join(schname, '.'))
+function elemtype(sch::SchemaElement)
+    jtype = Nothing
+
+    if isfilled(sch, :_type)
+        jtype = PLAIN_JTYPES[sch._type+1]
+    else
+        jtype = Dict{Symbol,Any} # this is a nested type
+    end
+
+    if (isfilled(sch, :_type) && (sch._type == _Type.BYTE_ARRAY || sch._type == _Type.FIXED_LEN_BYTE_ARRAY)) ||
+       (isfilled(sch, :repetition_type) && (sch.repetition_type == FieldRepetitionType.REPEATED))  # array type
+        jtype = Vector{jtype}
+    end
+
+    jtype
 end
 
-function isrepeated(sch::Schema, schname)
-    schelem = elem(sch, schname)
-    Thrift.isfilled(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REPEATED)
+ntelemtype(sch::Schema, schname::AbstractString) = get!(sch.nttype_lookup, schname) do
+    ntelemtype(sch, sch.name_lookup[schname])
+end
+ntelemtype(sch::Schema, schname::Vector) = ntelemtype(sch, join(schname, '.'))
+function ntelemtype(sch::Schema, schelem::SchemaElement)
+    @assert num_children(schelem) > 0
+    idx = findfirst(x->x===schelem, sch.schema)
+    children_range = (idx+1):(idx+schelem.num_children)
+    names = [Symbol(x.name) for x in sch.schema[children_range]]
+    types = [(num_children(x) > 0) ? ntelemtype(sch, x) : elemtype(x) for x in sch.schema[children_range]]
+    optionals = [isoptional(x) for x in sch.schema[children_range]]
+    types = [opt ? Union{t,Missing} : t for (t,opt) in zip(types, optionals)]
+    NamedTuple{(names...,),Tuple{types...}}
 end
 
-function bit_or_byte_length(sch::Schema, schname)
-    schelem = elem(sch, schname)
-    Thrift.isfilled(schelem, :type_length) ? schelem.type_length : 0
-end
+bit_or_byte_length(sch::Schema, schname) = bit_or_byte_length(elem(sch, schname))
+bit_or_byte_length(schelem::SchemaElement) = Thrift.isfilled(schelem, :type_length) ? schelem.type_length : 0
+
+num_children(schelem::SchemaElement) = Thrift.isfilled(schelem, :num_children) ? schelem.num_children : 0
 
 function max_repetition_level(sch::Schema, schname)
     lev = isrepeated(sch, schname) ? 1 : 0
@@ -67,93 +106,3 @@ function max_definition_level(sch::Schema, schname)
     lev = isrequired(sch, schname) ? 0 : 1
     istoplevel(schname) ? lev : (lev + max_definition_level(sch, parentname(schname)))
 end 
-
-abstract type SchemaConverter end
-
-# parquet schema to Julia types
-mutable struct JuliaConverter <: SchemaConverter
-    to::Union{Module,IO}
-end
-
-schema(conv::JuliaConverter, sch::Union{Schema, Vector{SchemaElement}}, schema_name::Symbol) = schema_to_julia_types(conv.to, sch, schema_name)
-
-function schema_to_julia_types(mod::Module, sch::Schema, schema_name::Symbol)
-    io = IOBuffer()
-    schema_to_julia_types(io, sch, schema_name)
-    typestr = "begin\n" * String(take!(io)) * "\nend"
-    parsedtypes = Meta.parse(typestr)
-    Core.eval(mod, parsedtypes)
-end
-
-schema_to_julia_types(io::IO, sch::Schema, schema_name::Symbol) = schema_to_julia_types(io, sch.schema, schema_name)
-
-function schema_to_julia_types(io::IO, sch::Vector{SchemaElement}, schema_name::Symbol)
-    nchildren = Int[]
-    lev0 = IOBuffer()
-    ios = IO[lev0]
-    println(lev0, "mutable struct ", schema_name)
-    println(lev0, "    ", schema_name, "() = new()")
-    for schemaelem in sch
-        _sch_to_julia(schemaelem, ios, nchildren)
-    end
-
-    while !isempty(ios)
-        lev0 = pop!(ios)
-        bytes = take!(lev0)
-        if !isempty(bytes)
-            write(io, String(bytes))
-            println(io, "end")
-        end
-    end
-    nothing
-end
-
-function _sch_to_julia(sch::SchemaElement, ios::Vector{IO}, nchildren::Vector{Int}=Int[])
-    lchildren = length(nchildren)
-
-    if isfilled(sch, :_type)
-        jtype = PLAIN_JTYPES[sch._type+1]
-        jtypestr = string(jtype)
-    else
-        # this is a composite type
-        jtypestr = sch.name * "Type"
-    end
-    # we are not looking at converted types yet
-
-    isvec = false
-    jeltypestr = ""
-
-    if (isfilled(sch, :_type) && (sch._type == _Type.BYTE_ARRAY || sch._type == _Type.FIXED_LEN_BYTE_ARRAY)) || 
-       (isfilled(sch, :repetition_type) && (sch.repetition_type == FieldRepetitionType.REPEATED))  # array type
-        jeltypestr = jtypestr
-        jtypestr = "Vector{" * jtypestr * "}"
-        isvec = true
-    end
-
-    if lchildren > 0
-        println(ios[end], "    ", sch.name, "::", jtypestr)
-    end
-
-    if isfilled(sch, :num_children)
-        if lchildren > 0
-            lvlio = IOBuffer()
-            println(lvlio, "mutable struct ", isvec ? jeltypestr : jtypestr)
-            println(lvlio, "    ", isvec ? jeltypestr : jtypestr, "() = new()")
-            push!(ios, lvlio)
-        end
-        push!(nchildren, sch.num_children)
-    elseif lchildren > 0
-        nchildren[lchildren] -= 1
-        if nchildren[lchildren] == 0
-            pop!(nchildren)
-            lvlio = pop!(ios)
-            if !isempty(ios)
-                println(lvlio, "end")
-                prevlvlio = pop!(ios)
-                println(lvlio, "")
-                print(lvlio, String(take!(prevlvlio)))
-            end
-            push!(ios, lvlio)
-        end
-    end
-end

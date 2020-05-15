@@ -12,10 +12,9 @@ import Base: show, open, close, values
 import Thrift: isfilled
 
 export is_par_file, ParFile, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
-export SchemaConverter, schema, JuliaConverter, ThriftConverter, ProtoConverter
+export schema
 export logical_timestamp, logical_string
-export RowCursor, ColCursor, RecCursor
-export AbstractBuilder, JuliaBuilder
+export RecordCursor
 
 # package code goes here
 include("PAR2/PAR2.jl")

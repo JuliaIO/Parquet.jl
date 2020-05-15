@@ -63,7 +63,6 @@ end
 # can access raw (uncompressed) bytes from pages
 
 schema(par::ParFile) = par.schema
-schema(conv::T, par::ParFile, schema_name::Symbol) where {T<:SchemaConverter} = schema(conv, par.schema, schema_name)
 
 colname(col::ColumnChunk) = colname(col.meta_data)
 colname(col::ColumnMetaData) = join(col.path_in_schema, '.')

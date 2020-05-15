@@ -37,38 +37,12 @@ function test_load(file::String)
     println("\tsuccess")
 end
 
-function print_names(indent, t)
-    for f in fieldnames(t)
-        ftype = fieldtype(t, f)
-        println("\t", indent, f, "::", ftype)
-        if isa(ftype, DataType)
-            print_names(indent * "    ", ftype)
-        end
-    end
-end
-
-function test_schema(file, schema_name::Symbol)
-    p = ParFile(file)
-    println("loaded $file")
-
-    #mod_name = string(schema_name) * "Module"
-    #eval(Main, parse("module $mod_name end"))
-    #mod = getfield(Main, Symbol(mod_name))
-
-    mod = Main
-    schema(JuliaConverter(mod), schema(p), schema_name)
-    @test schema_name in names(mod, all=true)
-    println("\tschema: \n\t", getfield(mod, schema_name))
-    print_names("    ", getfield(mod, schema_name))
-end
-
 function test_load_all_pages()
     testfolder = joinpath(@__DIR__, "parquet-compatibility")
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
             testfile = joinpath(testfolder, "parquet-testdata", "impala", "1.1.1-$encformat", "$fname.impala.parquet")
             test_load(testfile)
-            test_schema(testfile, Symbol(fname * "_" * encformat))
         end
     end
 
@@ -77,15 +51,14 @@ function test_load_all_pages()
         for fname in ("nation", "customer")
             testfile = joinpath(testfolder, "Parquet_Files", "$(encformat)_pandas_pyarrow_$(fname).parquet")
             test_load(testfile)
-            test_schema(testfile, Symbol(fname * "_jl_" * encformat))
         end
     end
 end
 
 function test_load_boolean_and_ts()
     println("testing booleans and timestamps...")
-    p = ParFile("booltest/alltypes_plain.snappy.parquet")
-    schema(JuliaConverter(Main), p, :AllTypes)
+    p = ParFile(joinpath(@__DIR__, "booltest", "alltypes_plain.snappy.parquet"))
+
     rg = rowgroups(p)
     @test length(rg) == 1
     cc = columns(p, 1)
@@ -95,9 +68,10 @@ function test_load_boolean_and_ts()
     @test cnames[2] == "bool_col"
     pg = pages(p, 1, 1)
     @test length(pg) == 2
-    rc = RecCursor(p, 1:2, colnames(p), JuliaBuilder(p, AllTypes))
 
-    values = AllTypes[]
+    rc = RecordCursor(p; rows=1:2, colnames=colnames(p))
+
+    values = Any[]
     for rec in rc
        push!(values, rec)
     end
@@ -112,13 +86,13 @@ end
 
 function test_load_nested()
     println("testing nested columns...")
-    p = ParFile("nested/nested1.parquet")
-    schema(JuliaConverter(Main), p, :Nested1)
+    p = ParFile(joinpath(@__DIR__, "nested", "nested1.parquet"))
+
     @test nrows(p) == 100
     @test ncols(p) == 5
 
-    rc = RecCursor(p, 1:100, colnames(p), JuliaBuilder(p, Nested1))
-    values = Nested1[]
+    rc = RecordCursor(p)
+    values = Any[]
     for rec in rc
         push!(values, rec)
     end
