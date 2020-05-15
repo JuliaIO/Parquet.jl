@@ -246,19 +246,18 @@ end
 
 ##
 
-mutable struct RecordCursor
+mutable struct RecordCursor{T}
     par::ParFile
     colnames::Vector{Vector{String}}
     colcursors::Vector{ColCursor}
     colstates::Vector{Tuple{Int,Int}}
-    rectype::DataType
+end
 
-    function RecordCursor(par::ParFile; rows::UnitRange{Int64}=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par), row::Signed=first(rows))
-        colcursors = [ColCursor(par, rows, colname, row) for colname in colnames]
-        sch = schema(par)
-        rectype = ntelemtype(sch, sch.schema[1])
-        new(par, colnames, colcursors, Array{Tuple{Int,Int}}(undef, length(colcursors)), rectype)
-    end
+function RecordCursor(par::ParFile; rows::UnitRange{Int64}=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par), row::Signed=first(rows))
+    colcursors = [ColCursor(par, rows, colname, row) for colname in colnames]
+    sch = schema(par)
+    rectype = ntelemtype(sch, sch.schema[1])
+    RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int,Int}}(undef, length(colcursors)))
 end
 
 function state(cursor::RecordCursor)
@@ -272,7 +271,7 @@ function _start(cursor::RecordCursor)
 end
 _done(cursor::RecordCursor, row::Signed) = _done(cursor.colcursors[1].row, row)
 
-function _next(cursor::RecordCursor, row::Signed)
+function _next(cursor::RecordCursor{T}, row::Signed) where {T}
     states = cursor.colstates
     cursors = cursor.colcursors
 
@@ -285,26 +284,26 @@ function _next(cursor::RecordCursor, row::Signed)
         update_record(cursor.par, row, colcursor.colname, val, def, rep, col_repeat_state)      # update record
         states[colid] = colstate                                                                # set last state to states
     end
-    _nt(row, cursor.rectype), state(cursor)
+    _nt(row, T), state(cursor)
 end
 
-function Base.iterate(cursor::RecordCursor, state)
+function Base.iterate(cursor::RecordCursor{T}, state) where {T}
     _done(cursor, state) && return nothing
     return _next(cursor, state)
 end
 
-function Base.iterate(cursor::RecordCursor)
+function Base.iterate(cursor::RecordCursor{T}) where {T}
     r = iterate(cursor, _start(cursor))
     return r
 end
 
-function _nt(dict::Dict{Symbol,Any}, rectype::DataType)
+function _nt(dict::Dict{Symbol,Any}, ::Type{T}) where {T}
     _val_or_missing = (idx,k) -> begin
         v = get(dict, k, missing)
-        isa(v, Dict{Symbol,Any}) ? _nt(v, rectype.types[idx]) : v
+        isa(v, Dict{Symbol,Any}) ? _nt(v, T.types[idx]) : v
     end
-    values = [_val_or_missing(idx,k) for (idx,k) in enumerate(rectype.names)]
-    rectype((values...,))
+    values = [_val_or_missing(idx,k) for (idx,k) in enumerate(T.names)]
+    T((values...,))
 end
 
 default_init(::Type{Vector{T}}) where {T} = Vector{T}()
