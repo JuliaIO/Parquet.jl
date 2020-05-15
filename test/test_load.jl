@@ -26,7 +26,7 @@ function test_load(file::String)
 
     cc1 = columns(p, rg[1], cnames[1:2:3])
     @test length(cc) > length(cc1)
-    @test length(rowgroups(p, [cnames[1], "xyz"])) == 0
+    @test length(rowgroups(p, [cnames[1], ["xyz"]])) == 0
 
     iob = IOBuffer()
     show(iob, p)
@@ -65,7 +65,7 @@ function test_load_boolean_and_ts()
     @test length(cc) == 11
     cnames = colnames(rg[1])
     @test length(cnames) == length(cc)
-    @test cnames[2] == "bool_col"
+    @test cnames[2] == ["bool_col"]
     pg = pages(p, 1, 1)
     @test length(pg) == 2
 

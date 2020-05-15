@@ -14,7 +14,7 @@ mutable struct RowCursor
     rg::Union{Int,Nothing}          # current row group
     rgrange::Union{UnitRange{Int},Nothing} # current rowrange
 
-    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::AbstractString, row::Signed=first(rows))
+    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::Vector{String}, row::Signed=first(rows))
         rgs = rowgroups(par, col, rows)
         cursor = new(par, rows, row, rgs, nothing, nothing)
         setrow(cursor, row)
@@ -69,7 +69,7 @@ end
 # Row can be deduced from repetition level.
 mutable struct ColCursor{T}
     row::RowCursor
-    colname::AbstractString
+    colname::Vector{String}
     maxdefn::Int
 
     colchunks::Union{Vector{ColumnChunk},Nothing}
@@ -85,13 +85,13 @@ mutable struct ColCursor{T}
     levelpos::Int
     levelrange::UnitRange{Int}
 
-    function ColCursor{T}(row::RowCursor, colname::AbstractString) where T
+    function ColCursor{T}(row::RowCursor, colname::Vector{String}) where T
         maxdefn = max_definition_level(schema(row.par), colname)
-        new{T}(row, colname, maxdefn,nothing,nothing,nothing)
+        new{T}(row, colname, maxdefn, nothing, nothing, nothing)
     end
 end
 
-function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::AbstractString, row::Signed=first(rows))
+function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::Vector{String}, row::Signed=first(rows))
     rowcursor = RowCursor(par, rows, colname, row)
 
     rg = rowcursor.rowgroups[rowcursor.rg] 
@@ -248,12 +248,12 @@ end
 
 mutable struct RecordCursor
     par::ParFile
-    colnames::Vector{String}
+    colnames::Vector{Vector{String}}
     colcursors::Vector{ColCursor}
     colstates::Vector{Tuple{Int,Int}}
     rectype::DataType
 
-    function RecordCursor(par::ParFile; rows::UnitRange{Int64}=1:nrows(par), colnames::Vector=colnames(par), row::Signed=first(rows))
+    function RecordCursor(par::ParFile; rows::UnitRange{Int64}=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par), row::Signed=first(rows))
         colcursors = [ColCursor(par, rows, colname, row) for colname in colnames]
         sch = schema(par)
         rectype = ntelemtype(sch, sch.schema[1])
@@ -311,18 +311,17 @@ default_init(::Type{Vector{T}}) where {T} = Vector{T}()
 default_init(::Type{Dict{Symbol,Any}}) = Dict{Symbol,Any}()
 default_init(::Type{T}) where {T} = ccall(:jl_new_struct_uninit, Any, (Any,), T)::T
 
-function update_record(par::ParFile, row::Dict{Symbol,Any}, fqcolname::String, val, defn_level::Signed, repn_level::Signed, col_repeat_state::Dict{AbstractString,Int})
-    nameparts = split(fqcolname, '.')
+function update_record(par::ParFile, row::Dict{Symbol,Any}, nameparts::Vector{String}, val, defn_level::Signed, repn_level::Signed, col_repeat_state::Dict{AbstractString,Int})
     lparts = length(nameparts)
     sch = par.schema
-    F = row  # the current field corresponding to the level in fqcolname
+    F = row  # the current field corresponding to the level in nameparts
     Fdefn = 0
     Frepn = 0
 
     # for each name part of colname (a field)
     for idx in 1:lparts
-        colname = join(nameparts[1:idx], '.')
-        #@debug("updating part $colname of $fqcolname isnull:$(val === nothing), def:$(defn_level), rep:$(repn_level)")
+        colname = nameparts[1:idx]
+        #@debug("updating part $colname of $nameparts isnull:$(val === nothing), def:$(defn_level), rep:$(repn_level)")
         leaf = nameparts[idx]
         symleaf = Symbol(leaf)
 
@@ -334,7 +333,7 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, fqcolname::String, v
         defined = ((val === nothing) || (idx < lparts)) ? haskey(F, symleaf) : false
         mustdefine = defn_level >= Fdefn
         mustrepeat = repeated && (repn_level == Frepn)
-        repkey = fqcolname * ":" * colname
+        repkey = join(nameparts, '.') * ":" * join(colname, '.')
         repidx = get(col_repeat_state, repkey, 0)
         if mustrepeat
             repidx += 1

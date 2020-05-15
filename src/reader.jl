@@ -65,14 +65,30 @@ end
 schema(par::ParFile) = par.schema
 
 colname(col::ColumnChunk) = colname(col.meta_data)
-colname(col::ColumnMetaData) = join(col.path_in_schema, '.')
+colname(col::ColumnMetaData) = col.path_in_schema
 colnames(rowgroup::RowGroup) = [colname(col) for col in rowgroup.columns]
 function colnames(par::ParFile)
-    s = Set{AbstractString}()
-    for rg in rowgroups(par)
-        push!(s, colnames(rg)...)
+    names = Vector{Vector{String}}()
+    cs = Int[]
+    ns = String[]
+    for x in par.schema.schema[2:end]
+        if Parquet.num_children(x) > 0
+            push!(cs, x.num_children)
+            push!(ns, x.name)
+        else
+            if !isempty(cs)
+                push!(names, [ns; x.name])
+                cs[end] -= 1
+                if cs[end] == 0
+                    pop!(cs)
+                    pop!(ns)
+                end
+            else
+                push!(names, [x.name])
+            end
+        end
     end
-    collect(s)
+    names
 end
 
 ncols(par::ParFile) = length(colnames(par))
@@ -86,8 +102,8 @@ rowgroups(par::ParFile) = par.meta.row_groups
 
 # Return rowgroups that stores all the columns mentioned in `cnames`.
 # Returned row groups can be further queried to get the range of rows.
-rowgroups(par::ParFile, colname::AbstractString, rowrange::UnitRange=1:typemax(Int64)) = rowgroups(par, [colname], rowrange)
-function rowgroups(par::ParFile, cnames, rowrange::UnitRange=1:typemax(Int64))
+rowgroups(par::ParFile, colname::Vector{String}, rowrange::UnitRange=1:typemax(Int64)) = rowgroups(par, [colname], rowrange)
+function rowgroups(par::ParFile, cnames::Vector{Vector{String}}, rowrange::UnitRange=1:typemax(Int64))
     R = RowGroup[]
     L = length(cnames)
     beginrow = 1
@@ -103,8 +119,8 @@ end
 
 columns(par::ParFile, rowgroupidx::Integer) = columns(par, rowgroups(par)[rowgroupidx])
 columns(par::ParFile, rowgroup::RowGroup) = rowgroup.columns
-columns(par::ParFile, rowgroup::RowGroup, colname::AbstractString) = columns(par, rowgroup, [colname])
-function columns(par::ParFile, rowgroup::RowGroup, cnames)
+columns(par::ParFile, rowgroup::RowGroup, colname::Vector{String}) = columns(par, rowgroup, [colname])
+function columns(par::ParFile, rowgroup::RowGroup, cnames::Vector{Vector{String}})
     R = ColumnChunk[]
     for col in columns(par, rowgroup)
         (colname(col) in cnames) && push!(R, col)

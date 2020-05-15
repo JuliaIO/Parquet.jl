@@ -9,7 +9,9 @@ function show(io::IO, cursor::RecordCursor)
     rows = cursor.colcursors[1].row.rows
     println(io, "Record Cursor on $(par.path)")
     println(io, "    rows: $rows")
-    println(io, "    cols: $(join(cursor.colnames, ", "))")
+
+    colpaths = [join(colname, '.') for colname in cursor.colnames]
+    println(io, "    cols: $(join(colpaths, ", "))")
 end
 
 function show(io::IO, schema::SchemaElement, indent::AbstractString="", nchildren::Vector{Int}=Int[])
@@ -144,7 +146,7 @@ function show(io::IO, page_encs::Vector{PageEncodingStats}, indent::AbstractStri
 end
 
 function show(io::IO, colmeta::ColumnMetaData, indent::AbstractString="")
-    println(io, indent, Thrift.enumstr(_Type, coltype(colmeta)), " ", colname(colmeta), ", num values:", colmeta.num_values)
+    println(io, indent, Thrift.enumstr(_Type, coltype(colmeta)), " ", join(colname(colmeta), '.'), ", num values:", colmeta.num_values)
     show_encodings(io, colmeta.encodings, indent)
     if colmeta.codec != CompressionCodec.UNCOMPRESSED
         println(io, indent, Thrift.enumstr(CompressionCodec, colmeta.codec), " compressed bytes:", colmeta.total_compressed_size, " (", colmeta.total_uncompressed_size, " uncompressed)")
