@@ -168,6 +168,7 @@ write_encoded_data(data_to_compress_io, colvals::AbstractVector{Union{Missing, T
     write_encoded_data(data_to_compress_io, skipmissing(colvals))
 
 function write_encoded_data(data_to_compress_io, colvals::Union{AbstractVector{String}, SkipMissing{S}}) where S <: AbstractVector{Union{Missing, String}}
+    """ Write encoded data for String type """
     # write the values
     for val in colvals
         # for string it needs to be stored as BYTE_ARRAY which needs the length
@@ -179,6 +180,7 @@ function write_encoded_data(data_to_compress_io, colvals::Union{AbstractVector{S
 end
 
 function write_encoded_data(data_to_compress_io, colvals::Union{AbstractVector{Bool}, SkipMissing{S}}) where S <: AbstractVector{Union{Missing, Bool}}
+    """ Write encoded data for Bool type """
     # write the bitacpked bits
     # write a bitarray seems to write 8 bytes at a time
     # so write to a tmpio first
@@ -192,12 +194,23 @@ function write_encoded_data(data_to_compress_io, colvals::Union{AbstractVector{B
 end
 
 function write_encoded_data(data_to_compress_io, colvals::AbstractArray)
+    """ Efficient write of encoded data for `isbits` types"""
     @assert isbitstype(eltype(colvals))
     write(data_to_compress_io, colvals)
 end
 
 function write_encoded_data(data_to_compress_io, colvals::SkipMissing)
+    """ Write of encoded data for skipped missing types"""
     for val in colvals
+        write(data_to_compress_io, val)
+    end
+end
+
+function write_encoded_data(data_to_compress_io, colvals)
+    """ Write of encoded data for the most general type.
+    The only requirement is that colvals has to be iterable
+    """
+    for val in skipmissing(colvals)
         write(data_to_compress_io, val)
     end
 end
