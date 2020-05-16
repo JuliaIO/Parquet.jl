@@ -6,7 +6,7 @@ if VERSION < v"1.3"
     using Missings: nonmissingtype
 end
 
-using Base.SkipMissing
+using Base: SkipMissing
 
 Random.seed!(1234567)
 
