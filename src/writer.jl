@@ -504,8 +504,8 @@ function write_parquet(path, tbl; compression_codec = "SNAPPY")
         tbl,
         path,
         recommended_chunks;
-        encoding    =   Dict(String(col)=>encoding for col in colnames),
-        codec       =   Dict(String(col)=>codec for col in colnames)
+        encoding    =   Dict(col => encoding for col in colnames),
+        codec       =   Dict(col => codec for col in colnames)
     )
 end
 
@@ -514,6 +514,9 @@ function _write_parquet(tbl, path, nchunks; encoding::Dict{String, Int32}, codec
 
     tbl - Expected to be a Tables.jl compatible table
     path - The output parquet file path
+    nchunks - The number of chunks/pages to write the columns
+    encoding - A dictionary mapping from column names to encoding
+    codec - A dictionary mapping from column names to compressoin codec
 
     """
     fileio = open(path, "w")
