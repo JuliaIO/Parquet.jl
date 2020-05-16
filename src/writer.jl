@@ -491,16 +491,15 @@ function write_parquet(path, tbl; compression_codec = "SNAPPY")
     approx_raw_to_parquet_compression_ratio = 6
     approx_post_compression_size = (table_size_bytes / 2^30) / approx_raw_to_parquet_compression_ratio
 
-    colnames = String.(Tables.columnnames(tbl))
-    nrows = length(Tables.rows(tbl))
-
     # if size is larger than 64mb and has more than 6 rows
+    nrows = length(Tables.rows(tbl))
     if (approx_post_compression_size > 0.064) & (nrows > 6)
         recommended_chunks = ceil(Int, approx_post_compression_size / 6) * 6
     else
         recommended_chunks = 1
     end
 
+    colnames = String.(Tables.columnnames(tbl))
     _write_parquet(
         tbl,
         path,
