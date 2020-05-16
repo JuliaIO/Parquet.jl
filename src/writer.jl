@@ -192,7 +192,8 @@ function write_encoded_data(data_to_compress_io, colvals::Union{AbstractVector{B
 end
 
 function write_encoded_data(data_to_compress_io, colvals::AbstractArray)
-    write(data_to_compress_io, val)
+    @assert isbitstype(eltype(colvals))
+    write(data_to_compress_io, colvals)
 end
 
 function write_encoded_data(data_to_compress_io, colvals::SkipMissing)
