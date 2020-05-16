@@ -6,8 +6,6 @@ if VERSION < v"1.3"
     using Missings: nonmissingtype
 end
 
-using Base: SkipMissing
-
 Random.seed!(1234567)
 
 function test_write()
