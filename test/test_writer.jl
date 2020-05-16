@@ -10,26 +10,27 @@ Random.seed!(1234567)
 
 function test_write()
     tbl = (
-        int32 = Int32.(1:1000),
-        int64 = Int64.(1:1000),
-        float32 = Float32.(1:1000),
-        float64 = Float64.(1:1000),
+        int32 = rand(Int32, 1000),
+        int64 = rand(Int64, 1000),
+        float32 = rand(Float32, 1000),
+        float64 = rand(Float64, 1000),
         bool = rand(Bool, 1000),
         string = [randstring(8) for i in 1:1000],
-        int32m = rand([missing, 1:100...], 1000),
-        int64m = rand([missing, 1:100...], 1000),
-        float32m = rand([missing, Float32.(1:100)...], 1000),
-        float64m = rand([missing, Float64.(1:100)...], 1000),
+        int32m = rand([missing, rand(Int32, 10)...], 1000),
+        int64m = rand([missing, rand(Int64, 10)...], 1000),
+        float32m = rand([missing, rand(Float32, 10)...], 1000),
+        float64m = rand([missing, rand(Float64, 10)...], 1000),
         boolm = rand([missing, true, false], 1000),
         stringm = rand([missing, "abc", "def", "ghi"], 1000)
     )
 
     tmpfile = tempname()*".parquet"
+
     write_parquet(tmpfile, tbl)
 
     pf = ParFile(tmpfile)
 
-    # the file is very smalll so only one rowgroup
+    # the file is very small so only one rowgroup
     col_chunks = columns(pf, 1)
 
     for colnum in 1:length(col_chunks)
@@ -49,8 +50,6 @@ function test_write()
 
     # clean up
     close(pf)
-
-    #rm(tmpfile)
 end
 
 test_write()

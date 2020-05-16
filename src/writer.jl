@@ -9,6 +9,12 @@ using LittleEndianBase128
 using Base.Iterators: partition
 using CategoricalArrays: CategoricalArray, CategoricalValue
 
+if VERSION < v"1.3"
+    using Missings: SkipMissing
+else
+    using Base: SkipMissing
+end
+
 # a mapping of Julia types to _Type codes in Parquet format
 const COL_TYPE_CODE = Dict{DataType, Int32}(
     Bool => PAR2._Type.BOOLEAN,
@@ -67,6 +73,44 @@ function compress_using_codec(colvals::AbstractVector{String}, codec::Int)::Vect
     return compress_using_codec(uncompressed_bytes, codec)
 end
 
+function write_defn_levels(data_to_compress_io, colvals::AbstractVector{Union{Missing, T}}) where T
+    """ A function to write definition levels for `Union{Missing, T}`"""
+    # if there is missing
+    # use the bit packing algorithm to write the
+    # definition_levels
+    bytes_needed = ceil(Int, length(colvals) / 8sizeof(UInt8))
+    tmp = UInt32((UInt32(bytes_needed) << 1) | 1)
+    bitpacking_header = LittleEndianBase128.encode(tmp)
+
+    tmpio = IOBuffer()
+    not_missing_bits::BitArray = .!ismissing.(colvals)
+    write(tmpio, not_missing_bits)
+    seek(tmpio, 0)
+
+    encoded_defn_data = read(tmpio, bytes_needed)
+
+    encoded_defn_data_length = length(bitpacking_header) + bytes_needed
+    # write the definition data
+    write(data_to_compress_io, UInt32(encoded_defn_data_length))
+    write(data_to_compress_io, bitpacking_header)
+    write(data_to_compress_io, encoded_defn_data)
+end
+
+function write_defn_levels(data_to_compress_io, colvals::AbstractVector)
+    """ A function to write definition levels for NON-missing data
+    """
+    # if there is no missing can just use RLE of one
+    # using rle
+    rle_header = LittleEndianBase128.encode(UInt32(length(colvals)) << 1)
+    repeated_value = UInt8(1)
+    encoded_defn_data_length = sizeof(rle_header) + sizeof(repeated_value)
+
+    # write the definition data
+    write(data_to_compress_io, UInt32(encoded_defn_data_length))
+    write(data_to_compress_io, rle_header)
+    write(data_to_compress_io, repeated_value)
+end
+
 function write_col_dict(fileio, colvals::AbstractArray{T}, codec) where T
     """ write the column dictionary page """
     # note: `level`s does not return `missing` as a level
@@ -119,80 +163,69 @@ function write_col_dict(fileio, colvals::AbstractArray{T}, codec) where T
     return (offset = before_write_page_header_pos, uncompressed_size = uncompressed_dict_size + dict_page_header_size, compressed_size = compressed_dict_size + dict_page_header_size)
 end
 
+
+write_encoded_data(data_to_compress_io, colvals::AbstractVector{Union{Missing, T}}) where T =
+    write_encoded_data(data_to_compress_io, skipmissing(colvals))
+
+function write_encoded_data(data_to_compress_io, colvals::Union{AbstractVector{String}, SkipMissing{S}}) where S <: AbstractVector{Union{Missing, String}}
+    # write the values
+    for val in colvals
+        # for string it needs to be stored as BYTE_ARRAY which needs the length
+        # to be the first 4 bytes UInt32
+        write(data_to_compress_io, val |> sizeof |> UInt32)
+        # write each of the strings one after another
+        write(data_to_compress_io, val)
+    end
+end
+
+function write_encoded_data(data_to_compress_io, colvals::Union{AbstractVector{Bool}, SkipMissing{S}}) where S <: AbstractVector{Union{Missing, Bool}}
+    # write the bitacpked bits
+    # write a bitarray seems to write 8 bytes at a time
+    # so write to a tmpio first
+    no_missing_bit_vec =  BitArray(colvals)
+    bytes_needed = ceil(Int, length(no_missing_bit_vec) / 8sizeof(UInt8))
+    tmpio = IOBuffer()
+    write(tmpio, no_missing_bit_vec)
+    seek(tmpio, 0)
+    packed_bits = read(tmpio, bytes_needed)
+    write(data_to_compress_io, packed_bits)
+end
+
+function write_encoded_data(data_to_compress_io, colvals::AbstractArray)
+    write(data_to_compress_io, val)
+end
+
+function write_encoded_data(data_to_compress_io, colvals::SkipMissing)
+    for val in colvals
+        write(data_to_compress_io, val)
+    end
+end
+
 # TODO set the encoding code into a dictionary
-function write_col_chunk(fileio, colvals::AbstractArray{T}, codec, ::Val{PAR2.Encoding.PLAIN}) where T
-    """write a chunk of data into a data page using PLAIN encoding"""
+function write_col_chunk(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encoding.PLAIN})
+    """
+    Write a chunk of data into a data page using PLAIN encoding where the values
+    are written back-to-back in memory and then compressed with the codec.
+    For `String`s, the values are written with length (UInt32), followed by
+    content; it is NOT null terminated.
+    """
 
     # generate the data page header
     data_page_header = PAR2.PageHeader()
 
-    # write repetition level data
-    # do nothing
-    # this seems to be related to nested columns
-    # and hence is not needed here
-
-    # set up a buffer to write to
+    # set up an IO buffer to write to
     data_to_compress_io = IOBuffer()
 
-    if Missing <: T
-        # if there is missing
-        # use the bit packing algorithm to write the
-        # definition_levels
+    # write repetition level data
+    ## do nothing
+    ## this seems to be related to nested columns
+    ## and hence is not needed here as we only supported unnested column write
 
-        bytes_needed = ceil(Int, length(colvals) / 8sizeof(UInt8))
-        tmp = UInt32((UInt32(bytes_needed) << 1) | 1)
-        bitpacking_header = LittleEndianBase128.encode(tmp)
+    # write definition levels
+    write_defn_levels(data_to_compress_io, colvals)
 
-        tmpio = IOBuffer()
-        not_missing_bits::BitArray = .!ismissing.(colvals)
-        write(tmpio, not_missing_bits)
-        seek(tmpio, 0)
-
-        encoded_defn_data = read(tmpio, bytes_needed)
-
-        encoded_defn_data_length = length(bitpacking_header) + bytes_needed
-        # write the definition data
-        write(data_to_compress_io, UInt32(encoded_defn_data_length))
-        write(data_to_compress_io, bitpacking_header)
-        write(data_to_compress_io, encoded_defn_data)
-    else
-        # if there is no missing can just use RLE of one
-        # using rle
-        rle_header = LittleEndianBase128.encode(UInt32(length(colvals)) << 1)
-        repeated_value = UInt8(1)
-        encoded_defn_data_length = UInt32(sizeof(rle_header) + sizeof(repeated_value))
-
-        # write the definition data
-        write(data_to_compress_io, UInt32(encoded_defn_data_length))
-        write(data_to_compress_io, rle_header)
-        write(data_to_compress_io, repeated_value)
-    end
-
-    if nonmissingtype(T) == String
-        # write the values
-        for val in skipmissing(colvals)
-            # for string it needs to be stored as BYTE_ARRAY which needs the length
-            # to be the first 4 bytes UInt32
-            write(data_to_compress_io, val |> sizeof |> UInt32)
-            # write each of the strings one after another
-            write(data_to_compress_io, val)
-        end
-    elseif nonmissingtype(T) == Bool
-        # write the bitacpked bits
-        # write a bitarray seems to write 8 bytes at a time
-        # so write to a tmpio first
-        no_missing_bit_vec =  BitArray(skipmissing(colvals))
-        bytes_needed = ceil(Int, length(no_missing_bit_vec) / 8sizeof(UInt8))
-        tmpio = IOBuffer()
-        write(tmpio, no_missing_bit_vec)
-        seek(tmpio, 0)
-        packed_bits = read(tmpio, bytes_needed)
-        write(data_to_compress_io, packed_bits)
-    else
-        for val in skipmissing(colvals)
-            write(data_to_compress_io, val)
-        end
-    end
+    # write the encoded data
+    write_encoded_data(data_to_compress_io, colvals)
 
     data_to_compress::Vector{UInt8} = take!(data_to_compress_io)
 
@@ -210,7 +243,7 @@ function write_col_chunk(fileio, colvals::AbstractArray{T}, codec, ::Val{PAR2.En
 
     Thrift.set_field!(data_page_header, :data_page_header, PAR2.DataPageHeader())
     Thrift.set_field!(data_page_header.data_page_header, :num_values , Int32(length(colvals)))
-    Thrift.set_field!(data_page_header.data_page_header, :encoding , encoding) # encoding 0 is plain encoding
+    Thrift.set_field!(data_page_header.data_page_header, :encoding , PAR2.Encoding.PLAIN)
     Thrift.set_field!(data_page_header.data_page_header, :definition_level_encoding, PAR2.Encoding.RLE)
     Thrift.set_field!(data_page_header.data_page_header, :repetition_level_encoding, PAR2.Encoding.RLE)
 
@@ -228,9 +261,11 @@ function write_col_chunk(fileio, colvals::AbstractArray{T}, codec, ::Val{PAR2.En
     )
 end
 
-function write_col_chunk(fileio, colvals::AbstractArray{T}, codec, ::Val(PAR2.Encoding.PLAIN_DICTIONARY)) where T
+function write_col_chunk(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encoding.PLAIN_DICTIONARY})
+    """write Dictionary encoding data page"""
     error("PLAIN_DICTIONARY encoding not implemented yet")
-    """Dictionary encoding"""
+
+    # TODO finish the implementation
     rle_header = LittleEndianBase128.encode(UInt32(length(colvals)) << 1)
     repeated_value = UInt8(1)
 
@@ -247,7 +282,6 @@ function write_col_chunk(fileio, colvals::AbstractArray{T}, codec, ::Val(PAR2.En
     # write the data
 
     ## firstly, bit pack it
-    colvals
 
     # the bitwidth to use
     bitwidth = ceil(UInt8, log(2, length(uvals)))
@@ -291,23 +325,18 @@ end
 function write_col(fileio, colvals::AbstractArray{T}, colname, encoding, codec; num_chunks = 1) where T
     """Write a column to a file"""
     # TODO turn writing dictionary on
-    if false
-        if nonmissingtype(T) == Bool
-            # dictionary type are not supported for
-            dict_info = (offset = missing, uncompressed_size = 0, compressed_size = 0)
-        else
-            dict_info = write_col_dict(fileio, colvals, codec)
-        end
-    else
-        # return offset of -1 means that dict_info
-        dict_info = (offset = missing, uncompressed_size = 0, compressed_size = 0)
-    end
+    # Currently, writing the dictionary page is not turned on for any type.
+    # Normally, for Boolean data, dictionary is not supported. However for other
+    # data types, dictionary page CAN be supported. However, since Parquet.jl
+    # only supports writing PLAIN encoding data, hence there is no need to write
+    # a dictionary page until other dictionary-based encodings are supported
+    dict_info = (offset = missing, uncompressed_size = 0, compressed_size = 0)
 
     num_vals_per_chunk = ceil(Int, length(colvals) / num_chunks)
 
     # TODO choose an encoding
     # TODO put encoding into a dictionary
-    chunk_info = [write_col_chunk(fileio, val_chunk, codec, encoding) for val_chunk in partition(colvals, num_vals_per_chunk)]
+    chunk_info = [write_col_chunk(fileio, val_chunk, codec, Val(encoding)) for val_chunk in partition(colvals, num_vals_per_chunk)]
 
     sizes = reduce(chunk_info; init = dict_info) do x, y
         (
