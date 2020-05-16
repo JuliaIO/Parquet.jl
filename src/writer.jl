@@ -75,7 +75,7 @@ function write_col_dict(fileio, colvals::AbstractArray{T}, codec) where T
     # do not support dictionary with more than 127 levels
     # TODO relax this 127 restriction
     if length(uvals) > 127
-        @warn "More than 127 levels in dictionary. This is not supported at this stage."
+        @warn "More than 127 levels in dictionary. Parquet.jl does not support this at this stage."
         return (offset = missing, uncompressed_size = 0, compressed_size = 0)
     end
 
