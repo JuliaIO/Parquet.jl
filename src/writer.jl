@@ -216,7 +216,7 @@ function write_encoded_data(data_to_compress_io, colvals)
 end
 
 # TODO set the encoding code into a dictionary
-function write_col_chunk(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encoding.PLAIN})
+function write_col_page(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encoding.PLAIN})
     """
     Write a chunk of data into a data page using PLAIN encoding where the values
     are written back-to-back in memory and then compressed with the codec.
@@ -275,7 +275,7 @@ function write_col_chunk(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encod
     )
 end
 
-function write_col_chunk(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encoding.PLAIN_DICTIONARY})
+function write_col_page(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encoding.PLAIN_DICTIONARY})
     """write Dictionary encoding data page"""
     error("PLAIN_DICTIONARY encoding not implemented yet")
 
@@ -328,7 +328,7 @@ function write_col_chunk(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encod
     end
 end
 
-function write_col_chunk(fileio, colvals::AbstractArray{T}, codec, encoding) where T
+function write_col_page(fileio, colvals::AbstractArray{T}, codec, encoding) where T
     error("Page encoding $encoding is yet not implemented.")
 end
 
@@ -336,7 +336,7 @@ write_col(fileio, colvals::CategoricalArray, args...; kwars...) = begin
     throw("Currently CategoricalArrays are not supported.")
 end
 
-function write_col(fileio, colvals::AbstractArray{T}, colname, encoding, codec; num_chunks = 1) where T
+function write_col(fileio, colvals::AbstractArray{T}, colname, encoding, codec; nchunks = 1) where T
     """Write a column to a file"""
     # TODO turn writing dictionary on
     # Currently, writing the dictionary page is not turned on for any type.
@@ -346,11 +346,9 @@ function write_col(fileio, colvals::AbstractArray{T}, colname, encoding, codec; 
     # a dictionary page until other dictionary-based encodings are supported
     dict_info = (offset = missing, uncompressed_size = 0, compressed_size = 0)
 
-    num_vals_per_chunk = ceil(Int, length(colvals) / num_chunks)
+    num_vals_per_chunk = ceil(Int, length(colvals) / nchunks)
 
-    # TODO choose an encoding
-    # TODO put encoding into a dictionary
-    chunk_info = [write_col_chunk(fileio, val_chunk, codec, Val(encoding)) for val_chunk in partition(colvals, num_vals_per_chunk)]
+    chunk_info = [write_col_page(fileio, val_chunk, codec, Val(encoding)) for val_chunk in partition(colvals, num_vals_per_chunk)]
 
     sizes = reduce(chunk_info; init = dict_info) do x, y
         (
@@ -359,13 +357,53 @@ function write_col(fileio, colvals::AbstractArray{T}, colname, encoding, codec; 
         )
     end
 
-    return (
-        dictionary_page_offset = dict_info.offset,
-        data_page_offset = chunk_info[1].offset,
-        uncompressed_size = sizes.uncompressed_size,
-        compressed_size = sizes.compressed_size,
-    )
+    # write the column metadata
+    # can probably write the metadata right after the data chunks
+    col_meta = PAR2.ColumnMetaData()
 
+    Thrift.set_field!(col_meta, :_type, COL_TYPE_CODE[eltype(colvals) |> nonmissingtype])
+    # these are all the fields
+    # TODO collect all the encodings used
+    if eltype(colvals) == Bool
+        Thrift.set_field!(col_meta, :encodings, Int32[0, 3])
+    else
+        Thrift.set_field!(col_meta, :encodings, Int32[2, 0, 3])
+    end
+    Thrift.set_field!(col_meta, :path_in_schema, [colname])
+    Thrift.set_field!(col_meta, :codec, codec)
+    Thrift.set_field!(col_meta, :num_values, length(colvals))
+
+    Thrift.set_field!(col_meta, :total_uncompressed_size, sizes.uncompressed_size)
+    Thrift.set_field!(col_meta, :total_compressed_size, sizes.compressed_size)
+
+    Thrift.set_field!(col_meta, :data_page_offset, chunk_info[1].offset)
+    if !ismissing(dict_info.offset)
+        Thrift.set_field!(col_meta, :dictionary_page_offset, dict_info.offset)
+    end
+
+    # write the column meta data right after the data
+    # keep track of the position so it can put into the column chunk
+    # metadata
+    col_meta_offset = position(fileio)
+    write_thrift(fileio, col_meta)
+
+    # Prep metadata for the filemetadata
+    ## column chunk metadata
+    col_chunk_meta = PAR2.ColumnChunk()
+
+    Thrift.set_field!(col_chunk_meta, :file_offset, col_meta_offset)
+    Thrift.set_field!(col_chunk_meta, :meta_data, col_meta)
+    Thrift.clear(col_chunk_meta, :offset_index_offset)
+    Thrift.clear(col_chunk_meta, :offset_index_length)
+    Thrift.clear(col_chunk_meta, :column_index_offset)
+    Thrift.clear(col_chunk_meta, :column_index_length)
+
+    return (
+        data_page_offset = chunk_info[1].offset,
+        dictionary_page_offset =  dict_info.offset,
+        col_chunk_meta = col_chunk_meta,
+        col_meta_offset = col_meta_offset
+    )
 end
 
 function create_schema_parent_node(ncols)
@@ -446,6 +484,39 @@ function write_parquet(path, tbl; compression_codec = "SNAPPY")
     # convert a string or symbol compression codec into the numeric code
     codec = getproperty(PAR2.CompressionCodec, Symbol(uppercase(string(compression_codec))))
 
+    # figure out the right number of chunks
+    # TODO test that it works for all supported table
+    table_size_bytes = Base.summarysize(tbl)
+
+    approx_raw_to_parquet_compression_ratio = 6
+    approx_post_compression_size = (table_size_bytes / 2^30) / approx_raw_to_parquet_compression_ratio
+
+    colnames = String.(Tables.columnnames(tbl))
+    nrows = length(Tables.rows(tbl))
+
+    # if size is larger than 64mb and has more than 6 rows
+    if (approx_post_compression_size > 0.064) & (nrows > 6)
+        recommended_chunks = ceil(Int, approx_post_compression_size / 6) * 6
+    else
+        recommended_chunks = 1
+    end
+
+    _write_parquet(
+        tbl,
+        path,
+        recommended_chunks;
+        encoding    =   Dict(String(col)=>encoding for col in colnames),
+        codec       =   Dict(String(col)=>codec for col in colnames)
+    )
+end
+
+function _write_parquet(tbl, path, nchunks; encoding::Dict{String, Int32}, codec::Dict{String, Int32})
+    """Internal method for writing parquet
+
+    tbl - Expected to be a Tables.jl compatible table
+    path - The output parquet file path
+
+    """
     fileio = open(path, "w")
     write(fileio, "PAR1")
 
@@ -460,26 +531,16 @@ function write_parquet(path, tbl; compression_codec = "SNAPPY")
     col_chunk_metas = Vector{PAR2.ColumnChunk}(undef, ncols)
     row_group_file_offset = missing
 
-    # figure out the right number of chunks
-    # TODO test that it works for all supported table
-    table_size_bytes = Base.summarysize(tbl)
-
-    approx_raw_to_parquet_compression_ratio = 6
-    approx_post_compression_size = (table_size_bytes / 2^30) / approx_raw_to_parquet_compression_ratio
-
-    # if size is larger than 64mb and has more than 6 rows
-    if (approx_post_compression_size > 0.064) & (nrows > 6)
-        recommended_chunks = ceil(Int, approx_post_compression_size / 6) * 6
-    else
-        recommended_chunks = 1
-    end
-
+    # write the columns one by one
+    # TODO parallelize this
     for (coli, colname_sym) in enumerate(colnames)
         colvals = Tables.getcolumn(tbl, colname_sym)
         colname = String(colname_sym)
 
-        # write the data
-        col_info = write_col(fileio, colvals, colname, encoding, codec; num_chunks = recommended_chunks)
+        col_encoding = encoding[colname]
+        col_codec = codec[colname]
+        # write the data including metadata
+        col_info = write_col(fileio, colvals, colname, col_encoding, col_codec; nchunks = nchunks)
 
         # the `row_group_file_offset` keeps track where the data
         # starts, so keep it at the dictonary of the first data
@@ -491,48 +552,7 @@ function write_parquet(path, tbl; compression_codec = "SNAPPY")
             end
         end
 
-        # write the column metadata
-        # can probably write the metadata right after the data chunks
-        col_meta = PAR2.ColumnMetaData()
-
-        Thrift.set_field!(col_meta, :_type, COL_TYPE_CODE[eltype(colvals) |> nonmissingtype])
-        # these are all the fields
-        # TODO collect all the encodings used
-        if eltype(colvals) == Bool
-            Thrift.set_field!(col_meta, :encodings, Int32[0, 3])
-        else
-            Thrift.set_field!(col_meta, :encodings, Int32[2, 0, 3])
-        end
-        Thrift.set_field!(col_meta, :path_in_schema, [colname])
-        Thrift.set_field!(col_meta, :codec, codec)
-        Thrift.set_field!(col_meta, :num_values, length(colvals))
-
-        Thrift.set_field!(col_meta, :total_uncompressed_size, col_info.uncompressed_size)
-        Thrift.set_field!(col_meta, :total_compressed_size, col_info.compressed_size)
-
-        Thrift.set_field!(col_meta, :data_page_offset, col_info.data_page_offset)
-        if !ismissing(col_info.dictionary_page_offset)
-            Thrift.set_field!(col_meta, :dictionary_page_offset, col_info.dictionary_page_offset)
-        end
-
-        # write the column meta data right after the data
-        # keep track of the position so it can put into the column chunk
-        # metadata
-        col_meta_offset = position(fileio)
-        write_thrift(fileio, col_meta)
-
-        # Prep metadata for the filemetadata
-        ## column chunk metadata
-        col_chunk_meta = PAR2.ColumnChunk()
-
-        Thrift.set_field!(col_chunk_meta, :file_offset, col_meta_offset)
-        Thrift.set_field!(col_chunk_meta, :meta_data, col_meta)
-        Thrift.clear(col_chunk_meta, :offset_index_offset)
-        Thrift.clear(col_chunk_meta, :offset_index_length)
-        Thrift.clear(col_chunk_meta, :column_index_offset)
-        Thrift.clear(col_chunk_meta, :column_index_length)
-
-        col_chunk_metas[coli] = col_chunk_meta
+        col_chunk_metas[coli] = col_info.col_chunk_meta
 
         # add the schema
         schemas[coli + 1] = create_col_schema(eltype(colvals) |> nonmissingtype, colname)
