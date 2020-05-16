@@ -9,10 +9,10 @@ using LittleEndianBase128
 using Base.Iterators: partition
 using CategoricalArrays: CategoricalArray, CategoricalValue
 
+using Base: SkipMissing
+
 if VERSION < v"1.3"
-    using Missings: SkipMissing
-else
-    using Base: SkipMissing
+    using Missings: nonmissingtype
 end
 
 # a mapping of Julia types to _Type codes in Parquet format
