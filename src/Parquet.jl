@@ -8,7 +8,7 @@ using CodecZstd
 using MemPool
 using Dates
 
-import Base: show, open, close, values
+import Base: show, open, close, values, eltype, length
 import Thrift: isfilled
 
 export is_par_file, ParFile, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames

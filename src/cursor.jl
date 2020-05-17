@@ -260,6 +260,9 @@ function RecordCursor(par::ParFile; rows::UnitRange{Int64}=1:nrows(par), colname
     RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int,Int}}(undef, length(colcursors)))
 end
 
+eltype(cursor::RecordCursor{T}) where {T} = T
+length(cursor::RecordCursor) = length(first(cursor.colcursors).row.rows)
+
 function state(cursor::RecordCursor)
     col1state = cursor.colstates[1]
     col1state[1] # return row as state

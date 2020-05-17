@@ -70,6 +70,8 @@ function test_load_boolean_and_ts()
     @test length(pg) == 2
 
     rc = RecordCursor(p; rows=1:2, colnames=colnames(p))
+    @test length(rc) == 2
+    @test eltype(rc) == NamedTuple{(:id, :bool_col, :tinyint_col, :smallint_col, :int_col, :bigint_col, :float_col, :double_col, :date_string_col, :string_col, :timestamp_col),Tuple{Union{Missing, Int32},Union{Missing, Bool},Union{Missing, Int32},Union{Missing, Int32},Union{Missing, Int32},Union{Missing, Int64},Union{Missing, Float32},Union{Missing, Float64},Union{Missing, Array{UInt8,1}},Union{Missing, Array{UInt8,1}},Union{Missing, Int128}}}
 
     values = Any[]
     for rec in rc
@@ -92,6 +94,9 @@ function test_load_nested()
     @test ncols(p) == 5
 
     rc = RecordCursor(p)
+    @test length(rc) == 100
+    @test eltype(rc) == NamedTuple{(:_adobe_corpnew,),Tuple{NamedTuple{(:id, :vocab, :frequency, :max_len, :reduced_max_len),Tuple{Union{Missing, Int32},Union{Missing, Array{UInt8,1}},Union{Missing, Int32},Union{Missing, Float64},Union{Missing, Int32}}}}}
+
     values = Any[]
     for rec in rc
         push!(values, rec)
