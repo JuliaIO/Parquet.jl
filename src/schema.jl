@@ -1,12 +1,21 @@
+# A logical type map can be provided during schema construction.
+# It contains mapping of a column to a logical type and the converter function to be applied.
+# Columns can be indentified either by their actual type or column name (the full path in the schema)
+const TLogicalTypeMap = Dict{Union{Int32,Vector{String}},Tuple{DataType,Function}}
+const DEFAULT_LOGICAL_TYPE_MAP = TLogicalTypeMap(
+    _Type.INT96 => (DateTime, logical_timestamp),
+    _Type.BYTE_ARRAY => (String, logical_string)
+)
 
 # schema and helper methods
 mutable struct Schema
     schema::Vector{SchemaElement}
+    map_logical_types::TLogicalTypeMap
     name_lookup::Dict{Vector{String},SchemaElement}
     type_lookup::Dict{Vector{String},Union{DataType,Union}}
     nttype_lookup::Dict{Vector{String},Union{DataType,Union}}
 
-    function Schema(elems::Vector{SchemaElement})
+    function Schema(elems::Vector{SchemaElement}, map_logical_types::TLogicalTypeMap=TLogicalTypeMap())
         name_lookup = Dict{Vector{String},SchemaElement}()
         name_stack = String[]
         nchildren_stack = Int[]
@@ -28,7 +37,7 @@ mutable struct Schema
                 end
             end
         end
-        new(elems, name_lookup, Dict{Vector{String},Union{DataType,Union}}(), Dict{Vector{String},Union{DataType,Union}}())
+        new(elems, map_logical_types, name_lookup, Dict{Vector{String},Union{DataType,Union}}(), Dict{Vector{String},Union{DataType,Union}}())
     end
 end
 
@@ -51,20 +60,51 @@ isoptional(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionTy
 isrepeated(sch::Schema, schname::Vector{String}) = isrepeated(elem(sch, schname))
 isrepeated(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.REPEATED)
 
-elemtype(sch::Schema, schname::Vector{String}) = get!(sch.type_lookup, schname) do
-    elemtype(sch.name_lookup[schname])
+function path_in_schema(sch::Schema, schelem::SchemaElement)
+    for (n,v) in sch.name_lookup
+        (v === schelem) && return n
+    end
+    error("schema element not found in schema")
 end
-function elemtype(sch::SchemaElement)
+
+function logical_convert(sch::Schema, schname::Vector{String}, val)
+    elem = sch.name_lookup[schname]
+
+    if schname in keys(sch.map_logical_types)
+        logical_type, converter = sch.map_logical_types[schname]
+        converter(val)::logical_type
+    elseif isfilled(elem, :_type) && (elem._type in keys(sch.map_logical_types))
+        logical_type, converter = sch.map_logical_types[elem._type]
+        converter(val)::logical_type
+    else
+        val
+    end
+end
+
+elemtype(sch::Schema, schname::Vector{String}) = get!(sch.type_lookup, schname) do
+    elem = sch.name_lookup[schname]
+
+    if schname in keys(sch.map_logical_types)
+        logical_type, _converter = sch.map_logical_types[schname]
+        logical_type
+    elseif isfilled(elem, :_type) && (elem._type in keys(sch.map_logical_types))
+        logical_type, _converter = sch.map_logical_types[elem._type]
+        logical_type
+    else
+        elemtype(elem)
+    end
+end
+function elemtype(schelem::SchemaElement)
     jtype = Nothing
 
-    if isfilled(sch, :_type)
-        jtype = PLAIN_JTYPES[sch._type+1]
+    if isfilled(schelem, :_type)
+        jtype = PLAIN_JTYPES[schelem._type+1]
     else
         jtype = Dict{Symbol,Any} # this is a nested type
     end
 
-    if (isfilled(sch, :_type) && (sch._type == _Type.BYTE_ARRAY || sch._type == _Type.FIXED_LEN_BYTE_ARRAY)) ||
-       (isfilled(sch, :repetition_type) && (sch.repetition_type == FieldRepetitionType.REPEATED))  # array type
+    if (isfilled(schelem, :_type) && (schelem._type == _Type.BYTE_ARRAY || schelem._type == _Type.FIXED_LEN_BYTE_ARRAY)) ||
+       (isfilled(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REPEATED))  # array type
         jtype = Vector{jtype}
     end
 
@@ -79,7 +119,7 @@ function ntelemtype(sch::Schema, schelem::SchemaElement)
     idx = findfirst(x->x===schelem, sch.schema)
     children_range = (idx+1):(idx+schelem.num_children)
     names = [Symbol(x.name) for x in sch.schema[children_range]]
-    types = [(num_children(x) > 0) ? ntelemtype(sch, x) : elemtype(x) for x in sch.schema[children_range]]
+    types = [(num_children(x) > 0) ? ntelemtype(sch, path_in_schema(sch, x)) : elemtype(sch, path_in_schema(sch, x)) for x in sch.schema[children_range]]
     optionals = [isoptional(x) for x in sch.schema[children_range]]
     types = [opt ? Union{t,Missing} : t for (t,opt) in zip(types, optionals)]
     NamedTuple{(names...,),Tuple{types...}}

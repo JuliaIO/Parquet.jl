@@ -360,7 +360,7 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, nameparts::Vector{St
             F = Vrep[repidx]
         elseif !defined && mustdefine
             if idx == length(nameparts)
-                V = val
+                V = logical_convert(sch, nameparts, val)
             else
                 Vtyp = elemtype(sch, colname)
                 V = default_init(Vtyp)

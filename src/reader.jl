@@ -29,33 +29,52 @@ function cacheget(lru::PageLRU, chunk::ColumnChunk, nf)
     end
 end
 
-# parquet file.
-# Keeps a handle to the open file and the file metadata.
-# Holds a LRU cache of raw bytes of the pages read.
+"""
+    ParFile(path; map_logical_types) => ParFile
+
+Represents a Parquet file at `path` open for reading. Options to map logical types can be provided via `map_logical_types`.
+
+`map_logical_types` can be one of:
+
+- `false`: no mapping is done (default)
+- `true`: default mappings are attempted on all columns (bytearray => String, int96 => DateTime)
+- A user supplied dict mapping column names to a tuple of type and a converter function
+
+Returns a `ParFile` type that keeps a handle to the open file and the file metadata and also holds a LRU cache of raw bytes of the pages read.
+"""
 mutable struct ParFile
-    path::AbstractString
+    path::String
     handle::IOStream
     meta::FileMetaData
     schema::Schema
     page_cache::PageLRU
 end
 
-function ParFile(path::AbstractString)
+function ParFile(path::AbstractString; map_logical_types::Union{Bool,Dict}=false)
     f = open(path)
     try
-        return ParFile(path, f)
+        return ParFile(path, f; map_logical_types=map_logical_types)
     catch ex
         close(f)
         rethrow(ex)
     end
 end
 
-function ParFile(path::AbstractString, handle::IOStream; maxcache::Integer=10)
-    # TODO: maxcache should become a parameter to MemPool
+function ParFile(path::AbstractString, handle::IOStream; map_logical_types::Union{Bool,Dict}=false)
     is_par_file(handle) || error("Not a parquet format file: $path")
     meta_len = metadata_length(handle)
     meta = metadata(handle, path, meta_len)
-    ParFile(path, handle, meta, Schema(meta.schema), PageLRU())
+
+    typemap = map_logical_types == false ? TLogicalTypeMap() :
+              map_logical_types == true  ? DEFAULT_LOGICAL_TYPE_MAP :
+              TLogicalTypeMap(map_logical_types)
+
+    ParFile(String(path), handle, meta, Schema(meta.schema, typemap), PageLRU())
+end
+
+function close(par::ParFile)
+    empty!(par.page_cache.refs)
+    close(par.handle)
 end
 
 ##

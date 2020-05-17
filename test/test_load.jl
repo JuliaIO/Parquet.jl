@@ -86,6 +86,27 @@ function test_load_boolean_and_ts()
     #@test [v.bool_col for v in values] == dlm[:,2]  # skipping for now as this needs additional dependency on DelimitedFiles
 end
 
+function test_logical_type_mapping()
+    println("testing default logical type mapping...")
+
+    p = ParFile(joinpath(@__DIR__, "booltest", "alltypes_plain.snappy.parquet"); map_logical_types=true)
+    rc = RecordCursor(p)
+    @test eltype(rc) == NamedTuple{(:id, :bool_col, :tinyint_col, :smallint_col, :int_col, :bigint_col, :float_col, :double_col, :date_string_col, :string_col, :timestamp_col),Tuple{Union{Missing, Int32},Union{Missing, Bool},Union{Missing, Int32},Union{Missing, Int32},Union{Missing, Int32},Union{Missing, Int64},Union{Missing, Float32},Union{Missing, Float64},Union{Missing, String},Union{Missing, String},Union{Missing, DateTime}}}
+
+    values = collect(rc)
+    @test [v.bool_col for v in values] == [true,false]
+    @test [v.timestamp_col for v in values] == [DateTime("2009-04-01T12:00:00"), DateTime("2009-04-01T12:01:00")]
+    @test [v.date_string_col for v in values] == ["04/01/09", "04/01/09"]
+
+
+    p = ParFile(joinpath(@__DIR__, "booltest", "alltypes_plain.snappy.parquet"); map_logical_types=Dict(["timestamp_col"]=>(DateTime,v->logical_timestamp(v; offset=Dates.Second(30)))))
+    rc = RecordCursor(p)
+    @test eltype(rc) == NamedTuple{(:id, :bool_col, :tinyint_col, :smallint_col, :int_col, :bigint_col, :float_col, :double_col, :date_string_col, :string_col, :timestamp_col),Tuple{Union{Missing, Int32},Union{Missing, Bool},Union{Missing, Int32},Union{Missing, Int32},Union{Missing, Int32},Union{Missing, Int64},Union{Missing, Float32},Union{Missing, Float64},Union{Missing, Array{UInt8,1}},Union{Missing, Array{UInt8,1}},Union{Missing, DateTime}}}
+
+    values = collect(rc)
+    @test [v.timestamp_col for v in values] == [DateTime("2009-04-01T12:00:30"), DateTime("2009-04-01T12:01:30")]
+end
+
 function test_load_nested()
     println("testing nested columns...")
     p = ParFile(joinpath(@__DIR__, "nested", "nested1.parquet"))
@@ -119,4 +140,5 @@ end
 
 test_load_all_pages()
 test_load_boolean_and_ts()
+test_logical_type_mapping()
 test_load_nested()
