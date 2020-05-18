@@ -370,7 +370,7 @@ function metadata_length(io)
     seek(io, sz - SZ_PAR_MAGIC - SZ_FOOTER)
 
     # read footer size as little endian signed Int32
-    ProtoBuf.read_fixed(io, Int32)
+    read_fixed(io, Int32)
 end
 
 function metadata(io, path::AbstractString, len::Integer=metadata_length(io))
