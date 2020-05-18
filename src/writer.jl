@@ -506,7 +506,7 @@ function write_parquet(path, tbl; compression_codec = "SNAPPY")
 
     colnames = String.(Tables.columnnames(tbl))
     _write_parquet(
-        Tables.columns(tbl),
+        Tables.Columns(tbl),
         Tables.columnnames(tbl),
         path,
         recommended_chunks;
