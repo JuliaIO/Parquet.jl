@@ -7,14 +7,14 @@
 mutable struct RowCursor
     par::ParFile
 
-    rows::UnitRange{Int}            # rows to scan over
-    row::Int                        # current row
+    rows::UnitRange{Int64}                      # rows to scan over
+    row::Int64                                  # current row
     
-    rowgroups::Vector{RowGroup}     # row groups in range
-    rg::Union{Int,Nothing}          # current row group
-    rgrange::Union{UnitRange{Int},Nothing} # current rowrange
+    rowgroups::Vector{RowGroup}                 # row groups in range
+    rg::Union{Int,Nothing}                      # current row group
+    rgrange::Union{UnitRange{Int64},Nothing}    # current rowrange
 
-    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::Vector{String}, row::Signed=first(rows))
+    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::Vector{String}, row::Int64=first(rows))
         rgs = rowgroups(par, col, rows)
         cursor = new(par, rows, row, rgs, nothing, nothing)
         setrow(cursor, row)
@@ -22,20 +22,21 @@ mutable struct RowCursor
     end
 end
 
-function setrow(cursor::RowCursor, row::Signed)
+function setrow(cursor::RowCursor, row::Int64)
     cursor.row = row
-    cursor.rgrange!==nothing && (row in cursor.rgrange) && return
-    startrow = 1
-    rgs = cursor.rowgroups
-    for rg in 1:length(rgs)
-        rgrange = startrow:(startrow + rgs[rg].num_rows)
-        if row in rgrange
+    (cursor.rgrange !== nothing) && (cursor.row in cursor.rgrange) && return
+    startrow = Int64(1)
+    rowgroups = cursor.rowgroups
+    for rowgroup_idx in 1:length(rowgroups)
+        rowgroup_row_range = startrow:(startrow + rowgroups[rowgroup_idx].num_rows)
+        if row in rowgroup_row_range
             cursor.row = row
-            cursor.rg = rg
-            cursor.rgrange = rgrange
+            cursor.rg = rowgroup_idx
+            cursor.rgrange = rowgroup_row_range
             return
+        else
+            startrow = last(rowgroup_row_range) + 1
         end
-        startrow = last(rgrange) + 1
     end
     throw(BoundsError(par.path, row))
 end
@@ -47,8 +48,8 @@ function _start(cursor::RowCursor)
     setrow(cursor, row)
     row
 end
-_done(cursor::RowCursor, row::Signed) = (row > last(cursor.rows))
-function _next(cursor::RowCursor, row::Signed)
+_done(cursor::RowCursor, row::Int64) = (row > last(cursor.rows))
+function _next(cursor::RowCursor, row::Int64)
     setrow(cursor, row)
     row, (row+1)
 end
@@ -74,15 +75,15 @@ mutable struct ColCursor{T}
 
     colchunks::Union{Vector{ColumnChunk},Nothing}
     cc::Union{Int,Nothing}
-    ccrange::Union{UnitRange{Int},Nothing}
+    ccrange::Union{UnitRange{Int64},Nothing}
 
     vals::Vector{T}
-    valpos::Int
+    valpos::Int64
     #valrange::UnitRange{Int}
 
     defn_levels::Vector{Int}
     repn_levels::Vector{Int}
-    levelpos::Int
+    levelpos::Int64
     levelrange::UnitRange{Int}
 
     function ColCursor{T}(row::RowCursor, colname::Vector{String}) where T
@@ -91,14 +92,14 @@ mutable struct ColCursor{T}
     end
 end
 
-function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::Vector{String}, row::Signed=first(rows))
+function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::Vector{String}, row::Int64=first(rows))
     rowcursor = RowCursor(par, rows, colname, row)
 
-    rg = rowcursor.rowgroups[rowcursor.rg] 
-    colchunks = columns(par, rg, colname)
-    ctype = coltype(colchunks[1])
-    T = PLAIN_JTYPES[ctype+1]
-    if (ctype == _Type.BYTE_ARRAY) || (ctype == _Type.FIXED_LEN_BYTE_ARRAY)
+    rowgroup = rowcursor.rowgroups[rowcursor.rg] 
+    colchunks = columns(par, rowgroup, colname)
+    parquet_coltype = coltype(colchunks[1])
+    T = PLAIN_JTYPES[parquet_coltype+1]
+    if (parquet_coltype == _Type.BYTE_ARRAY) || (parquet_coltype == _Type.FIXED_LEN_BYTE_ARRAY)
         T = Vector{T}
     end
 
@@ -107,7 +108,7 @@ function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::Vector{String}
     cursor
 end
 
-function setrow(cursor::ColCursor{T}, row::Signed) where {T}
+function setrow(cursor::ColCursor{T}, row::Int64) where {T}
     par = cursor.row.par
     rg = cursor.row.rowgroups[cursor.row.rg]
     ccincr = (row - cursor.row.row) == 1 # whether this is just an increment within the column chunk
@@ -118,7 +119,7 @@ function setrow(cursor::ColCursor{T}, row::Signed) where {T}
     if _done(cursor.row, row)
         cursor.cc = length(cursor.colchunks) + 1
         cursor.ccrange = row:(row-1)
-        cursor.vals = Array{T}(undef, 0)
+        cursor.vals = Vector{T}()
         cursor.repn_levels = cursor.defn_levels = Int[]
         cursor.valpos = cursor.levelpos = 0
         cursor.levelrange = 0:-1 #cursor.valrange = 0:-1
@@ -159,6 +160,7 @@ function setrow(cursor::ColCursor{T}, row::Signed) where {T}
     ccrange = cursor.ccrange
     defn_levels = cursor.defn_levels
     repn_levels = cursor.repn_levels
+    levelpos = valpos = Int64(0)
 
     # compute the level and value pos for row
     if isempty(repn_levels)
@@ -205,11 +207,11 @@ function _start(cursor::ColCursor)
     setrow(cursor, row)
     row, cursor.levelpos
 end
-function _done(cursor::ColCursor, rowandlevel::Tuple{Int,Int})
+function _done(cursor::ColCursor, rowandlevel::Tuple{Int64,Int64})
     row, levelpos = rowandlevel
     (levelpos > last(cursor.levelrange)) && _done(cursor.row, row)
 end
-function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int,Int}) where {T}
+function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int64,Int64}) where {T}
     # find values for current row and level in row
     row, levelpos = rowandlevel
     (levelpos == cursor.levelpos) || throw(InvalidStateException("Invalid column cursor state", :levelpos))
@@ -250,31 +252,31 @@ mutable struct RecordCursor{T}
     par::ParFile
     colnames::Vector{Vector{String}}
     colcursors::Vector{ColCursor}
-    colstates::Vector{Tuple{Int,Int}}
+    colstates::Vector{Tuple{Int64,Int64}}
 end
 
-function RecordCursor(par::ParFile; rows::UnitRange{Int64}=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par), row::Signed=first(rows))
-    colcursors = [ColCursor(par, rows, colname, row) for colname in colnames]
+function RecordCursor(par::ParFile; rows::UnitRange=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par), row::Signed=first(rows))
+    colcursors = [ColCursor(par, UnitRange{Int64}(rows), colname, Int64(row)) for colname in colnames]
     sch = schema(par)
     rectype = ntelemtype(sch, sch.schema[1])
-    RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int,Int}}(undef, length(colcursors)))
+    RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)))
 end
 
 eltype(cursor::RecordCursor{T}) where {T} = T
 length(cursor::RecordCursor) = length(first(cursor.colcursors).row.rows)
 
 function state(cursor::RecordCursor)
-    col1state = cursor.colstates[1]
-    col1state[1] # return row as state
+    col1_row, _col1_level = first(cursor.colstates)
+    col1_row # return row as state, picked up from the state of first column
 end
 
 function _start(cursor::RecordCursor)
     cursor.colstates = [_start(colcursor) for colcursor in cursor.colcursors]
     state(cursor)
 end
-_done(cursor::RecordCursor, row::Signed) = _done(cursor.colcursors[1].row, row)
+_done(cursor::RecordCursor, row::Int64) = _done(cursor.colcursors[1].row, row)
 
-function _next(cursor::RecordCursor{T}, row::Signed) where {T}
+function _next(cursor::RecordCursor{T}, _row::Int64) where {T}
     states = cursor.colstates
     cursors = cursor.colcursors
 
