@@ -1,15 +1,6 @@
 ##
 # layer 3 access
-# read data as records, in the following forms:
-# - plain Julia types (use isdefined to check if member is set, but can't do this check for members that are primitive type)
-# - Thrift types (use Thrift.isfilled to check if member is set)
-# - ProtoBuf types (use ProtoBuf.isfilled to check if member is set)
-#
-# Builder implementations do the appropriate translation from column chunks to types.
-# RecordCursor uses Builders for the result types.
-
-abstract type AbstractBuilder{T} end
-#
+# read data as records which are named tuple representations of the schema
 
 ##
 # Row cursor iterates through row numbers of a column 
@@ -23,7 +14,7 @@ mutable struct RowCursor
     rg::Union{Int,Nothing}          # current row group
     rgrange::Union{UnitRange{Int},Nothing} # current rowrange
 
-    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::AbstractString, row::Signed=first(rows))
+    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::Vector{String}, row::Signed=first(rows))
         rgs = rowgroups(par, col, rows)
         cursor = new(par, rows, row, rgs, nothing, nothing)
         setrow(cursor, row)
@@ -78,7 +69,7 @@ end
 # Row can be deduced from repetition level.
 mutable struct ColCursor{T}
     row::RowCursor
-    colname::AbstractString
+    colname::Vector{String}
     maxdefn::Int
 
     colchunks::Union{Vector{ColumnChunk},Nothing}
@@ -94,13 +85,13 @@ mutable struct ColCursor{T}
     levelpos::Int
     levelrange::UnitRange{Int}
 
-    function ColCursor{T}(row::RowCursor, colname::AbstractString) where T
+    function ColCursor{T}(row::RowCursor, colname::Vector{String}) where T
         maxdefn = max_definition_level(schema(row.par), colname)
-        new{T}(row, colname, maxdefn,nothing,nothing,nothing)
+        new{T}(row, colname, maxdefn, nothing, nothing, nothing)
     end
 end
 
-function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::AbstractString, row::Signed=first(rows))
+function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::Vector{String}, row::Signed=first(rows))
     rowcursor = RowCursor(par, rows, colname, row)
 
     rg = rowcursor.rowgroups[rowcursor.rg] 
@@ -254,94 +245,85 @@ function Base.iterate(cursor::ColCursor)
 end
 
 ##
-# Record cursor iterates over multiple columns and returns rows as records
-mutable struct RecCursor{T}
-    colnames::Vector{AbstractString}
+
+mutable struct RecordCursor{T}
+    par::ParFile
+    colnames::Vector{Vector{String}}
     colcursors::Vector{ColCursor}
-    builder::T
-
     colstates::Vector{Tuple{Int,Int}}
-    #colfilters::Vector{Function}
-    #recfilter::Function
 end
 
-function RecCursor(par::ParFile, rows::UnitRange{Int64}, colnames::Vector{AbstractString}, builder::T, row::Signed=first(rows)) where {T <: AbstractBuilder}
+function RecordCursor(par::ParFile; rows::UnitRange{Int64}=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par), row::Signed=first(rows))
     colcursors = [ColCursor(par, rows, colname, row) for colname in colnames]
-    RecCursor{T}(colnames, colcursors, builder, Array{Tuple{Int,Int}}(undef, length(colcursors)))
+    sch = schema(par)
+    rectype = ntelemtype(sch, sch.schema[1])
+    RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int,Int}}(undef, length(colcursors)))
 end
 
-function state(cursor::RecCursor)
+eltype(cursor::RecordCursor{T}) where {T} = T
+length(cursor::RecordCursor) = length(first(cursor.colcursors).row.rows)
+
+function state(cursor::RecordCursor)
     col1state = cursor.colstates[1]
     col1state[1] # return row as state
 end
 
-function _start(cursor::RecCursor)
+function _start(cursor::RecordCursor)
     cursor.colstates = [_start(colcursor) for colcursor in cursor.colcursors]
     state(cursor)
 end
-_done(cursor::RecCursor, row::Signed) = _done(cursor.colcursors[1].row, row)
+_done(cursor::RecordCursor, row::Signed) = _done(cursor.colcursors[1].row, row)
 
-function _next(cursor::RecCursor{T}, row::Signed) where {T}
+function _next(cursor::RecordCursor{T}, row::Signed) where {T}
     states = cursor.colstates
     cursors = cursor.colcursors
-    builder = cursor.builder
 
-    row = init(cursor.builder)
-    for colid in 1:length(states)                               # for each column
+    row = Dict{Symbol,Any}()
+    col_repeat_state = Dict{AbstractString,Int}()
+    for colid in 1:length(states)                                                               # for each column
         colcursor = cursors[colid]
-        colval, colstate = _next(colcursor, states[colid])       # for each value, defn level, repn level in column
+        colval, colstate = _next(colcursor, states[colid])                                      # for each value, defn level, repn level in column
         val, def, rep = colval
-        update(builder, row, colcursor.colname, val, def, rep)  # update record
-        states[colid] = colstate                                # set last state to states
+        update_record(cursor.par, row, colcursor.colname, val, def, rep, col_repeat_state)      # update record
+        states[colid] = colstate                                                                # set last state to states
     end
-    row, state(cursor)
+    _nt(row, T), state(cursor)
 end
 
-function Base.iterate(cursor::RecCursor, state)
+function Base.iterate(cursor::RecordCursor{T}, state) where {T}
     _done(cursor, state) && return nothing
     return _next(cursor, state)
 end
 
-function Base.iterate(cursor::RecCursor)
+function Base.iterate(cursor::RecordCursor{T}) where {T}
     r = iterate(cursor, _start(cursor))
     return r
 end
 
-##
-# JuliaBuilder creates a plain Julia object
-function default_init(::Type{T}) where {T}
-    if T <: Array
-        Array{eltype(T)}(0)
-    else
-        ccall(:jl_new_struct_uninit, Any, (Any,), T)::T
+function _nt(dict::Dict{Symbol,Any}, ::Type{T}) where {T}
+    _val_or_missing = (idx,k) -> begin
+        v = get(dict, k, missing)
+        isa(v, Dict{Symbol,Any}) ? _nt(v, T.types[idx]) : v
     end
+    values = [_val_or_missing(idx,k) for (idx,k) in enumerate(T.names)]
+    T((values...,))
 end
 
-mutable struct JuliaBuilder{T} <: AbstractBuilder{T}
-    par::ParFile
-    rowtype::Type{T}
-    initfn::Function
-    col_repeat_state::Dict{AbstractString,Int}
-end
-JuliaBuilder(par::ParFile, T::DataType, initfn::Function=default_init) = JuliaBuilder{T}(par, T, initfn, Dict{AbstractString,Int}())
+default_init(::Type{Vector{T}}) where {T} = Vector{T}()
+default_init(::Type{Dict{Symbol,Any}}) = Dict{Symbol,Any}()
+default_init(::Type{T}) where {T} = ccall(:jl_new_struct_uninit, Any, (Any,), T)::T
 
-function init(builder::JuliaBuilder{T}) where {T}
-    empty!(builder.col_repeat_state)
-    builder.initfn(T)::T
-end
-
-function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val, defn_level::Signed, repn_level::Signed) where {T}
-    #@debug("updating $fqcolname")
-    nameparts = split(fqcolname, '.')
-    sch = builder.par.schema
-    F = row  # the current field corresponding to the level in fqcolname
+function update_record(par::ParFile, row::Dict{Symbol,Any}, nameparts::Vector{String}, val, defn_level::Signed, repn_level::Signed, col_repeat_state::Dict{AbstractString,Int})
+    lparts = length(nameparts)
+    sch = par.schema
+    F = row  # the current field corresponding to the level in nameparts
     Fdefn = 0
     Frepn = 0
 
     # for each name part of colname (a field)
-    for idx in 1:length(nameparts)
-        colname = join(nameparts[1:idx], '.')
-        #@debug("updating part $colname of $fqcolname isnull:$(val === nothing), def:$(defn_level), rep:$(repn_level)")
+    for idx in 1:lparts
+        colname = nameparts[1:idx]
+        #@debug("updating part $colname of $nameparts isnull:$(val === nothing), def:$(defn_level), rep:$(repn_level)")
         leaf = nameparts[idx]
         symleaf = Symbol(leaf)
 
@@ -350,40 +332,43 @@ function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val
         required || (Fdefn += 1)                    # if field is optional, increment defn level
         repeated && (Frepn += 1)                    # if field can repeat, increment repn level
 
-        defined = (val === nothing) ? isdefined(F, symleaf) : false
+        defined = ((val === nothing) || (idx < lparts)) ? haskey(F, symleaf) : false
         mustdefine = defn_level >= Fdefn
         mustrepeat = repeated && (repn_level == Frepn)
-        repkey = fqcolname * ":" * colname
-        repidx = get(builder.col_repeat_state, repkey, 0)
+        repkey = join(nameparts, '.') * ":" * join(colname, '.')
+        repidx = get(col_repeat_state, repkey, 0)
         if mustrepeat
             repidx += 1
-            builder.col_repeat_state[repkey] = repidx
+            col_repeat_state[repkey] = repidx
         end
-        nreps = defined ? length(getfield(F, symleaf)) : 0
+        nreps = (defined && isa(F[symleaf], Vector)) ? length(F[symleaf]) : 0
 
         #@debug("repeat:$mustrepeat, nreps:$nreps, repidx:$repidx, defined:$defined, mustdefine:$mustdefine")
         if mustrepeat && (nreps < repidx)
             if !defined && mustdefine
-                Vrep = builder.initfn(fieldtype(typeof(F), symleaf))
-                setfield!(F, symleaf, Vrep)
+                Vtyp = elemtype(sch, colname)
+                Vrep = F[symleaf] = default_init(Vtyp)
             else
-                Vrep = getfield(F, symleaf)
+                Vrep = F[symleaf]
             end
             if length(Vrep) < repidx
                 resize!(Vrep, repidx)
                 if !isbits(eltype(Vrep))
-                    Vrep[repidx] = builder.initfn(eltype(Vrep))
+                    Vrep[repidx] = default_init(eltype(Vrep))
                 end
             end
             F = Vrep[repidx]
         elseif !defined && mustdefine
             if idx == length(nameparts)
-                V = val
+                V = logical_convert(sch, nameparts, val)
             else
-                V = builder.initfn(fieldtype(typeof(F), symleaf))
+                Vtyp = elemtype(sch, colname)
+                V = default_init(Vtyp)
             end
-            setfield!(F, symleaf, V)
+            F[symleaf] = V
             F = V
+        else
+            F = get(F, symleaf, nothing)
         end
     end
     nothing
