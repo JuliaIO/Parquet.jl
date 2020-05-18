@@ -15,14 +15,14 @@ end
 using Pkg
 const PARQUET_JL_VERSION = VersionNumber(Pkg.TOML.parsefile(joinpath(@__DIR__, "..", "Project.toml"))["version"])
 
-import Base: show, open, close, values
+import Base: show, open, close, values, eltype, length
 import Thrift: isfilled
 
 export is_par_file, ParFile, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
-export SchemaConverter, schema, JuliaConverter, ThriftConverter, ProtoConverter
+export schema
 export logical_timestamp, logical_string
-export RowCursor, ColCursor, RecCursor
-export AbstractBuilder, JuliaBuilder
+
+export RecordCursor
 export write_parquet
 
 # package code goes here
