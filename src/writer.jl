@@ -515,7 +515,7 @@ function write_parquet(path, tbl; compression_codec = "SNAPPY")
     )
 end
 
-function _write_parquet(itr_vectors, colnames, path, nchunks; encoding::Dict{String, Int32}, codec::Dict{String, Int32})
+function _write_parquet(itr_vectors, colnames, path, nchunks; ncols = length(itr_vectors), encoding::Dict{String, Int32}, codec::Dict{String, Int32})
     """Internal method for writing parquet
 
     itr_vectors -   An iterable of `AbstractVector`s containing the values to be
@@ -523,13 +523,14 @@ function _write_parquet(itr_vectors, colnames, path, nchunks; encoding::Dict{Str
     colnames    -   Column names for each of the vectors
     path        -   The output parquet file path
     nchunks     -   The number of chunks/pages to write for each column
+    ncols       -   The number of columns. This is provided as an argument for
+                    the case where the `length(itr_vectors)` is not defined,
+                    e.g. lazy loading of remote resources.
     encoding    -   A dictionary mapping from column names to encoding
     codec       -   A dictionary mapping from column names to compression codec
     """
     fileio = open(path, "w")
     write(fileio, "PAR1")
-
-    ncols = length(itr_vectors)
 
     # the + 1 comes from the fact that schema is a tree and there is an extra
     # parent node
