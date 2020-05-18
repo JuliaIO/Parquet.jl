@@ -12,8 +12,7 @@ if VERSION < v"1.3"
     using Missings: nonmissingtype
 end
 
-using Pkg
-const PARQUET_JL_VERSION = VersionNumber(Pkg.TOML.parsefile(joinpath(@__DIR__, "..", "Project.toml"))["version"])
+const PARQUET_JL_VERSION = v"0.4.0"
 
 import Base: show, open, close, values, eltype, length
 import Thrift: isfilled
