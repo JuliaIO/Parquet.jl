@@ -1,7 +1,6 @@
 module Parquet
 
 using Thrift
-using ProtoBuf
 using Snappy
 using CodecZlib
 using CodecZstd
