@@ -127,7 +127,7 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
     end
 
     # find the column chunk with the row
-    if cursor.ccrange===nothing || !(row in cursor.ccrange)
+    if (cursor.ccrange === nothing) || !(row in cursor.ccrange)
         offset = rowgroup_offset(cursor.row) # the offset of row from beginning of current rowgroup
         colchunks = cursor.colchunks
 
@@ -137,7 +137,7 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
             if isempty(repn_levels)
                 nrowscc = length(vals) # number of values is number of rows
             else
-                nrowscc = length(repn_levels) - length(find(repn_levels))   # number of values where repeation level is 0
+                nrowscc = length(repn_levels) - length(find(repn_levels))   # number of values where repetition level is 0
             end
             ccrange = startrow:(startrow + nrowscc)
 
@@ -156,49 +156,55 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
         end
     end
 
-    # find the starting positions for values and levels
-    ccrange = cursor.ccrange
-    defn_levels = cursor.defn_levels
-    repn_levels = cursor.repn_levels
-    levelpos = valpos = Int64(0)
-
-    # compute the level and value pos for row
-    if isempty(repn_levels)
-        # no repetitions, so each entry corresponds to one full row
-        levelpos = row - first(ccrange) + 1
-        levelrange = levelpos:levelpos
+    if cursor.ccrange === nothing
+        # we did not find the row in this column
+        cursor.valpos = cursor.levelpos = 0
+        cursor.levelrange = 0:-1 #cursor.valrange = 0:-1
     else
-        # multiple entries may constitute one row
-        idx = first(ccrange)
-        levelpos = findfirst(repn_levels, 0) # NOTE: can start from cursor.levelpos to optimize, but that will prevent using setrow to go backwards
-        while idx < row
-            levelpos = findnext(repn_levels, 0, levelpos+1)
-            idx += 1
-        end
-        levelend = max(findnext(repn_levels, 0, levelpos+1)-1, length(repn_levels))
-        levelrange = levelpos:levelend
-    end
+        # find the starting positions for values and levels
+        ccrange = cursor.ccrange
+        defn_levels = cursor.defn_levels
+        repn_levels = cursor.repn_levels
+        levelpos = valpos = Int64(0)
 
-    # compute the val pos for row
-    if isempty(defn_levels)
-        # all entries are required, so there must be a corresponding value
-        valpos = levelpos
-        #valrange = levelrange
-    else
-        maxdefn = cursor.maxdefn
-        if ccincr
-            valpos = cursor.valpos
+        # compute the level and value pos for row
+        if isempty(repn_levels)
+            # no repetitions, so each entry corresponds to one full row
+            levelpos = row - first(ccrange) + 1
+            levelrange = levelpos:levelpos
         else
-            valpos = sum(view(defn_levels, 1:(levelpos-1)) .== maxdefn) + 1
+            # multiple entries may constitute one row
+            idx = first(ccrange)
+            levelpos = findfirst(repn_levels, 0) # NOTE: can start from cursor.levelpos to optimize, but that will prevent using setrow to go backwards
+            while idx < row
+                levelpos = findnext(repn_levels, 0, levelpos+1)
+                idx += 1
+            end
+            levelend = max(findnext(repn_levels, 0, levelpos+1)-1, length(repn_levels))
+            levelrange = levelpos:levelend
         end
-        #nvals = sum(sub(defn_levels, levelrange) .== maxdefn)
-        #valrange = valpos:(valpos+nvals-1)
-    end
 
-    cursor.levelpos = levelpos
-    cursor.levelrange = levelrange
-    cursor.valpos = valpos
-    #cursor.valrange = valrange
+        # compute the val pos for row
+        if isempty(defn_levels)
+            # all entries are required, so there must be a corresponding value
+            valpos = levelpos
+            #valrange = levelrange
+        else
+            maxdefn = cursor.maxdefn
+            if ccincr
+                valpos = cursor.valpos
+            else
+                valpos = sum(view(defn_levels, 1:(levelpos-1)) .== maxdefn) + 1
+            end
+            #nvals = sum(sub(defn_levels, levelrange) .== maxdefn)
+            #valrange = valpos:(valpos+nvals-1)
+        end
+
+        cursor.levelpos = levelpos
+        cursor.levelrange = levelrange
+        cursor.valpos = valpos
+        #cursor.valrange = valrange
+    end
     nothing
 end
 
@@ -209,7 +215,7 @@ function _start(cursor::ColCursor)
 end
 function _done(cursor::ColCursor, rowandlevel::Tuple{Int64,Int64})
     row, levelpos = rowandlevel
-    (levelpos > last(cursor.levelrange)) && _done(cursor.row, row)
+    (levelpos > last(cursor.levelrange)) || _done(cursor.row, row)
 end
 function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int64,Int64}) where {T}
     # find values for current row and level in row
@@ -253,28 +259,27 @@ mutable struct RecordCursor{T}
     colnames::Vector{Vector{String}}
     colcursors::Vector{ColCursor}
     colstates::Vector{Tuple{Int64,Int64}}
+    rows::UnitRange{Int64}                      # rows to scan over
+    row::Int64                                  # current row
 end
 
 function RecordCursor(par::ParFile; rows::UnitRange=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par), row::Signed=first(rows))
     colcursors = [ColCursor(par, UnitRange{Int64}(rows), colname, Int64(row)) for colname in colnames]
     sch = schema(par)
     rectype = ntelemtype(sch, sch.schema[1])
-    RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)))
+    RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), rows, row)
 end
 
 eltype(cursor::RecordCursor{T}) where {T} = T
-length(cursor::RecordCursor) = length(first(cursor.colcursors).row.rows)
+length(cursor::RecordCursor) = length(cursor.rows)
 
-function state(cursor::RecordCursor)
-    col1_row, _col1_level = first(cursor.colstates)
-    col1_row # return row as state, picked up from the state of first column
-end
+state(cursor::RecordCursor) = cursor.row
 
 function _start(cursor::RecordCursor)
     cursor.colstates = [_start(colcursor) for colcursor in cursor.colcursors]
     state(cursor)
 end
-_done(cursor::RecordCursor, row::Int64) = _done(cursor.colcursors[1].row, row)
+_done(cursor::RecordCursor, row::Int64) = (row > last(cursor.rows))
 
 function _next(cursor::RecordCursor{T}, _row::Int64) where {T}
     states = cursor.colstates
@@ -284,11 +289,14 @@ function _next(cursor::RecordCursor{T}, _row::Int64) where {T}
     col_repeat_state = Dict{AbstractString,Int}()
     for colid in 1:length(states)                                                               # for each column
         colcursor = cursors[colid]
-        colval, colstate = _next(colcursor, states[colid])                                      # for each value, defn level, repn level in column
-        val, def, rep = colval
-        update_record(cursor.par, row, colcursor.colname, val, def, rep, col_repeat_state)      # update record
-        states[colid] = colstate                                                                # set last state to states
+        if !_done(colcursor, states[colid])
+            colval, colstate = _next(colcursor, states[colid])                                      # for each value, defn level, repn level in column
+            val, def, rep = colval
+            update_record(cursor.par, row, colcursor.colname, val, def, rep, col_repeat_state)      # update record
+            states[colid] = colstate                                                                # set last state to states
+        end
     end
+    cursor.row += 1
     _nt(row, T), state(cursor)
 end
 
