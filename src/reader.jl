@@ -76,10 +76,6 @@ function close(par::ParFile)
     close(par.handle)
 end
 
-function Base.close(par::ParFile)
-    close(par.handle)
-end
-
 ##
 # layer 1 access
 # can access raw (uncompressed) bytes from pages

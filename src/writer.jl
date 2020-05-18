@@ -29,8 +29,14 @@ const COL_TYPE_CODE = Dict{DataType, Int32}(
 
 function write_thrift(fileio, thrift_obj)
     """write thrift definition to file"""
+    pos_before_write = position(fileio)
     p = TCompactProtocol(TFileTransport(fileio))
     Thrift.write(p, thrift_obj)
+    pos_after_write = position(fileio)
+
+    size_of_written = pos_after_write - pos_before_write
+
+    size_of_written
 end
 
 function compress_using_codec(colvals::AbstractArray, codec::Integer)::Vector{UInt8}
@@ -111,57 +117,56 @@ function write_defn_levels(data_to_compress_io, colvals::AbstractVector)
     write(data_to_compress_io, repeated_value)
 end
 
-function write_col_dict(fileio, colvals::AbstractArray{T}, codec) where T
-    """ write the column dictionary page """
-    # note: `level`s does not return `missing` as a level
-    uvals = DataAPI.levels(colvals)
-
-    # do not support dictionary with more than 127 levels
-    # TODO relax this 127 restriction
-    if length(uvals) > 127
-        @warn "More than 127 levels in dictionary. Parquet.jl does not support this at this stage."
-        return (offset = missing, uncompressed_size = 0, compressed_size = 0)
-    end
-
-    if nonmissingtype(T) == String
-        # the raw bytes of made of on UInt32 to indicate string length
-        # and the content of the string
-        # so the formula for dict size is as below
-        uncompressed_dict_size = sizeof(UInt32)*length(uvals) + sum(sizeof, uvals)
-    else
-        uncompressed_dict_size = length(uvals)*sizeof(eltype(uvals))
-    end
-
-    compressed_uvals::Vector{UInt8} = compress_using_codec(uvals, codec)
-    compressed_dict_size = length(compressed_uvals)
-
-    # TODO do the CRC properly
-    crc = 0
-
-    # construct dictionary metadata
-    dict_page_header = PAR2.PageHeader()
-
-    Thrift.set_field!(dict_page_header, :_type, PAR2.PageType.DICTIONARY_PAGE)
-    Thrift.set_field!(dict_page_header, :uncompressed_page_size , uncompressed_dict_size)
-    Thrift.set_field!(dict_page_header, :compressed_page_size , compressed_dict_size)
-    Thrift.set_field!(dict_page_header, :crc , crc)
-
-    Thrift.set_field!(dict_page_header, :dictionary_page_header, PAR2.DictionaryPageHeader())
-    Thrift.set_field!(dict_page_header.dictionary_page_header, :num_values , Int32(length(uvals)))
-    Thrift.set_field!(dict_page_header.dictionary_page_header, :encoding , PAR2.Encoding.PLAIN_DICTIONARY)
-    Thrift.set_field!(dict_page_header.dictionary_page_header, :is_sorted , false)
-
-    before_write_page_header_pos = position(fileio)
-
-    write_thrift(fileio, dict_page_header)
-
-    dict_page_header_size = position(fileio) - before_write_page_header_pos
-
-    # write the dictionary data
-    write(fileio, compressed_uvals)
-
-    return (offset = before_write_page_header_pos, uncompressed_size = uncompressed_dict_size + dict_page_header_size, compressed_size = compressed_dict_size + dict_page_header_size)
-end
+# TODO turn this on when writing dictionary is necessary
+# function write_col_dict(fileio, colvals::AbstractArray{T}, codec) where T
+#     """ write the column dictionary page """
+#     # note: `level`s does not return `missing` as a level
+#     uvals = DataAPI.levels(colvals)
+#
+#     # do not support dictionary with more than 127 levels
+#     # TODO relax this 127 restriction
+#     if length(uvals) > 127
+#         @warn "More than 127 levels in dictionary. Parquet.jl does not support this at this stage."
+#         return (offset = missing, uncompressed_size = 0, compressed_size = 0)
+#     end
+#
+#     if nonmissingtype(T) == String
+#         # the raw bytes of made of on UInt32 to indicate string length
+#         # and the content of the string
+#         # so the formula for dict size is as below
+#         uncompressed_dict_size = sizeof(UInt32)*length(uvals) + sum(sizeof, uvals)
+#     else
+#         uncompressed_dict_size = length(uvals)*sizeof(eltype(uvals))
+#     end
+#
+#     compressed_uvals::Vector{UInt8} = compress_using_codec(uvals, codec)
+#     compressed_dict_size = length(compressed_uvals)
+#
+#     # TODO do the CRC properly
+#     crc = 0
+#
+#     # construct dictionary metadata
+#     dict_page_header = PAR2.PageHeader()
+#
+#     Thrift.set_field!(dict_page_header, :_type, PAR2.PageType.DICTIONARY_PAGE)
+#     Thrift.set_field!(dict_page_header, :uncompressed_page_size , uncompressed_dict_size)
+#     Thrift.set_field!(dict_page_header, :compressed_page_size , compressed_dict_size)
+#     Thrift.set_field!(dict_page_header, :crc , crc)
+#
+#     Thrift.set_field!(dict_page_header, :dictionary_page_header, PAR2.DictionaryPageHeader())
+#     Thrift.set_field!(dict_page_header.dictionary_page_header, :num_values , Int32(length(uvals)))
+#     Thrift.set_field!(dict_page_header.dictionary_page_header, :encoding , PAR2.Encoding.PLAIN_DICTIONARY)
+#     Thrift.set_field!(dict_page_header.dictionary_page_header, :is_sorted , false)
+#
+#     before_write_page_header_pos = position(fileio)
+#
+#     dict_page_header_size = write_thrift(fileio, dict_page_header)
+#
+#     # write the dictionary data
+#     write(fileio, compressed_uvals)
+#
+#     return (offset = before_write_page_header_pos, uncompressed_size = uncompressed_dict_size + dict_page_header_size, compressed_size = compressed_dict_size + dict_page_header_size)
+# end
 
 
 write_encoded_data(data_to_compress_io, colvals::AbstractVector{Union{Missing, T}}) where T =
@@ -262,8 +267,8 @@ function write_col_page(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encodi
     Thrift.set_field!(data_page_header.data_page_header, :repetition_level_encoding, PAR2.Encoding.RLE)
 
     position_before_page_header_write = position(fileio)
-    write_thrift(fileio, data_page_header)
-    size_of_page_header_defn_repn = position(fileio) - position_before_page_header_write
+
+    size_of_page_header_defn_repn = write_thrift(fileio, data_page_header)
 
     # write data
     write(fileio, compressed_data)
@@ -501,7 +506,8 @@ function write_parquet(path, tbl; compression_codec = "SNAPPY")
 
     colnames = String.(Tables.columnnames(tbl))
     _write_parquet(
-        tbl,
+        Tables.columns(tbl),
+        Tables.columnnames(tbl),
         path,
         recommended_chunks;
         encoding    =   Dict(col => encoding for col in colnames),
@@ -509,24 +515,23 @@ function write_parquet(path, tbl; compression_codec = "SNAPPY")
     )
 end
 
-function _write_parquet(tbl, path, nchunks; encoding::Dict{String, Int32}, codec::Dict{String, Int32})
+function _write_parquet(itr_vectors, colnames, path, nchunks; encoding::Dict{String, Int32}, codec::Dict{String, Int32})
     """Internal method for writing parquet
 
-    tbl - Expected to be a Tables.jl compatible table
-    path - The output parquet file path
-    nchunks - The number of chunks/pages to write the columns
-    encoding - A dictionary mapping from column names to encoding
-    codec - A dictionary mapping from column names to compressoin codec
-
+    itr_vectors -   An iterable of `AbstractVector`s containing the values to be
+                    written
+    colnames    -   Column names for each of the vectors
+    path        -   The output parquet file path
+    nchunks     -   The number of chunks/pages to write for each column
+    encoding    -   A dictionary mapping from column names to encoding
+    codec       -   A dictionary mapping from column names to compression codec
     """
     fileio = open(path, "w")
     write(fileio, "PAR1")
 
-    colnames = Tables.columnnames(tbl)
-    ncols = length(colnames)
-    nrows = length(Tables.rows(tbl))
+    ncols = length(itr_vectors)
 
-    # the + 1 comes from the fact that schema is tree and there is an extra
+    # the + 1 comes from the fact that schema is a tree and there is an extra
     # parent node
     schemas = Vector{PAR2.SchemaElement}(undef, ncols + 1)
     schemas[1] = create_schema_parent_node(ncols)
@@ -535,8 +540,8 @@ function _write_parquet(tbl, path, nchunks; encoding::Dict{String, Int32}, codec
 
     # write the columns one by one
     # TODO parallelize this
-    for (coli, colname_sym) in enumerate(colnames)
-        colvals = Tables.getcolumn(tbl, colname_sym)
+    nrows = -1 # initialize it
+    for (coli, (colname_sym, colvals)) in enumerate(zip(colnames, itr_vectors))
         colname = String(colname_sym)
 
         col_encoding = encoding[colname]
@@ -544,9 +549,10 @@ function _write_parquet(tbl, path, nchunks; encoding::Dict{String, Int32}, codec
         # write the data including metadata
         col_info = write_col(fileio, colvals, colname, col_encoding, col_codec; nchunks = nchunks)
 
-        # the `row_group_file_offset` keeps track where the data
-        # starts, so keep it at the dictonary of the first data
+        # the `row_group_file_offset` keeps track of where the data starts, so
+        # keep it at the dictonary of the first data
         if coli == 1
+            nrows = length(colvals)
             if ismissing(col_info.dictionary_page_offset)
                 row_group_file_offset = col_info.data_page_offset
             else
@@ -584,13 +590,9 @@ function _write_parquet(tbl, path, nchunks; encoding::Dict{String, Int32}, codec
 
     Thrift.set_field!(filemetadata, :row_groups, [row_group])
 
-    position_before_filemetadata_write = position(fileio)
+    filemetadata_size = write_thrift(fileio, filemetadata)
 
-    write_thrift(fileio, filemetadata)
-
-    filemetadata_size = position(fileio) - position_before_filemetadata_write
-
-    write(fileio, Int32(filemetadata_size))
+    write(fileio, UInt32(filemetadata_size))
     write(fileio, "PAR1")
     close(fileio)
 end
