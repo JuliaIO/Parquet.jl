@@ -218,6 +218,14 @@ function values(par::ParFile, col::ColumnChunk)
             enc, defn_enc, rep_enc = page_encodings(pg)
             if enc == Encoding.PLAIN_DICTIONARY || enc == Encoding.RLE_DICTIONARY
                 append!(vals, map_dict_vals(valdict, _vals))
+                #=
+                if isempty(valdict)
+                    append!(vals, _vals)
+                else
+                    mapped_vals = [valdict[v+1] for v in _vals]
+                    append!(vals, mapped_vals)
+                end
+                =#
             else
                 append!(vals, _vals)
             end
