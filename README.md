@@ -5,6 +5,16 @@
 
 ## Reader
 
+### High level reader
+
+You can read a parquet file using `read_parquet` for example
+
+```
+df =  read_parquet(parquet_file_path);
+```
+
+### Lower level reader
+
 Load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet). Only metadata is read initially, data is loaded in chunks on demand. (Note: [ParquetFiles.jl](https://github.com/queryverse/ParquetFiles.jl) also provides load support for Parquet files under the FileIO.jl package.)
 
 `ParFile` represents a Parquet file at `path` open for reading. Options to map logical types can be provided via `map_logical_types`.
