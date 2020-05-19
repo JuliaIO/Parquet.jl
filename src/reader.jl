@@ -129,13 +129,13 @@ function rowgroups(par::ParFile, cnames::Vector{Vector{String}}, rowrange::UnitR
         cnamesrg = colnames(rowgrp)
         found = length(intersect(cnames, cnamesrg))
         endrow = beginrow + rowgrp.num_rows - 1
-        (found == L) && (length(intersect(beginrow:endrow)) > 0) && push!(R, rowgrp)
+        (found == L) && (length(beginrow:endrow) > 0) && push!(R, rowgrp)
         beginrow = endrow + 1
     end
     R
 end
 
-columns(par::ParFile, rowgroupidx::Integer) = columns(par, rowgroups(par)[rowgroupidx])
+columns(par::ParFile, rowgroupidx) = columns(par, rowgroups(par)[rowgroupidx])
 columns(par::ParFile, rowgroup::RowGroup) = rowgroup.columns
 columns(par::ParFile, rowgroup::RowGroup, colname::Vector{String}) = columns(par, rowgroup, [colname])
 function columns(par::ParFile, rowgroup::RowGroup, cnames::Vector{Vector{String}})
@@ -165,8 +165,8 @@ function _pagevec(par::ParFile, col::ColumnChunk)
     end
     pagevec
 end
-pages(par::ParFile, rowgroupidx::Integer, colidx::Integer) = pages(par, columns(par, rowgroupidx), colidx)
-pages(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = pages(par, cols[colidx])
+pages(par::ParFile, rowgroupidx, colidx) = pages(par, columns(par, rowgroupidx), colidx)
+pages(par::ParFile, cols::Vector{ColumnChunk}, colidx) = pages(par, cols[colidx])
 pages(par::ParFile, col::ColumnChunk) = cacheget(par.page_cache, col, col->_pagevec(par,col))
 
 function bytes(page::Page, uncompressed::Bool=true)
@@ -194,8 +194,8 @@ end
 
 map_dict_vals(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v+1] for v in vals]
 
-values(par::ParFile, rowgroupidx::Integer, colidx::Integer) = values(par, columns(par, rowgroupidx), colidx)
-values(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = values(par, cols[colidx])
+values(par::ParFile, rowgroupidx, colidx) = values(par, columns(par, rowgroupidx), colidx)
+values(par::ParFile, cols::Vector{ColumnChunk}, colidx) = values(par, cols[colidx])
 function values(par::ParFile, col::ColumnChunk)
     ctype = coltype(col)
     pgs = pages(par, col)
@@ -217,6 +217,14 @@ function values(par::ParFile, col::ColumnChunk)
             enc, defn_enc, rep_enc = page_encodings(pg)
             if enc == Encoding.PLAIN_DICTIONARY || enc == Encoding.RLE_DICTIONARY
                 append!(vals, map_dict_vals(valdict, _vals))
+                #=
+                if isempty(valdict)
+                    append!(vals, _vals)
+                else
+                    mapped_vals = [valdict[v+1] for v in _vals]
+                    append!(vals, mapped_vals)
+                end
+                =#
             else
                 append!(vals, _vals)
             end
@@ -231,8 +239,8 @@ function values(par::ParFile, col::ColumnChunk)
     vals, defn_levels, repn_levels
 end
 
-function read_levels(io::IO, max_val::Integer, enc::Int32, num_values::Integer)
-    bw = bitwidth(max_val)
+function read_levels(io::IO, max_val::Int, enc::Int32, num_values::Int32)
+    bw = UInt8(bitwidth(max_val))
     (bw == 0) && (return Int[])
     @debug("reading levels. enc:$enc ($(Thrift.enumstr(Encoding,enc))), max_val:$max_val, num_values:$num_values")
 
@@ -248,7 +256,7 @@ function read_levels(io::IO, max_val::Integer, enc::Int32, num_values::Integer)
     end
 end
 
-function read_values(io::IO, enc::Int32, typ::Int32, num_values::Integer)
+function read_values(io::IO, enc::Int32, typ::Int32, num_values::Int32)
     @debug("reading values. enc:$enc ($(Thrift.enumstr(Encoding,enc))), num_values:$num_values")
 
     if enc == Encoding.PLAIN
@@ -279,7 +287,7 @@ function values(par::ParFile, page::Page)
     end
 end
 
-function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::Integer, par::ParFile, page::Page)
+function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::Int32, par::ParFile, page::Page)
     cname = colname(page.colchunk)
     enc, defn_enc, rep_enc = encs
 
@@ -297,7 +305,7 @@ function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::I
     # where defn_levels's elements == 1 are present and only
     # sum(defn_levels) values can be read.
     # because defn_levels == 0 are where the missing vlaues are
-    nmissing = sum(==(0), defn_levels)
+    nmissing = Int32(sum(==(0), defn_levels))
     vals = read_values(io, enc, ctype, num_values - nmissing)
 
     vals, defn_levels, repn_levels

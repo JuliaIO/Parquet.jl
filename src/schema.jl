@@ -41,23 +41,23 @@ mutable struct Schema
     end
 end
 
-leafname(schname::Vector{String}) = [schname[end]]
+leafname(schname::T) where {T <: AbstractVector{String}} = [schname[end]]
 
-parentname(schname::Vector{String}) = istoplevel(schname) ? schname : schname[1:(end-1)]
+parentname(schname::T) where {T <: AbstractVector{String}} = istoplevel(schname) ? schname : schname[1:(end-1)]
 
 istoplevel(schname::Vector) = !(length(schname) > 1)
 
-elem(sch::Schema, schname::Vector{String}) = sch.name_lookup[schname]
+elem(sch::Schema, schname::T) where {T <: AbstractVector{String}} = sch.name_lookup[schname]
 
 isrepetitiontype(schelem::SchemaElement, repetition_type) = Thrift.isfilled(schelem, :repetition_type) && (schelem.repetition_type == repetition_type)
 
-isrequired(sch::Schema, schname::Vector{String}) = isrequired(elem(sch, schname))
+isrequired(sch::Schema, schname::T) where {T <: AbstractVector{String}} = isrequired(elem(sch, schname))
 isrequired(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.REQUIRED)
 
-isoptional(sch::Schema, schname::Vector{String}) = isoptional(elem(sch, schname))
+isoptional(sch::Schema, schname::T) where {T <: AbstractVector{String}} = isoptional(elem(sch, schname))
 isoptional(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.OPTIONAL)
 
-isrepeated(sch::Schema, schname::Vector{String}) = isrepeated(elem(sch, schname))
+isrepeated(sch::Schema, schname::T) where {T <: AbstractVector{String}} = isrepeated(elem(sch, schname))
 isrepeated(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.REPEATED)
 
 function path_in_schema(sch::Schema, schelem::SchemaElement)
@@ -67,7 +67,7 @@ function path_in_schema(sch::Schema, schelem::SchemaElement)
     error("schema element not found in schema")
 end
 
-function logical_convert(sch::Schema, schname::Vector{String}, val)
+function logical_convert(sch::Schema, schname::T, val) where {T <: AbstractVector{String}}
     elem = sch.name_lookup[schname]
 
     if schname in keys(sch.map_logical_types)
@@ -81,7 +81,7 @@ function logical_convert(sch::Schema, schname::Vector{String}, val)
     end
 end
 
-elemtype(sch::Schema, schname::Vector{String}) = get!(sch.type_lookup, schname) do
+elemtype(sch::Schema, schname::T) where {T <: AbstractVector{String}} = get!(sch.type_lookup, schname) do
     elem = sch.name_lookup[schname]
 
     if schname in keys(sch.map_logical_types)
@@ -111,7 +111,7 @@ function elemtype(schelem::SchemaElement)
     jtype
 end
 
-ntelemtype(sch::Schema, schname::Vector{String}) = get!(sch.nttype_lookup, schname) do
+ntelemtype(sch::Schema, schname::T) where {T <: AbstractVector{String}} = get!(sch.nttype_lookup, schname) do
     ntelemtype(sch, sch.name_lookup[schname])
 end
 function ntelemtype(sch::Schema, schelem::SchemaElement)
@@ -130,12 +130,12 @@ bit_or_byte_length(schelem::SchemaElement) = Thrift.isfilled(schelem, :type_leng
 
 num_children(schelem::SchemaElement) = Thrift.isfilled(schelem, :num_children) ? schelem.num_children : 0
 
-function max_repetition_level(sch::Schema, schname::Vector{String})
+function max_repetition_level(sch::Schema, schname::T) where {T <: AbstractVector{String}}
     lev = isrepeated(sch, schname) ? 1 : 0
     istoplevel(schname) ? lev : (lev + max_repetition_level(sch, parentname(schname)))
 end 
 
-function max_definition_level(sch::Schema, schname::Vector{String})
+function max_definition_level(sch::Schema, schname::T) where {T <: AbstractVector{String}}
     lev = isrequired(sch, schname) ? 0 : 1
     istoplevel(schname) ? lev : (lev + max_definition_level(sch, parentname(schname)))
 end 
