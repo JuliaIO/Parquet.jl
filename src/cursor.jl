@@ -1,29 +1,20 @@
 ##
 # layer 3 access
-# read data as records, in the following forms:
-# - plain Julia types (use isdefined to check if member is set, but can't do this check for members that are primitive type)
-# - Thrift types (use Thrift.isfilled to check if member is set)
-# - ProtoBuf types (use ProtoBuf.isfilled to check if member is set)
-#
-# Builder implementations do the appropriate translation from column chunks to types.
-# RecordCursor uses Builders for the result types.
-
-abstract type AbstractBuilder{T} end
-#
+# read data as records which are named tuple representations of the schema
 
 ##
 # Row cursor iterates through row numbers of a column 
 mutable struct RowCursor
     par::ParFile
 
-    rows::UnitRange{Int}            # rows to scan over
-    row::Int                        # current row
+    rows::UnitRange{Int64}                      # rows to scan over
+    row::Int64                                  # current row
     
-    rowgroups::Vector{RowGroup}     # row groups in range
-    rg::Union{Int,Nothing}          # current row group
-    rgrange::Union{UnitRange{Int},Nothing} # current rowrange
+    rowgroups::Vector{RowGroup}                 # row groups in range
+    rg::Union{Int,Nothing}                      # current row group
+    rgrange::Union{UnitRange{Int64},Nothing}    # current rowrange
 
-    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::AbstractString, row::Signed=first(rows))
+    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::Vector{String}, row::Int64=first(rows))
         rgs = rowgroups(par, col, rows)
         cursor = new(par, rows, row, rgs, nothing, nothing)
         setrow(cursor, row)
@@ -31,20 +22,21 @@ mutable struct RowCursor
     end
 end
 
-function setrow(cursor::RowCursor, row::Signed)
+function setrow(cursor::RowCursor, row::Int64)
     cursor.row = row
-    cursor.rgrange!==nothing && (row in cursor.rgrange) && return
-    startrow = 1
-    rgs = cursor.rowgroups
-    for rg in 1:length(rgs)
-        rgrange = startrow:(startrow + rgs[rg].num_rows)
-        if row in rgrange
+    (cursor.rgrange !== nothing) && (cursor.row in cursor.rgrange) && return
+    startrow = Int64(1)
+    rowgroups = cursor.rowgroups
+    for rowgroup_idx in 1:length(rowgroups)
+        rowgroup_row_range = startrow:(startrow + rowgroups[rowgroup_idx].num_rows)
+        if row in rowgroup_row_range
             cursor.row = row
-            cursor.rg = rg
-            cursor.rgrange = rgrange
+            cursor.rg = rowgroup_idx
+            cursor.rgrange = rowgroup_row_range
             return
+        else
+            startrow = last(rowgroup_row_range) + 1
         end
-        startrow = last(rgrange) + 1
     end
     throw(BoundsError(par.path, row))
 end
@@ -56,8 +48,8 @@ function _start(cursor::RowCursor)
     setrow(cursor, row)
     row
 end
-_done(cursor::RowCursor, row::Signed) = (row > last(cursor.rows))
-function _next(cursor::RowCursor, row::Signed)
+_done(cursor::RowCursor, row::Int64) = (row > last(cursor.rows))
+function _next(cursor::RowCursor, row::Int64)
     setrow(cursor, row)
     row, (row+1)
 end
@@ -78,36 +70,36 @@ end
 # Row can be deduced from repetition level.
 mutable struct ColCursor{T}
     row::RowCursor
-    colname::AbstractString
+    colname::Vector{String}
     maxdefn::Int
 
     colchunks::Union{Vector{ColumnChunk},Nothing}
     cc::Union{Int,Nothing}
-    ccrange::Union{UnitRange{Int},Nothing}
+    ccrange::Union{UnitRange{Int64},Nothing}
 
     vals::Vector{T}
-    valpos::Int
+    valpos::Int64
     #valrange::UnitRange{Int}
 
     defn_levels::Vector{Int}
     repn_levels::Vector{Int}
-    levelpos::Int
+    levelpos::Int64
     levelrange::UnitRange{Int}
 
-    function ColCursor{T}(row::RowCursor, colname::AbstractString) where T
+    function ColCursor{T}(row::RowCursor, colname::Vector{String}) where T
         maxdefn = max_definition_level(schema(row.par), colname)
-        new{T}(row, colname, maxdefn,nothing,nothing,nothing)
+        new{T}(row, colname, maxdefn, nothing, nothing, nothing)
     end
 end
 
-function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::AbstractString, row::Signed=first(rows))
+function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::Vector{String}, row::Int64=first(rows))
     rowcursor = RowCursor(par, rows, colname, row)
 
-    rg = rowcursor.rowgroups[rowcursor.rg] 
-    colchunks = columns(par, rg, colname)
-    ctype = coltype(colchunks[1])
-    T = PLAIN_JTYPES[ctype+1]
-    if (ctype == _Type.BYTE_ARRAY) || (ctype == _Type.FIXED_LEN_BYTE_ARRAY)
+    rowgroup = rowcursor.rowgroups[rowcursor.rg] 
+    colchunks = columns(par, rowgroup, colname)
+    parquet_coltype = coltype(colchunks[1])
+    T = PLAIN_JTYPES[parquet_coltype+1]
+    if (parquet_coltype == _Type.BYTE_ARRAY) || (parquet_coltype == _Type.FIXED_LEN_BYTE_ARRAY)
         T = Vector{T}
     end
 
@@ -116,7 +108,7 @@ function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::AbstractString
     cursor
 end
 
-function setrow(cursor::ColCursor{T}, row::Signed) where {T}
+function setrow(cursor::ColCursor{T}, row::Int64) where {T}
     par = cursor.row.par
     rg = cursor.row.rowgroups[cursor.row.rg]
     ccincr = (row - cursor.row.row) == 1 # whether this is just an increment within the column chunk
@@ -127,7 +119,7 @@ function setrow(cursor::ColCursor{T}, row::Signed) where {T}
     if _done(cursor.row, row)
         cursor.cc = length(cursor.colchunks) + 1
         cursor.ccrange = row:(row-1)
-        cursor.vals = Array{T}(undef, 0)
+        cursor.vals = Vector{T}()
         cursor.repn_levels = cursor.defn_levels = Int[]
         cursor.valpos = cursor.levelpos = 0
         cursor.levelrange = 0:-1 #cursor.valrange = 0:-1
@@ -135,7 +127,7 @@ function setrow(cursor::ColCursor{T}, row::Signed) where {T}
     end
 
     # find the column chunk with the row
-    if cursor.ccrange===nothing || !(row in cursor.ccrange)
+    if (cursor.ccrange === nothing) || !(row in cursor.ccrange)
         offset = rowgroup_offset(cursor.row) # the offset of row from beginning of current rowgroup
         colchunks = cursor.colchunks
 
@@ -145,7 +137,7 @@ function setrow(cursor::ColCursor{T}, row::Signed) where {T}
             if isempty(repn_levels)
                 nrowscc = length(vals) # number of values is number of rows
             else
-                nrowscc = length(repn_levels) - length(find(repn_levels))   # number of values where repeation level is 0
+                nrowscc = length(repn_levels) - length(find(repn_levels))   # number of values where repetition level is 0
             end
             ccrange = startrow:(startrow + nrowscc)
 
@@ -164,48 +156,55 @@ function setrow(cursor::ColCursor{T}, row::Signed) where {T}
         end
     end
 
-    # find the starting positions for values and levels
-    ccrange = cursor.ccrange
-    defn_levels = cursor.defn_levels
-    repn_levels = cursor.repn_levels
-
-    # compute the level and value pos for row
-    if isempty(repn_levels)
-        # no repetitions, so each entry corresponds to one full row
-        levelpos = row - first(ccrange) + 1
-        levelrange = levelpos:levelpos
+    if cursor.ccrange === nothing
+        # we did not find the row in this column
+        cursor.valpos = cursor.levelpos = 0
+        cursor.levelrange = 0:-1 #cursor.valrange = 0:-1
     else
-        # multiple entries may constitute one row
-        idx = first(ccrange)
-        levelpos = findfirst(repn_levels, 0) # NOTE: can start from cursor.levelpos to optimize, but that will prevent using setrow to go backwards
-        while idx < row
-            levelpos = findnext(repn_levels, 0, levelpos+1)
-            idx += 1
-        end
-        levelend = max(findnext(repn_levels, 0, levelpos+1)-1, length(repn_levels))
-        levelrange = levelpos:levelend
-    end
+        # find the starting positions for values and levels
+        ccrange = cursor.ccrange
+        defn_levels = cursor.defn_levels
+        repn_levels = cursor.repn_levels
+        levelpos = valpos = Int64(0)
 
-    # compute the val pos for row
-    if isempty(defn_levels)
-        # all entries are required, so there must be a corresponding value
-        valpos = levelpos
-        #valrange = levelrange
-    else
-        maxdefn = cursor.maxdefn
-        if ccincr
-            valpos = cursor.valpos
+        # compute the level and value pos for row
+        if isempty(repn_levels)
+            # no repetitions, so each entry corresponds to one full row
+            levelpos = row - first(ccrange) + 1
+            levelrange = levelpos:levelpos
         else
-            valpos = sum(view(defn_levels, 1:(levelpos-1)) .== maxdefn) + 1
+            # multiple entries may constitute one row
+            idx = first(ccrange)
+            levelpos = findfirst(repn_levels, 0) # NOTE: can start from cursor.levelpos to optimize, but that will prevent using setrow to go backwards
+            while idx < row
+                levelpos = findnext(repn_levels, 0, levelpos+1)
+                idx += 1
+            end
+            levelend = max(findnext(repn_levels, 0, levelpos+1)-1, length(repn_levels))
+            levelrange = levelpos:levelend
         end
-        #nvals = sum(sub(defn_levels, levelrange) .== maxdefn)
-        #valrange = valpos:(valpos+nvals-1)
-    end
 
-    cursor.levelpos = levelpos
-    cursor.levelrange = levelrange
-    cursor.valpos = valpos
-    #cursor.valrange = valrange
+        # compute the val pos for row
+        if isempty(defn_levels)
+            # all entries are required, so there must be a corresponding value
+            valpos = levelpos
+            #valrange = levelrange
+        else
+            maxdefn = cursor.maxdefn
+            if ccincr
+                valpos = cursor.valpos
+            else
+                valpos = sum(view(defn_levels, 1:(levelpos-1)) .== maxdefn) + 1
+            end
+            #nvals = sum(sub(defn_levels, levelrange) .== maxdefn)
+            #valrange = valpos:(valpos+nvals-1)
+        end
+
+        cursor.levelpos = levelpos
+        cursor.levelrange = levelrange
+        cursor.valpos = valpos
+        #cursor.valrange = valrange
+    end
     nothing
 end
 
@@ -214,11 +213,11 @@ function _start(cursor::ColCursor)
     setrow(cursor, row)
     row, cursor.levelpos
 end
-function _done(cursor::ColCursor, rowandlevel::Tuple{Int,Int})
+function _done(cursor::ColCursor, rowandlevel::Tuple{Int64,Int64})
     row, levelpos = rowandlevel
-    (levelpos > last(cursor.levelrange)) && _done(cursor.row, row)
+    (levelpos > last(cursor.levelrange)) || _done(cursor.row, row)
 end
-function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int,Int}) where {T}
+function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int64,Int64}) where {T}
     # find values for current row and level in row
     row, levelpos = rowandlevel
     (levelpos == cursor.levelpos) || throw(InvalidStateException("Invalid column cursor state", :levelpos))
@@ -228,10 +227,10 @@ function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int,Int}) where {T}
     repn_level = isempty(cursor.repn_levels) ? 0 : cursor.repn_levels[levelpos]
     cursor.levelpos += 1
     if defn_level == maxdefn
-        val = (cursor.vals[cursor.valpos])::Union{Nothing,T}
+        val = (cursor.vals[cursor.valpos])::T
         cursor.valpos += 1
     else
-        val = (nothing)::Union{Nothing,T}
+        val = nothing
     end
 
     # advance row
@@ -240,10 +239,10 @@ function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int,Int}) where {T}
         setrow(cursor, row)
     end
 
-    (val, defn_level, repn_level), (row, cursor.levelpos)
+    NamedTuple{(:value, :defn_level, :repn_level),Tuple{Union{Nothing,T},Int64,Int64}}((val, defn_level, repn_level)), (row, cursor.levelpos)
 end
 
-function Base.iterate(cursor::ColCursor, state)
+function Base.iterate(cursor::ColCursor{T}, state) where {T}
     _done(cursor, state) && return nothing
     return _next(cursor, state)
 end
@@ -254,94 +253,95 @@ function Base.iterate(cursor::ColCursor)
 end
 
 ##
-# Record cursor iterates over multiple columns and returns rows as records
-mutable struct RecCursor{T}
-    colnames::Vector{AbstractString}
+
+mutable struct RecordCursor{T}
+    par::ParFile
+    colnames::Vector{Vector{String}}
     colcursors::Vector{ColCursor}
-    builder::T
-
-    colstates::Vector{Tuple{Int,Int}}
-    #colfilters::Vector{Function}
-    #recfilter::Function
+    colstates::Vector{Tuple{Int64,Int64}}
+    rows::UnitRange{Int64}                      # rows to scan over
+    row::Int64                                  # current row
 end
 
-function RecCursor(par::ParFile, rows::UnitRange{Int64}, colnames::Vector{AbstractString}, builder::T, row::Signed=first(rows)) where {T <: AbstractBuilder}
-    colcursors = [ColCursor(par, rows, colname, row) for colname in colnames]
-    RecCursor{T}(colnames, colcursors, builder, Array{Tuple{Int,Int}}(undef, length(colcursors)))
+function RecordCursor(par::ParFile; rows::UnitRange=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par), row::Signed=first(rows))
+    colcursors = [ColCursor(par, UnitRange{Int64}(rows), colname, Int64(row)) for colname in colnames]
+    sch = schema(par)
+    rectype = ntelemtype(sch, sch.schema[1])
+    RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), rows, row)
 end
 
-function state(cursor::RecCursor)
-    col1state = cursor.colstates[1]
-    col1state[1] # return row as state
-end
+eltype(cursor::RecordCursor{T}) where {T} = T
+length(cursor::RecordCursor) = length(cursor.rows)
 
-function _start(cursor::RecCursor)
+state(cursor::RecordCursor) = cursor.row
+
+function _start(cursor::RecordCursor)
     cursor.colstates = [_start(colcursor) for colcursor in cursor.colcursors]
     state(cursor)
 end
-_done(cursor::RecCursor, row::Signed) = _done(cursor.colcursors[1].row, row)
+_done(cursor::RecordCursor, row::Int64) = (row > last(cursor.rows))
 
-function _next(cursor::RecCursor{T}, row::Signed) where {T}
+function _next(cursor::RecordCursor{T}, _row::Int64) where {T}
     states = cursor.colstates
     cursors = cursor.colcursors
-    builder = cursor.builder
 
-    row = init(cursor.builder)
-    for colid in 1:length(states)                               # for each column
+    row = Dict{Symbol,Any}()
+    col_repeat_state = Dict{Tuple{Int,Int},Int}()
+    for colid in 1:length(states)                                                               # for each column
         colcursor = cursors[colid]
-        colval, colstate = _next(colcursor, states[colid])       # for each value, defn level, repn level in column
-        val, def, rep = colval
-        update(builder, row, colcursor.colname, val, def, rep)  # update record
-        states[colid] = colstate                                # set last state to states
+        colstate = states[colid]
+        states[colid] = update_record(cursor.par, row, colid, colcursor, colstate, col_repeat_state)
     end
-    row, state(cursor)
+    cursor.row += 1
+    _nt(row, T), state(cursor)
 end
 
-function Base.iterate(cursor::RecCursor, state)
+function Base.iterate(cursor::RecordCursor{T}, state) where {T}
     _done(cursor, state) && return nothing
     return _next(cursor, state)
 end
 
-function Base.iterate(cursor::RecCursor)
+function Base.iterate(cursor::RecordCursor{T}) where {T}
     r = iterate(cursor, _start(cursor))
     return r
 end
 
-##
-# JuliaBuilder creates a plain Julia object
-function default_init(::Type{T}) where {T}
-    if T <: Array
-        Array{eltype(T)}(0)
-    else
-        ccall(:jl_new_struct_uninit, Any, (Any,), T)::T
+function _val_or_missing(dict::Dict{Symbol,Any}, k::Symbol, ::Type{T}) where {T}
+    v = get(dict, k, missing)
+    (isa(v, Dict{Symbol,Any}) ? _nt(v, T) : v)::T
+end
+
+@generated function _nt(dict::Dict{Symbol,Any}, ::Type{T}) where {T}
+    names = fieldnames(T)
+    strnames = ["$n" for n in names]
+    quote
+        return T(($([:(_val_or_missing(dict,Symbol($(strnames[i])),$(fieldtype(T,i)))) for i in 1:length(names)]...),))
     end
 end
 
-mutable struct JuliaBuilder{T} <: AbstractBuilder{T}
-    par::ParFile
-    rowtype::Type{T}
-    initfn::Function
-    col_repeat_state::Dict{AbstractString,Int}
-end
-JuliaBuilder(par::ParFile, T::DataType, initfn::Function=default_init) = JuliaBuilder{T}(par, T, initfn, Dict{AbstractString,Int}())
+default_init(::Type{Vector{T}}) where {T} = Vector{T}()
+default_init(::Type{Dict{Symbol,Any}}) = Dict{Symbol,Any}()
+default_init(::Type{T}) where {T} = ccall(:jl_new_struct_uninit, Any, (Any,), T)::T
 
-function init(builder::JuliaBuilder{T}) where {T}
-    empty!(builder.col_repeat_state)
-    builder.initfn(T)::T
+function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor{T}, colcursor_state::Tuple{Int64,Int64}, col_repeat_state::Dict{Tuple{Int,Int},Int}) where {T}
+    if !_done(colcursor, colcursor_state)
+        colval, colcursor_state = _next(colcursor, colcursor_state)                                                         # for each value, defn level, repn level in column
+        update_record(par, row, colid, colcursor.colname, colval.value, colval.defn_level, colval.repn_level, col_repeat_state)    # update record
+    end
+    colcursor_state # return new colcursor state
 end
 
-function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val, defn_level::Signed, repn_level::Signed) where {T}
-    #@debug("updating $fqcolname")
-    nameparts = split(fqcolname, '.')
-    sch = builder.par.schema
-    F = row  # the current field corresponding to the level in fqcolname
+function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, nameparts::Vector{String}, val, defn_level::Int64, repn_level::Int64, col_repeat_state::Dict{Tuple{Int,Int},Int})
+    lparts = length(nameparts)
+    sch = par.schema
+    F = row  # the current field corresponding to the level in nameparts
     Fdefn = 0
     Frepn = 0
 
     # for each name part of colname (a field)
-    for idx in 1:length(nameparts)
-        colname = join(nameparts[1:idx], '.')
-        #@debug("updating part $colname of $fqcolname isnull:$(val === nothing), def:$(defn_level), rep:$(repn_level)")
+    for idx in 1:lparts
+        colname = view(nameparts, 1:idx)
+        #@debug("updating part $colname of $nameparts isnull:$(val === nothing), def:$(defn_level), rep:$(repn_level)")
         leaf = nameparts[idx]
         symleaf = Symbol(leaf)
 
@@ -350,40 +350,43 @@ function update(builder::JuliaBuilder{T}, row::T, fqcolname::AbstractString, val
         required || (Fdefn += 1)                    # if field is optional, increment defn level
         repeated && (Frepn += 1)                    # if field can repeat, increment repn level
 
-        defined = (val === nothing) ? isdefined(F, symleaf) : false
+        defined = ((val === nothing) || (idx < lparts)) ? haskey(F, symleaf) : false
         mustdefine = defn_level >= Fdefn
         mustrepeat = repeated && (repn_level == Frepn)
-        repkey = fqcolname * ":" * colname
-        repidx = get(builder.col_repeat_state, repkey, 0)
+        repkey = (colid, idx) #join(nameparts, '.') * ":" * string(idx) #join(colname, '.')
+        repidx = get(col_repeat_state, repkey, 0)
         if mustrepeat
             repidx += 1
-            builder.col_repeat_state[repkey] = repidx
+            col_repeat_state[repkey] = repidx
         end
-        nreps = defined ? length(getfield(F, symleaf)) : 0
+        nreps = (defined && isa(F[symleaf], Vector)) ? length(F[symleaf]) : 0
 
         #@debug("repeat:$mustrepeat, nreps:$nreps, repidx:$repidx, defined:$defined, mustdefine:$mustdefine")
         if mustrepeat && (nreps < repidx)
             if !defined && mustdefine
-                Vrep = builder.initfn(fieldtype(typeof(F), symleaf))
-                setfield!(F, symleaf, Vrep)
+                Vtyp = elemtype(sch, colname)
+                Vrep = F[symleaf] = default_init(Vtyp)
             else
-                Vrep = getfield(F, symleaf)
+                Vrep = F[symleaf]
             end
             if length(Vrep) < repidx
                 resize!(Vrep, repidx)
                 if !isbits(eltype(Vrep))
-                    Vrep[repidx] = builder.initfn(eltype(Vrep))
+                    Vrep[repidx] = default_init(eltype(Vrep))
                 end
             end
             F = Vrep[repidx]
         elseif !defined && mustdefine
             if idx == length(nameparts)
-                V = val
+                V = logical_convert(sch, nameparts, val)
             else
-                V = builder.initfn(fieldtype(typeof(F), symleaf))
+                Vtyp = elemtype(sch, colname)
+                V = default_init(Vtyp)
             end
-            setfield!(F, symleaf, V)
+            F[symleaf] = V
             F = V
+        else
+            F = get(F, symleaf, nothing)
         end
     end
     nothing

@@ -1,8 +1,8 @@
 using Parquet
 using Test
 
-function test_decode(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compatibility"))
-    p = ParFile(joinpath(parcompat, file))
+function test_decode(file)
+    p = ParFile(file)
     println("loaded $file")
     @test isa(p.meta, Parquet.FileMetaData)
 
@@ -46,11 +46,23 @@ function test_decode(file, parcompat=joinpath(dirname(@__FILE__), "parquet-compa
 end
 
 function test_decode_all_pages()
+    testfolder = joinpath(@__DIR__, "parquet-compatibility")
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
-            test_decode("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
+            testfile = joinpath(testfolder, "parquet-testdata", "impala", "1.1.1-$encformat", "$fname.impala.parquet")
+            test_decode(testfile)
         end
     end
+
+    testfolder = joinpath(@__DIR__, "julia-parquet-compatibility")
+    for encformat in ("ZSTD", "SNAPPY", "GZIP", "NONE")
+        for fname in ("nation", "customer")
+            testfile = joinpath(testfolder, "Parquet_Files", "$(encformat)_pandas_pyarrow_$(fname).parquet")
+            test_decode(testfile)
+        end
+    end
+
+    test_decode(joinpath(@__DIR__, "missingvalues", "synthetic_data.parquet"))
 end
 
 test_decode_all_pages()

@@ -1,4 +1,3 @@
-
 const PAR_MAGIC = "PAR1"
 const SZ_PAR_MAGIC = length(PAR_MAGIC)
 const SZ_FOOTER = 4
@@ -29,33 +28,52 @@ function cacheget(lru::PageLRU, chunk::ColumnChunk, nf)
     end
 end
 
-# parquet file.
-# Keeps a handle to the open file and the file metadata.
-# Holds a LRU cache of raw bytes of the pages read.
+"""
+    ParFile(path; map_logical_types) => ParFile
+
+Represents a Parquet file at `path` open for reading. Options to map logical types can be provided via `map_logical_types`.
+
+`map_logical_types` can be one of:
+
+- `false`: no mapping is done (default)
+- `true`: default mappings are attempted on all columns (bytearray => String, int96 => DateTime)
+- A user supplied dict mapping column names to a tuple of type and a converter function
+
+Returns a `ParFile` type that keeps a handle to the open file and the file metadata and also holds a LRU cache of raw bytes of the pages read.
+"""
 mutable struct ParFile
-    path::AbstractString
+    path::String
     handle::IOStream
     meta::FileMetaData
     schema::Schema
     page_cache::PageLRU
 end
 
-function ParFile(path::AbstractString)
+function ParFile(path::AbstractString; map_logical_types::Union{Bool,Dict}=false)
     f = open(path)
     try
-        return ParFile(path, f)
+        return ParFile(path, f; map_logical_types=map_logical_types)
     catch ex
         close(f)
         rethrow(ex)
     end
 end
 
-function ParFile(path::AbstractString, handle::IOStream; maxcache::Integer=10)
-    # TODO: maxcache should become a parameter to MemPool
+function ParFile(path::AbstractString, handle::IOStream; map_logical_types::Union{Bool,Dict}=false)
     is_par_file(handle) || error("Not a parquet format file: $path")
     meta_len = metadata_length(handle)
     meta = metadata(handle, path, meta_len)
-    ParFile(path, handle, meta, Schema(meta.schema), PageLRU())
+
+    typemap = map_logical_types == false ? TLogicalTypeMap() :
+              map_logical_types == true  ? DEFAULT_LOGICAL_TYPE_MAP :
+              TLogicalTypeMap(map_logical_types)
+
+    ParFile(String(path), handle, meta, Schema(meta.schema, typemap), PageLRU())
+end
+
+function close(par::ParFile)
+    empty!(par.page_cache.refs)
+    close(par.handle)
 end
 
 ##
@@ -63,17 +81,32 @@ end
 # can access raw (uncompressed) bytes from pages
 
 schema(par::ParFile) = par.schema
-schema(conv::T, par::ParFile, schema_name::Symbol) where {T<:SchemaConverter} = schema(conv, par.schema, schema_name)
 
 colname(col::ColumnChunk) = colname(col.meta_data)
-colname(col::ColumnMetaData) = join(col.path_in_schema, '.')
+colname(col::ColumnMetaData) = col.path_in_schema
 colnames(rowgroup::RowGroup) = [colname(col) for col in rowgroup.columns]
 function colnames(par::ParFile)
-    s = Set{AbstractString}()
-    for rg in rowgroups(par)
-        push!(s, colnames(rg)...)
+    names = Vector{Vector{String}}()
+    cs = Int[]
+    ns = String[]
+    for x in par.schema.schema[2:end]
+        if Parquet.num_children(x) > 0
+            push!(cs, x.num_children)
+            push!(ns, x.name)
+        else
+            if !isempty(cs)
+                push!(names, [ns; x.name])
+                cs[end] -= 1
+                if cs[end] == 0
+                    pop!(cs)
+                    pop!(ns)
+                end
+            else
+                push!(names, [x.name])
+            end
+        end
     end
-    collect(s)
+    names
 end
 
 ncols(par::ParFile) = length(colnames(par))
@@ -87,8 +120,8 @@ rowgroups(par::ParFile) = par.meta.row_groups
 
 # Return rowgroups that stores all the columns mentioned in `cnames`.
 # Returned row groups can be further queried to get the range of rows.
-rowgroups(par::ParFile, colname::AbstractString, rowrange::UnitRange=1:typemax(Int64)) = rowgroups(par, [colname], rowrange)
-function rowgroups(par::ParFile, cnames, rowrange::UnitRange=1:typemax(Int64))
+rowgroups(par::ParFile, colname::Vector{String}, rowrange::UnitRange=1:typemax(Int64)) = rowgroups(par, [colname], rowrange)
+function rowgroups(par::ParFile, cnames::Vector{Vector{String}}, rowrange::UnitRange=1:typemax(Int64))
     R = RowGroup[]
     L = length(cnames)
     beginrow = 1
@@ -96,16 +129,16 @@ function rowgroups(par::ParFile, cnames, rowrange::UnitRange=1:typemax(Int64))
         cnamesrg = colnames(rowgrp)
         found = length(intersect(cnames, cnamesrg))
         endrow = beginrow + rowgrp.num_rows - 1
-        (found == L) && (length(intersect(beginrow:endrow)) > 0) && push!(R, rowgrp)
+        (found == L) && (length(beginrow:endrow) > 0) && push!(R, rowgrp)
         beginrow = endrow + 1
     end
     R
 end
 
-columns(par::ParFile, rowgroupidx::Integer) = columns(par, rowgroups(par)[rowgroupidx])
+columns(par::ParFile, rowgroupidx) = columns(par, rowgroups(par)[rowgroupidx])
 columns(par::ParFile, rowgroup::RowGroup) = rowgroup.columns
-columns(par::ParFile, rowgroup::RowGroup, colname::AbstractString) = columns(par, rowgroup, [colname])
-function columns(par::ParFile, rowgroup::RowGroup, cnames)
+columns(par::ParFile, rowgroup::RowGroup, colname::Vector{String}) = columns(par, rowgroup, [colname])
+function columns(par::ParFile, rowgroup::RowGroup, cnames::Vector{Vector{String}})
     R = ColumnChunk[]
     for col in columns(par, rowgroup)
         (colname(col) in cnames) && push!(R, col)
@@ -132,8 +165,8 @@ function _pagevec(par::ParFile, col::ColumnChunk)
     end
     pagevec
 end
-pages(par::ParFile, rowgroupidx::Integer, colidx::Integer) = pages(par, columns(par, rowgroupidx), colidx)
-pages(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = pages(par, cols[colidx])
+pages(par::ParFile, rowgroupidx, colidx) = pages(par, columns(par, rowgroupidx), colidx)
+pages(par::ParFile, cols::Vector{ColumnChunk}, colidx) = pages(par, cols[colidx])
 pages(par::ParFile, col::ColumnChunk) = cacheget(par.page_cache, col, col->_pagevec(par,col))
 
 function bytes(page::Page, uncompressed::Bool=true)
@@ -145,6 +178,8 @@ function bytes(page::Page, uncompressed::Bool=true)
             data = Snappy.uncompress(data)
         elseif codec == CompressionCodec.GZIP
             data = transcode(GzipDecompressor, data)
+        elseif codec == CompressionCodec.ZSTD
+            data = transcode(ZstdDecompressor, data)
         else
             error("Unknown compression codec for column chunk: $codec")
         end
@@ -159,8 +194,8 @@ end
 
 map_dict_vals(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v+1] for v in vals]
 
-values(par::ParFile, rowgroupidx::Integer, colidx::Integer) = values(par, columns(par, rowgroupidx), colidx)
-values(par::ParFile, cols::Vector{ColumnChunk}, colidx::Integer) = values(par, cols[colidx])
+values(par::ParFile, rowgroupidx, colidx) = values(par, columns(par, rowgroupidx), colidx)
+values(par::ParFile, cols::Vector{ColumnChunk}, colidx) = values(par, cols[colidx])
 function values(par::ParFile, col::ColumnChunk)
     ctype = coltype(col)
     pgs = pages(par, col)
@@ -182,6 +217,14 @@ function values(par::ParFile, col::ColumnChunk)
             enc, defn_enc, rep_enc = page_encodings(pg)
             if enc == Encoding.PLAIN_DICTIONARY || enc == Encoding.RLE_DICTIONARY
                 append!(vals, map_dict_vals(valdict, _vals))
+                #=
+                if isempty(valdict)
+                    append!(vals, _vals)
+                else
+                    mapped_vals = [valdict[v+1] for v in _vals]
+                    append!(vals, mapped_vals)
+                end
+                =#
             else
                 append!(vals, _vals)
             end
@@ -196,8 +239,8 @@ function values(par::ParFile, col::ColumnChunk)
     vals, defn_levels, repn_levels
 end
 
-function read_levels(io::IO, max_val::Integer, enc::Int32, num_values::Integer)
-    bw = bitwidth(max_val)
+function read_levels(io::IO, max_val::Int, enc::Int32, num_values::Int32)
+    bw = UInt8(bitwidth(max_val))
     (bw == 0) && (return Int[])
     @debug("reading levels. enc:$enc ($(Thrift.enumstr(Encoding,enc))), max_val:$max_val, num_values:$num_values")
 
@@ -213,7 +256,7 @@ function read_levels(io::IO, max_val::Integer, enc::Int32, num_values::Integer)
     end
 end
 
-function read_values(io::IO, enc::Int32, typ::Int32, num_values::Integer)
+function read_values(io::IO, enc::Int32, typ::Int32, num_values::Int32)
     @debug("reading values. enc:$enc ($(Thrift.enumstr(Encoding,enc))), num_values:$num_values")
 
     if enc == Encoding.PLAIN
@@ -244,7 +287,7 @@ function values(par::ParFile, page::Page)
     end
 end
 
-function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::Integer, par::ParFile, page::Page)
+function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::Int32, par::ParFile, page::Page)
     cname = colname(page.colchunk)
     enc, defn_enc, rep_enc = encs
 
@@ -258,7 +301,12 @@ function read_levels_and_values(io::IO, encs::Tuple, ctype::Int32, num_values::I
 
     #@debug("before reading values bytesavailable in page: $(bytesavailable(io))")
     # read values
-    vals = read_values(io, enc, ctype, num_values)
+    # if there are missing values in the data then
+    # where defn_levels's elements == 1 are present and only
+    # sum(defn_levels) values can be read.
+    # because defn_levels == 0 are where the missing vlaues are
+    nmissing = Int32(sum(==(0), defn_levels))
+    vals = read_values(io, enc, ctype, num_values - nmissing)
 
     vals, defn_levels, repn_levels
 end
@@ -329,7 +377,7 @@ function metadata_length(io)
     seek(io, sz - SZ_PAR_MAGIC - SZ_FOOTER)
 
     # read footer size as little endian signed Int32
-    ProtoBuf.read_fixed(io, Int32)
+    read_fixed(io, Int32)
 end
 
 function metadata(io, path::AbstractString, len::Integer=metadata_length(io))
@@ -366,7 +414,7 @@ function is_par_file(io)
     magic = Array{UInt8}(undef, 4)
     read!(io, magic)
     (String(magic) == PAR_MAGIC) || return false
-    
+
     seek(io, sz - SZ_PAR_MAGIC)
     magic = Array{UInt8}(undef, 4)
     read!(io, magic)

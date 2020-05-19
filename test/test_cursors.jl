@@ -1,8 +1,8 @@
 using Parquet
 using Test
 
-function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FILE__), "parquet-compatibility"))
-    p = ParFile(joinpath(parcompat, file))
+function test_col_cursor(file::String)
+    p = ParFile(file)
     println("loaded ", file)
 
     nr = nrows(p)
@@ -12,7 +12,7 @@ function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FIL
         println("\tcolumn ", cname, " rows:", rr)
         println("\tvalue, defn, repn, next idx")
         t1 = time()
-        cc = ColCursor(p, rr, cname)
+        cc = Parquet.ColCursor(p, rr, cname)
         num_read = 0
         for (v,i) in enumerate(cc)
             val,defn,repn = v
@@ -23,28 +23,24 @@ function test_col_cursor(file::String, parcompat::String=joinpath(dirname(@__FIL
     end
 end
 
-function test_juliabuilder_row_cursor(file::String, typename::Symbol, parcompat::String=joinpath(dirname(@__FILE__), "parquet-compatibility"))
-    p = ParFile(joinpath(parcompat, file))
-    println("loaded ", file)
+function test_row_cursor(file::String)
+    p = ParFile(file)
 
     t1 = time()
     nr = nrows(p)
     cnames = colnames(p)
-    schema(JuliaConverter(Main), p, typename)
-    jb = JuliaBuilder(p, getfield(Main, typename))
-    rc = RecCursor(p, 1:nr, colnames(p), jb)
+    rc = RecordCursor(p)
     rec = nothing
     for i in rc
         rec = i
     end
-    println("\t\tlast record: $rec")
-    println("\t\tread $nr records in $(time()-t1) time")
+    @info("loaded", file, count=nr, last_record=rec, time_to_read=time()-t1)
 end
 
 function test_col_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
-            test_col_cursor("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet")
+            test_col_cursor(joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"))
         end
     end
 end
@@ -52,7 +48,7 @@ end
 function test_juliabuilder_row_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
-            test_juliabuilder_row_cursor("parquet-testdata/impala/1.1.1-$encformat/$fname.impala.parquet", Symbol(encformat * fname))
+            test_row_cursor(joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"))
         end
     end
 end

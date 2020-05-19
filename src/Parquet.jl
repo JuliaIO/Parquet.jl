@@ -1,18 +1,28 @@
 module Parquet
 
 using Thrift
-using ProtoBuf
 using Snappy
 using CodecZlib
+using CodecZstd
 using MemPool
+using Dates
 
-import Base: show, open, close, values
+if VERSION < v"1.3"
+    using Missings: nonmissingtype
+end
+
+const PARQUET_JL_VERSION = v"0.5.1"
+
+import Base: show, open, close, values, eltype, length
 import Thrift: isfilled
 
 export is_par_file, ParFile, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
-export SchemaConverter, schema, JuliaConverter, ThriftConverter, ProtoConverter
-export RowCursor, ColCursor, RecCursor
-export AbstractBuilder, JuliaBuilder
+export schema
+export logical_timestamp, logical_string
+
+export RecordCursor
+export write_parquet
+export read_parquet
 
 # package code goes here
 include("PAR2/PAR2.jl")
@@ -22,5 +32,10 @@ include("schema.jl")
 include("reader.jl")
 include("cursor.jl")
 include("show.jl")
+include("writer.jl")
+include("encoding.jl")
+include("metadata.jl")
+include("column_reader.jl")
+include("read_parquet.jl")
 
 end # module
