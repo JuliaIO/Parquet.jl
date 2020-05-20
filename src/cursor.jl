@@ -137,7 +137,10 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
             if isempty(repn_levels)
                 nrowscc = length(vals) # number of values is number of rows
             else
-                nrowscc = length(repn_levels) - length(find(repn_levels))   # number of values where repetition level is 0
+                nrowscc = 0
+                for i in 1:length(repn_levels)
+                    (repn_levels[i] !== Int32(0)) && (nrowscc += 1)
+                end
             end
             ccrange = startrow:(startrow + nrowscc)
 
@@ -175,7 +178,8 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
         else
             # multiple entries may constitute one row
             idx = first(ccrange)
-            levelpos = findfirst(repn_levels, 0) # NOTE: can start from cursor.levelpos to optimize, but that will prevent using setrow to go backwards
+            levelpos = findfirst(x->x===Int32(0), repn_levels) # NOTE: can start from cursor.levelpos to optimize, but that will prevent using setrow to go backwards
+            @assert levelpos !== nothing
             while idx < row
                 levelpos = findnext(repn_levels, 0, levelpos+1)
                 idx += 1

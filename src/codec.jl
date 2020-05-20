@@ -1,20 +1,44 @@
 # ref: https://github.com/apache/parquet-format/blob/master/Encodings.md
 
+macro bitwidth(i)
+    quote
+        ceil(Int, log(2, $(esc(i))+1))
+    end
+end
+macro bit2bytewidth(i)
+    quote
+        ceil(Int, $(esc(i))/8)
+    end
+end
+macro byt2itype(i)
+    quote
+        ($(esc(i)) <= 4) ? Int32 : ($(esc(i)) <= 8) ? Int64 : Int128
+    end
+end
+macro byt2uitype(i)
+    quote
+        ($(esc(i)) <= 4) ? UInt32 : ($(esc(i)) <= 8) ? UInt64 : UInt128
+    end
+end
+macro byt2uitype_small(i)
+    quote
+        ($(esc(i)) <= 1) ? UInt8 : ($(esc(i)) <= 2) ? UInt16 : ($(esc(i)) <= 4) ? UInt32 : ($(esc(i)) <= 8) ? UInt64 : UInt128
+    end
+end
+
 const MSB = 0x80
 const MASK7 = 0x7f
 const MASK8 = 0xff
 const MASK3 = 0x07
-Base.@pure function MASKN(nbits::UInt8, ::Type{T}=byt2uitype_small(bit2bytewidth(nbits))) where {T}
+function MASKN(nbits::UInt8)
+    byte_width = @bit2bytewidth(nbits)
+    type_small = @byt2uitype_small(byte_width)
+    MASKN(nbits, type_small)
+end
+function MASKN(nbits::UInt8, ::Type{T}) where {T}
     O = convert(T, 0x1)
     (O << nbits) - O
 end
-
-Base.@pure bitwidth(i::Int) = ceil(Int, log(2, i+1))
-#bytewidth(i) = bit2bytewidth(bitwidth(i))
-Base.@pure bit2bytewidth(i::UInt8) = ceil(Int, i/8)
-Base.@pure byt2itype(i::Int) = (i <= 4) ? Int32 : (i <= 8) ? Int64 : Int128
-Base.@pure byt2uitype(i::Int) = (i <= 4) ? UInt32 : (i <= 8) ? UInt64 : UInt128
-Base.@pure byt2uitype_small(i::Int) = (i <= 1) ? UInt8 : (i <= 2) ? UInt16 : (i <= 4) ? UInt32 : (i <= 8) ? UInt64 : UInt128
 
 read_fixed(io::IO, typ::Type{UInt32}) = _read_fixed(io, convert(UInt32,0), 4)
 read_fixed(io::IO, typ::Type{UInt64}) = _read_fixed(io, convert(UInt64,0), 8)
@@ -54,13 +78,13 @@ const PLAIN_JTYPES = (Bool, Int32, Int64, Int128, Float32, Float64,      UInt8, 
 
 # read plain encoding (PLAIN = 0)
 function read_plain(io::IO, typ::Int32, jtype::Type{T}=PLAIN_JTYPES[typ+1]) where {T}
-    if typ == _Type.BYTE_ARRAY
+    if typ === _Type.BYTE_ARRAY
         count = read_fixed(io, Int32)
         #@debug("reading bytearray length:$count")
         read!(io, Array{UInt8}(undef, count))
-    elseif typ == _Type.BOOLEAN
+    elseif typ === _Type.BOOLEAN
         error("not implemented") # reading single boolean values is not possible, vectors are read via read_bitpacked_booleans
-    elseif typ == _Type.FIXED_LEN_BYTE_ARRAY
+    elseif typ === _Type.FIXED_LEN_BYTE_ARRAY
         #@debug("reading fixedlenbytearray length:$count")
         #read!(io, Array{UInt8}(count))
         error("not implemented") # this is likely same as BYTE_ARRAY for decoding purpose
@@ -82,9 +106,9 @@ function read_plain_values(io::IO, count::Int32, typ::Int32)
     arr
 end
 
-function read_bitpacked_booleans(io::IO, count::Int32)
+function read_bitpacked_booleans(io::IO, count::Int32)::Vector{Bool}
     #@debug("reading bitpacked booleans", count)
-    arr = falses(count)
+    arr = fill!(Array{Bool}(undef, count), false)
     arrpos = 1
     bits = UInt8(0)
     bitpos = 9
@@ -106,15 +130,23 @@ end
 function read_rle_dict(io::IO, count::Int32)
     bits = read(io, UInt8)
     #@debug("reading rle dictionary bits:$bits")
-    arr = read_hybrid(io, count, bits; read_len=false)
+    arr = read_hybrid(io, count, Val{bits}(); read_len=false)
     #@debug("read $(length(arr)) dictionary values")
     arr
 end
 
 # read RLE or bit backed format (RLE = 3)
-function read_hybrid(io::IO, count::Int32, bits::UInt8, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(undef, count); read_len::Bool=true) where {T <: Integer}
+function read_hybrid(io::IO, count::Int32, ::Val{W}; read_len::Bool=true) where {W}
+    byte_width = @bit2bytewidth(W)
+    typ = @byt2itype(byte_width)
+    arr = Array{typ}(undef, count)
+
+    read_hybrid(io, count, W, byte_width, typ, arr; read_len=read_len)
+end
+function read_hybrid(io::IO, count::Int32, bits::UInt8, byt::Int, typ::Type{T}, arr::Vector{T}; read_len::Bool=true) where {T <: Integer}
     len = read_len ? read_fixed(io, Int32) : Int32(0)
     @debug("reading hybrid data", len, count, bits)
+    mask = MASKN(bits)
     arrpos = 1
     while arrpos <= count
         runhdr = _read_varint(io, Int)
@@ -123,25 +155,35 @@ function read_hybrid(io::IO, count::Int32, bits::UInt8, byt::Int=bit2bytewidth(b
         nitems = isbitpack ? min(runhdr*8, count - arrpos + 1) : runhdr
         #@debug("nitems=$nitems, isbitpack:$isbitpack, runhdr:$runhdr, remaininglen: $(count - arrpos + 1)")
         #@debug("creating sub array for $nitems items at $arrpos, total length:$(length(arr))")
-        #subarr = pointer_to_array(pointer(arr, arrpos), nitems)
         subarr = unsafe_wrap(Array, pointer(arr, arrpos), nitems, own=false)
 
         if isbitpack
-            read_bitpacked_run(io, runhdr, bits, byt, typ, subarr)
+            read_bitpacked_run(io, runhdr, bits, byt, typ, subarr, mask)
         else # rle
-            read_rle_run(io, runhdr, bits, byt, typ, subarr)
+            read_type = @byt2uitype(byt)
+            read_rle_run(io, runhdr, bits, byt, typ, subarr, read_type)
         end
         arrpos += nitems
     end
     arr
 end
 
-function read_rle_run(io::IO, count::Int, bits::UInt8, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(count)) where {T <: Integer}
-    @debug("read_rle_run", count, T, bits, byt)
-    arr[1:count] .= reinterpret(T, _read_fixed(io, zero(byt2uitype(byt)), byt))
+function read_rle_run(io::IO, count::Int, bits::UInt8, byt::Int, reinterpreted_typ::Type{T}, arr::Vector{T}, read_type::Type{V}) where {T <: Integer, V <: Integer}
+    #@debug("read_rle_run", count, T, bits, byt)
+    val = reinterpret(T, _read_fixed(io, zero(V), byt))
+    @assert length(arr) >= count
+    @inbounds for idx in 1:count
+        arr[idx] = val
+    end
     arr
 end
 
+function read_bitpacked_run(io::IO, grp_count::Int, ::Val{W}) where {W}
+    byte_width = @bit2bytewidth(W)
+    typ = @byt2itype(byte_width)
+    arr = Array{typ}(undef, grp_count)
+    read_bitpacked_run(io, grp_count, W, byte_width, typ, arr)
+end
 function read_bitpacked_run(io::IO, grp_count::Int, bits::UInt8, byt::Int, typ::Type{T}, arr::Vector{T}, mask::V=MASKN(bits)) where {T <: Integer, V <: Integer}
     count = min(grp_count * 8, length(arr))
     # multiple of 8 values at a time are bit packed together
@@ -199,7 +241,13 @@ function read_bitpacked_run(io::IO, grp_count::Int, bits::UInt8, byt::Int, typ::
 end
 
 # read bit packed in deprecated format (BIT_PACKED = 4)
-function read_bitpacked_run_old(io::IO, count::Int, bits::UInt8, byt::Int=bit2bytewidth(bits), typ::Type{T}=byt2itype(byt), arr::Vector{T}=Array{T}(undef, count), mask::V=MASKN(bits)) where {T <: Integer, V <: Integer}
+function read_bitpacked_run_old(io::IO, count::Int32, ::Val{W}) where {W}
+    byte_width = @bit2bytewidth(W)
+    typ = @byt2itype(byte_width)
+    arr = Array{typ}(undef, count)
+    read_bitpacked_run_old(io, count, W, byte_width, typ, arr)
+end
+function read_bitpacked_run_old(io::IO, count::Int32, bits::UInt8, byt::Int, typ::Type{T}, arr::Vector{T}, mask::V=MASKN(bits)) where {T <: Integer, V <: Integer}
     # multiple of 8 values at a time are bit packed together
     nbytes = round(Int, (bits * count) / 8)
     #@debug("read_bitpacked_run. count:$count, nbytes:$nbytes, nbits:$bits")
@@ -211,15 +259,15 @@ function read_bitpacked_run_old(io::IO, count::Int, bits::UInt8, byt::Int=bit2by
     bitbuff = zero(V)
     nbitsbuff = 0
 
-    arridx = 1
-    dataidx = 1
+    arridx = Int32(1)
+    dataidx = Int32(1)
     while arridx <= count
         diffnbits = bits - nbitsbuff
         while diffnbits > 8
             # shift 8 bits and read directly into bitbuff
             bitbuff <<= 8
             bitbuff |= data[dataidx]
-            dataidx += 1
+            dataidx += Int32(1)
             nbitsbuff += 8
             diffnbits -= 8
         end
@@ -227,18 +275,18 @@ function read_bitpacked_run_old(io::IO, count::Int, bits::UInt8, byt::Int=bit2by
         if diffnbits > 0
             # read next byte from input
             nxtdata = data[dataidx]
-            dataidx += 1
+            dataidx += Int32(1)
             # shift bitbuff by diffnbits, add diffnbits and set result
             nbitsbuff = 8 - diffnbits
             arr[arridx] = convert(T, ((bitbuff << diffnbits) | (nxtdata >> nbitsbuff)) & mask)
-            arridx += 1
+            arridx += Int32(1)
             # keep remaining bits in bitbuff
             bitbuff <<= 8
             bitbuff |= nxtdata
         else
             # set result
             arr[arridx] = convert(T, (bitbuff >> abs(diffnbits)) & mask)
-            arridx += 1
+            arridx += Int32(1)
             nbitsbuff -= bits
         end
     end
