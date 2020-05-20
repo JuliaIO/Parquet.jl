@@ -67,6 +67,20 @@ function path_in_schema(sch::Schema, schelem::SchemaElement)
     error("schema element not found in schema")
 end
 
+function logical_converter(sch::Schema, schname::T) where {T <: AbstractVector{String}}
+    elem = sch.name_lookup[schname]
+
+    if schname in keys(sch.map_logical_types)
+        _logical_type, converter = sch.map_logical_types[schname]
+        return converter
+    elseif isfilled(elem, :_type) && (elem._type in keys(sch.map_logical_types))
+        _logical_type, converter = sch.map_logical_types[elem._type]
+        return converter
+    else
+        return identity
+    end
+end
+
 function logical_convert(sch::Schema, schname::T, val) where {T <: AbstractVector{String}}
     elem = sch.name_lookup[schname]
 

@@ -45,7 +45,7 @@ rowgroup_offset(cursor::RowCursor) = cursor.row - first(cursor.rgrange)
 
 function _start(cursor::RowCursor)
     row = first(cursor.rows)
-    setrow(cursor, row)
+    (cursor.row === row) || setrow(cursor, row)
     row
 end
 _done(cursor::RowCursor, row::Int64) = (row > last(cursor.rows))
@@ -71,7 +71,10 @@ end
 mutable struct ColCursor{T}
     row::RowCursor
     colname::Vector{String}
-    maxdefn::Int
+    required_at::Vector{Bool}
+    repeated_at::Vector{Bool}
+    logical_converter_fn::Function
+    maxdefn::Int32
 
     colchunks::Union{Vector{ColumnChunk},Nothing}
     cc::Union{Int,Nothing}
@@ -79,16 +82,27 @@ mutable struct ColCursor{T}
 
     vals::Vector{T}
     valpos::Int64
-    #valrange::UnitRange{Int}
 
-    defn_levels::Vector{Int}
-    repn_levels::Vector{Int}
+    defn_levels::Vector{Int32}
+    repn_levels::Vector{Int32}
     levelpos::Int64
     levelrange::UnitRange{Int}
 
     function ColCursor{T}(row::RowCursor, colname::Vector{String}) where T
-        maxdefn = max_definition_level(schema(row.par), colname)
-        new{T}(row, colname, maxdefn, nothing, nothing, nothing)
+        sch = schema(row.par)
+
+        len_colname_parts = length(colname)
+        required_at = Array{Bool}(undef, len_colname_parts)
+        repeated_at = Array{Bool}(undef, len_colname_parts)
+        for idx in 1:len_colname_parts
+            partname = colname[1:idx]
+            required_at[idx] = isrequired(sch, partname)         # determine whether field is optional and repeated
+            repeated_at[idx] = isrepeated(sch, partname)
+        end
+
+        logical_converter_fn = logical_converter(sch, colname)
+        maxdefn = max_definition_level(sch, colname)
+        new{T}(row, colname, required_at, repeated_at, logical_converter_fn, maxdefn, nothing, nothing, nothing)
     end
 end
 
@@ -113,27 +127,29 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
     rg = cursor.row.rowgroups[cursor.row.rg]
     ccincr = (row - cursor.row.row) == 1 # whether this is just an increment within the column chunk
     setrow(cursor.row, row) # set the row cursor
-    cursor.colchunks!==nothing || (cursor.colchunks = columns(par, rg, cursor.colname))
+    if cursor.colchunks === nothing
+        cursor.colchunks = columns(par, rg, cursor.colname)
+    end
 
     # check if cursor is done
     if _done(cursor.row, row)
         cursor.cc = length(cursor.colchunks) + 1
         cursor.ccrange = row:(row-1)
         cursor.vals = Vector{T}()
-        cursor.repn_levels = cursor.defn_levels = Int[]
+        cursor.repn_levels = cursor.defn_levels = Int32[]
         cursor.valpos = cursor.levelpos = 0
-        cursor.levelrange = 0:-1 #cursor.valrange = 0:-1
+        cursor.levelrange = 0:-1
         return
     end
 
     # find the column chunk with the row
     if (cursor.ccrange === nothing) || !(row in cursor.ccrange)
         offset = rowgroup_offset(cursor.row) # the offset of row from beginning of current rowgroup
-        colchunks = cursor.colchunks
+        colchunks = (cursor.colchunks)::Vector{ColumnChunk}
 
         startrow = row - offset
         for cc in 1:length(colchunks)
-            vals, defn_levels, repn_levels = values(par, colchunks[cc])
+            vals, defn_levels, repn_levels = values(par, colchunks[cc], T)
             if isempty(repn_levels)
                 nrowscc = length(vals) # number of values is number of rows
             else
@@ -162,10 +178,10 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
     if cursor.ccrange === nothing
         # we did not find the row in this column
         cursor.valpos = cursor.levelpos = 0
-        cursor.levelrange = 0:-1 #cursor.valrange = 0:-1
+        cursor.levelrange = 0:-1
     else
         # find the starting positions for values and levels
-        ccrange = cursor.ccrange
+        ccrange = (cursor.ccrange)::UnitRange{Int64}
         defn_levels = cursor.defn_levels
         repn_levels = cursor.repn_levels
         levelpos = valpos = Int64(0)
@@ -178,13 +194,12 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
         else
             # multiple entries may constitute one row
             idx = first(ccrange)
-            levelpos = findfirst(x->x===Int32(0), repn_levels) # NOTE: can start from cursor.levelpos to optimize, but that will prevent using setrow to go backwards
-            @assert levelpos !== nothing
+            levelpos = Int64(findfirst(x->x===Int32(0), repn_levels)) # NOTE: can start from cursor.levelpos to optimize, but that will prevent using setrow to go backwards
             while idx < row
-                levelpos = findnext(repn_levels, 0, levelpos+1)
+                levelpos = Int64(findnext(x->x===Int32(0), repn_levels, levelpos+1))
                 idx += 1
             end
-            levelend = max(findnext(repn_levels, 0, levelpos+1)-1, length(repn_levels))
+            levelend = Int64(max(findnext(x->x===Int32(0), repn_levels, levelpos+1)-1, length(repn_levels)))
             levelrange = levelpos:levelend
         end
 
@@ -192,22 +207,21 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
         if isempty(defn_levels)
             # all entries are required, so there must be a corresponding value
             valpos = levelpos
-            #valrange = levelrange
         else
             maxdefn = cursor.maxdefn
             if ccincr
                 valpos = cursor.valpos
             else
-                valpos = sum(view(defn_levels, 1:(levelpos-1)) .== maxdefn) + 1
+                valpos = 1
+                for idx in 1:(levelpos-1)
+                    (defn_levels[idx] === maxdefn) && (valpos += 1)
+                end
             end
-            #nvals = sum(sub(defn_levels, levelrange) .== maxdefn)
-            #valrange = valpos:(valpos+nvals-1)
         end
 
         cursor.levelpos = levelpos
         cursor.levelrange = levelrange
         cursor.valpos = valpos
-        #cursor.valrange = valrange
     end
     nothing
 end
@@ -330,12 +344,12 @@ default_init(::Type{T}) where {T} = ccall(:jl_new_struct_uninit, Any, (Any,), T)
 function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor{T}, colcursor_state::Tuple{Int64,Int64}, col_repeat_state::Dict{Tuple{Int,Int},Int}) where {T}
     if !_done(colcursor, colcursor_state)
         colval, colcursor_state = _next(colcursor, colcursor_state)                                                         # for each value, defn level, repn level in column
-        update_record(par, row, colid, colcursor.colname, colval.value, colval.defn_level, colval.repn_level, col_repeat_state)    # update record
+        update_record(par, row, colid, colcursor.colname, colcursor.required_at, colcursor.repeated_at, colcursor.logical_converter_fn, colval.value, colval.defn_level, colval.repn_level, col_repeat_state)    # update record
     end
     colcursor_state # return new colcursor state
 end
 
-function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, nameparts::Vector{String}, val, defn_level::Int64, repn_level::Int64, col_repeat_state::Dict{Tuple{Int,Int},Int})
+function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, nameparts::Vector{String}, required_at::Vector{Bool}, repeated_at::Vector{Bool}, logical_converter_fn::Function, val, defn_level::Int64, repn_level::Int64, col_repeat_state::Dict{Tuple{Int,Int},Int})
     lparts = length(nameparts)
     sch = par.schema
     F = row  # the current field corresponding to the level in nameparts
@@ -349,15 +363,15 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, namepart
         leaf = nameparts[idx]
         symleaf = Symbol(leaf)
 
-        required = isrequired(sch, colname)         # determine whether field is optional and repeated
-        repeated = isrepeated(sch, colname)
+        required = required_at[idx]                 # determine whether field is optional and repeated
+        repeated = repeated_at[idx]
         required || (Fdefn += 1)                    # if field is optional, increment defn level
         repeated && (Frepn += 1)                    # if field can repeat, increment repn level
 
         defined = ((val === nothing) || (idx < lparts)) ? haskey(F, symleaf) : false
         mustdefine = defn_level >= Fdefn
         mustrepeat = repeated && (repn_level == Frepn)
-        repkey = (colid, idx) #join(nameparts, '.') * ":" * string(idx) #join(colname, '.')
+        repkey = (colid, idx)
         repidx = get(col_repeat_state, repkey, 0)
         if mustrepeat
             repidx += 1
@@ -382,7 +396,7 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, namepart
             F = Vrep[repidx]
         elseif !defined && mustdefine
             if idx == length(nameparts)
-                V = logical_convert(sch, nameparts, val)
+                V = logical_converter_fn(val)
             else
                 Vtyp = elemtype(sch, colname)
                 V = default_init(Vtyp)

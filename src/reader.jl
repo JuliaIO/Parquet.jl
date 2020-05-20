@@ -193,44 +193,92 @@ end
 # layer 2 access
 # can access decoded values from pages
 
-map_dict_vals(valdict::Vector{T1}, vals::Vector{T2}) where {T1, T2} = isempty(valdict) ? vals : [valdict[v+1] for v in vals]
+function map_dict_vals(valdict::Vector{T1}, vals::Vector{T1}, map_vals::Vector{T2}, num_values=length(map_vals), vals_offset=0) where {T1, T2}
+    if !isempty(valdict)
+        @assert length(map_vals) == num_values
+        @assert length(vals) >= (num_values + vals_offset)
+        @inbounds for idx in 1:num_values
+            vals[idx+vals_offset] = valdict[map_vals[idx]+1]
+        end
+    end
+end
 
-values(par::ParFile, rowgroupidx, colidx) = values(par, columns(par, rowgroupidx), colidx)
-values(par::ParFile, cols::Vector{ColumnChunk}, colidx) = values(par, cols[colidx])
-function values(par::ParFile, col::ColumnChunk)
+function column_value_types(col::ColumnChunk)
     ctype = coltype(col)
-    pgs = pages(par, col)
-    valdict = Int[]
     jtype = PLAIN_JTYPES[ctype+1]
-    if (ctype == _Type.BYTE_ARRAY) || (ctype == _Type.FIXED_LEN_BYTE_ARRAY)
+    if (ctype === _Type.BYTE_ARRAY) || (ctype === _Type.FIXED_LEN_BYTE_ARRAY)
         jtype = Vector{jtype}
     end
-    vals = Array{jtype}(undef, 0)
-    defn_levels = Int32[]
-    repn_levels = Int32[]
+    ctype, jtype
+end
+
+function values(par::ParFile, col::ColumnChunk)
+    ctype, jtype = column_value_types(col)
+    values(par, col, jtype)
+end
+
+function estimate_sizes(par::ParFile, col::ColumnChunk)
+    pgs = pages(par, col)
+    nvals = nvaldict = 0
+    for pg in pgs
+        typ = pg.hdr._type
+        num_values = page_num_values(pg)
+        if (typ === PageType.DATA_PAGE) || (typ === PageType.DATA_PAGE_V2)
+            nvals += num_values
+        elseif typ === PageType.DICTIONARY_PAGE
+            nvaldict += num_values
+        end
+    end
+    nvals, nvaldict
+end
+
+function values(par::ParFile, col::ColumnChunk, ::Type{T}) where {T}
+    ctype, jtype = column_value_types(col)
+    cname = colname(col)
+    @assert jtype === T
+    pgs = pages(par, col)
+
+    vals_offset = 0
+    valdict_offset = 0
+    defn_level_offset = 0
+    repn_level_offset = 0
+
+    nvals, nvaldict = estimate_sizes(par, col)
+    valdict = Array{T}(undef, nvaldict)
+    vals = Array{T}(undef, nvals)
+
+    max_repn_level = max_repetition_level(par.schema, cname)
+    has_defn_levels = !isrequired(par.schema, cname)
+    has_repn_levels = ((length(cname) > 1) && (max_repn_level > 0))
+
+    defn_levels = has_defn_levels ? Array{Int32}(undef, nvals) : Int32[]
+    repn_levels = has_repn_levels ? Array{Int32}(undef, nvals) : Int32[]
 
     for pg in pgs
         typ = pg.hdr._type
         num_values = page_num_values(pg)
-        ctype = coltype(pg.colchunk)
         rawbytes = bytes(pg)
         io = IOBuffer(rawbytes)
         if (typ === PageType.DATA_PAGE) || (typ === PageType.DATA_PAGE_V2)
             @debug("reading a data page for columnchunk")
             enc, defn_enc, repn_enc = page_encodings(pg)
-            nmissing, _defn_levels, _repn_levels = read_levels_and_nmissing(io, defn_enc, repn_enc, num_values, par, pg)
-            _vals = read_values(io, enc, ctype, num_values - nmissing)
-            if enc === Encoding.PLAIN_DICTIONARY || enc === Encoding.RLE_DICTIONARY
-                append!(vals, map_dict_vals(valdict, _vals))
-            else
-                append!(vals, _vals)
+            nmissing = read_levels_and_nmissing(io, defn_enc, repn_enc, num_values, par, pg, defn_levels, repn_levels, defn_level_offset, repn_level_offset)
+            if has_defn_levels
+                defn_level_offset += num_values
             end
-            append!(defn_levels, _defn_levels)
-            append!(repn_levels, _repn_levels)
+            if has_repn_levels
+                repn_level_offset += num_values
+            end
+            if enc === Encoding.PLAIN_DICTIONARY || enc === Encoding.RLE_DICTIONARY
+                map_vals = read_rle_dict(io, num_values - nmissing)
+                map_dict_vals(valdict, vals, map_vals, num_values-nmissing, vals_offset)
+            else
+                read_values(io, enc, ctype, num_values - nmissing, vals, vals_offset)
+            end
+            vals_offset += num_values
         elseif typ === PageType.DICTIONARY_PAGE
-            _vals = read_plain_values(io, num_values, ctype)
-            #@debug("read a dictionary page for columnchunk with $(length(_vals)) values")
-            valdict = isempty(valdict) ? _vals : append!(valdict, _vals)
+            read_plain_values(io, num_values, ctype, valdict, valdict_offset)
+            valdict_offset += num_values
         else
             error("unsupported page type $typ")
         end
@@ -238,15 +286,15 @@ function values(par::ParFile, col::ColumnChunk)
     vals, defn_levels, repn_levels
 end
 
-function read_levels(io::IO, max_val::Int, enc::Int32, num_values::Int32)::Vector{Int32} # levels are always withing 32 bits
+function read_levels(io::IO, max_val::Int, enc::Int32, num_values::Int32, arr::Vector{Int32}, offset::Int=0)::Vector{Int32} # levels are always withing 32 bits
     bit_width = UInt8(@bitwidth(max_val))
     @assert(bit_width !== 0)
     #@debug("reading levels. enc:$enc ($(Thrift.enumstr(Encoding,enc))), max_val:$max_val, num_values:$num_values")
 
     if enc === Encoding.RLE
-        read_hybrid(io, num_values, Val{bit_width}())
+        read_hybrid(io, num_values, bit_width, arr, offset)
     elseif enc === Encoding.BIT_PACKED
-        read_bitpacked_run_old(io, num_values, Val{bit_width}())
+        read_bitpacked_run_old(io, num_values, bit_width, arr, offset)
     #elseif enc == Encoding.PLAIN
     #    # levels should never be of this type though
     #    read_plain_values(io, _Type.INT32, num_values)
@@ -255,37 +303,36 @@ function read_levels(io::IO, max_val::Int, enc::Int32, num_values::Int32)::Vecto
     end
 end
 
-function read_values(io::IO, enc::Int32, typ::Int32, num_values::Int32)
+function read_values(io::IO, enc::Int32, typ::Int32, num_values::Int32, arr::Vector{T}, offset::Int=0) where {T}
     #@debug("reading values. enc:$enc ($(Thrift.enumstr(Encoding,enc))), num_values:$num_values")
     if enc === Encoding.PLAIN
-        read_plain_values(io, num_values, typ)
+        read_plain_values(io, num_values, typ, arr, offset)
     elseif enc === Encoding.PLAIN_DICTIONARY || enc === Encoding.RLE_DICTIONARY
-        read_rle_dict(io, num_values)
+        read_rle_dict(io, num_values, arr, offset)
     else
         error("unsupported encoding $enc ($(Thrift.enumstr(Encoding,enc))) for pages")
     end
 end
 
-function read_levels_and_nmissing(io::IO, defn_enc::Int32, repn_enc::Int32, num_values::Int32, par::ParFile, page::Page)
+function read_levels_and_nmissing(io, defn_enc::Int32, repn_enc::Int32, num_values::Int32, par::ParFile, page::Page, defn_levels::Vector{Int32}, repn_levels::Vector{Int32}, defn_offset::Int=0, repn_offset::Int=0)
     cname = colname(page.colchunk)
 
     #@debug("before reading defn levels bytesavailable in page: $(bytesavailable(io))")
     # read definition levels. skipped if column is required
-    defn_levels = isrequired(par.schema, cname) ? Int32[] : read_levels(io, max_definition_level(par.schema, cname), defn_enc, num_values)
+    nmissing = Int32(0)
+    if !isrequired(par.schema, cname)
+        read_levels(io, max_definition_level(par.schema, cname), defn_enc, num_values, defn_levels, defn_offset)
+        @inbounds for idx in 1:num_values
+            (defn_levels[idx+defn_offset] === Int32(0)) && (nmissing += Int32(1))
+        end
+    end
 
     #@debug("before reading repn levels bytesavailable in page: $(bytesavailable(io))")
     # read repetition levels. skipped if all columns are at 1st level
     max_repn_level = max_repetition_level(par.schema, cname)
-    repn_levels = ((length(cname) > 1) && (max_repn_level > 0)) ? read_levels(io, max_repn_level, repn_enc, num_values) : Int32[]
+    ((length(cname) > 1) && (max_repn_level > 0)) && read_levels(io, max_repn_level, repn_enc, num_values, repn_levels, repn_offset)
 
-    #@debug("before reading values bytesavailable in page: $(bytesavailable(io))")
-    # read values, read only non missing values (defn_level > 0)
-    nmissing = Int32(0)
-    @inbounds for idx in 1:length(defn_levels)
-        (defn_levels[idx] === Int32(0)) && (nmissing += Int32(1))
-    end
-
-    nmissing, defn_levels, repn_levels
+    nmissing
 end
 
 
