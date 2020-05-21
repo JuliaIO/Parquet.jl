@@ -106,8 +106,8 @@ mutable struct ColCursor{T}
     end
 end
 
-function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::Vector{String}, row::Int64=first(rows))
-    rowcursor = RowCursor(par, rows, colname, row)
+function ColCursor(par::ParFile, colname::Vector{String}; rows::UnitRange=1:nrows(par), row::Signed=first(rows))
+    rowcursor = RowCursor(par, UnitRange{Int64}(rows), colname, Int64(row))
 
     rowgroup = rowcursor.rowgroups[rowcursor.rg] 
     colchunks = columns(par, rowgroup, colname)
@@ -118,9 +118,12 @@ function ColCursor(par::ParFile, rows::UnitRange{Int64}, colname::Vector{String}
     end
 
     cursor = ColCursor{T}(rowcursor, colname)
-    setrow(cursor, row)
+    setrow(cursor, Int64(row))
     cursor
 end
+
+eltype(cursor::ColCursor{T}) where {T} = NamedTuple{(:value, :defn_level, :repn_level),Tuple{Union{Nothing,T},Int64,Int64}}
+length(cursor::ColCursor) = length(cursor.row.rows)
 
 function setrow(cursor::ColCursor{T}, row::Int64) where {T}
     par = cursor.row.par
@@ -134,9 +137,9 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
     # check if cursor is done
     if _done(cursor.row, row)
         cursor.cc = length(cursor.colchunks) + 1
-        cursor.ccrange = row:(row-1)
-        cursor.vals = Vector{T}()
-        cursor.repn_levels = cursor.defn_levels = Int32[]
+        #cursor.ccrange = row:(row-1)
+        #cursor.vals = Vector{T}()
+        #cursor.repn_levels = cursor.defn_levels = Int32[]
         cursor.valpos = cursor.levelpos = 0
         cursor.levelrange = 0:-1
         return
@@ -266,7 +269,7 @@ function Base.iterate(cursor::ColCursor{T}, state) where {T}
 end
 
 function Base.iterate(cursor::ColCursor)
-    r = iterate(x, _start(x))
+    r = iterate(cursor, _start(cursor))
     return r
 end
 
@@ -282,7 +285,7 @@ mutable struct RecordCursor{T}
 end
 
 function RecordCursor(par::ParFile; rows::UnitRange=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par), row::Signed=first(rows))
-    colcursors = [ColCursor(par, UnitRange{Int64}(rows), colname, Int64(row)) for colname in colnames]
+    colcursors = [ColCursor(par, colname; rows=rows, row=row) for colname in colnames]
     sch = schema(par)
     rectype = ntelemtype(sch, sch.schema[1])
     RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), rows, row)
@@ -291,37 +294,27 @@ end
 eltype(cursor::RecordCursor{T}) where {T} = T
 length(cursor::RecordCursor) = length(cursor.rows)
 
-state(cursor::RecordCursor) = cursor.row
+function Base.iterate(cursor::RecordCursor{T}, row) where {T}
+    (row > last(cursor.rows)) && (return nothing)
 
-function _start(cursor::RecordCursor)
-    cursor.colstates = [_start(colcursor) for colcursor in cursor.colcursors]
-    state(cursor)
-end
-_done(cursor::RecordCursor, row::Int64) = (row > last(cursor.rows))
-
-function _next(cursor::RecordCursor{T}, _row::Int64) where {T}
     states = cursor.colstates
     cursors = cursor.colcursors
 
-    row = Dict{Symbol,Any}()
+    colvals = Dict{Symbol,Any}()
     col_repeat_state = Dict{Tuple{Int,Int},Int}()
-    for colid in 1:length(states)                                                               # for each column
+    for colid in 1:length(states)  # for each column
         colcursor = cursors[colid]
         colstate = states[colid]
-        states[colid] = update_record(cursor.par, row, colid, colcursor, colstate, col_repeat_state)
+        states[colid] = update_record(cursor.par, colvals, colid, colcursor, colstate, col_repeat_state)
     end
     cursor.row += 1
-    _nt(row, T), state(cursor)
-end
-
-function Base.iterate(cursor::RecordCursor{T}, state) where {T}
-    _done(cursor, state) && return nothing
-    return _next(cursor, state)
+    _nt(colvals, T), cursor.row
 end
 
 function Base.iterate(cursor::RecordCursor{T}) where {T}
-    r = iterate(cursor, _start(cursor))
-    return r
+    cursor.row = first(cursor.rows)
+    cursor.colstates = [_start(colcursor) for colcursor in cursor.colcursors]
+    iterate(cursor, cursor.row)
 end
 
 function _val_or_missing(dict::Dict{Symbol,Any}, k::Symbol, ::Type{T}) where {T}
@@ -341,15 +334,20 @@ default_init(::Type{Vector{T}}) where {T} = Vector{T}()
 default_init(::Type{Dict{Symbol,Any}}) = Dict{Symbol,Any}()
 default_init(::Type{T}) where {T} = ccall(:jl_new_struct_uninit, Any, (Any,), T)::T
 
-function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor{T}, colcursor_state::Tuple{Int64,Int64}, col_repeat_state::Dict{Tuple{Int,Int},Int}) where {T}
+function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor, colcursor_state::Tuple{Int64,Int64}, col_repeat_state::Dict{Tuple{Int,Int},Int})
     if !_done(colcursor, colcursor_state)
         colval, colcursor_state = _next(colcursor, colcursor_state)                                                         # for each value, defn level, repn level in column
-        update_record(par, row, colid, colcursor.colname, colcursor.required_at, colcursor.repeated_at, colcursor.logical_converter_fn, colval.value, colval.defn_level, colval.repn_level, col_repeat_state)    # update record
+        update_record(par, row, colid, colcursor, colval.value, colval.defn_level, colval.repn_level, col_repeat_state)    # update record
     end
     colcursor_state # return new colcursor state
 end
 
-function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, nameparts::Vector{String}, required_at::Vector{Bool}, repeated_at::Vector{Bool}, logical_converter_fn::Function, val, defn_level::Int64, repn_level::Int64, col_repeat_state::Dict{Tuple{Int,Int},Int})
+function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor, val, defn_level::Int64, repn_level::Int64, col_repeat_state::Dict{Tuple{Int,Int},Int})
+    nameparts = colcursor.colname
+    required_at = colcursor.required_at
+    repeated_at = colcursor.repeated_at
+    logical_converter_fn = colcursor.logical_converter_fn
+
     lparts = length(nameparts)
     sch = par.schema
     F = row  # the current field corresponding to the level in nameparts
@@ -371,9 +369,10 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, namepart
         defined = ((val === nothing) || (idx < lparts)) ? haskey(F, symleaf) : false
         mustdefine = defn_level >= Fdefn
         mustrepeat = repeated && (repn_level == Frepn)
-        repkey = (colid, idx)
-        repidx = get(col_repeat_state, repkey, 0)
+        repidx = 0
         if mustrepeat
+            repkey = (colid, idx)
+            repidx = get(col_repeat_state, repkey, 0)
             repidx += 1
             col_repeat_state[repkey] = repidx
         end

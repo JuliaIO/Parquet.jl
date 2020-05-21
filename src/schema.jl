@@ -48,6 +48,10 @@ parentname(schname::T) where {T <: AbstractVector{String}} = istoplevel(schname)
 istoplevel(schname::Vector) = !(length(schname) > 1)
 
 elem(sch::Schema, schname::T) where {T <: AbstractVector{String}} = sch.name_lookup[schname]
+function elemindex(sch::Schema, schname::T) where {T <: AbstractVector{String}}
+    schema_element = elem(sch, schname)
+    findfirst(x->x===schema_element, sch.schema)
+end
 
 isrepetitiontype(schelem::SchemaElement, repetition_type) = Thrift.isfilled(schelem, :repetition_type) && (schelem.repetition_type == repetition_type)
 
