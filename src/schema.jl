@@ -48,6 +48,10 @@ parentname(schname::T) where {T <: AbstractVector{String}} = istoplevel(schname)
 istoplevel(schname::Vector) = !(length(schname) > 1)
 
 elem(sch::Schema, schname::T) where {T <: AbstractVector{String}} = sch.name_lookup[schname]
+function elemindex(sch::Schema, schname::T) where {T <: AbstractVector{String}}
+    schema_element = elem(sch, schname)
+    findfirst(x->x===schema_element, sch.schema)
+end
 
 isrepetitiontype(schelem::SchemaElement, repetition_type) = Thrift.isfilled(schelem, :repetition_type) && (schelem.repetition_type == repetition_type)
 
@@ -65,6 +69,20 @@ function path_in_schema(sch::Schema, schelem::SchemaElement)
         (v === schelem) && return n
     end
     error("schema element not found in schema")
+end
+
+function logical_converter(sch::Schema, schname::T) where {T <: AbstractVector{String}}
+    elem = sch.name_lookup[schname]
+
+    if schname in keys(sch.map_logical_types)
+        _logical_type, converter = sch.map_logical_types[schname]
+        return converter
+    elseif isfilled(elem, :_type) && (elem._type in keys(sch.map_logical_types))
+        _logical_type, converter = sch.map_logical_types[elem._type]
+        return converter
+    else
+        return identity
+    end
 end
 
 function logical_convert(sch::Schema, schname::T, val) where {T <: AbstractVector{String}}
