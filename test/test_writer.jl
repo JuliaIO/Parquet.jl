@@ -33,17 +33,6 @@ function test_write()
     # the file is very small so only one rowgroup
     col_chunks = columns(pf, 1)
 
-    colnum=12
-    col_chunk=col_chunks[colnum]
-
-    correct_vals = tbl[colnum]
-    coltype = eltype(correct_vals)
-    vals_from_file = values(pf, col_chunk)
-
-    if Missing <: coltype
-        @test ismissing.(correct_vals) == (vals_from_file[2] .== 0)
-    end
-
     for (colnum, col_chunk) in enumerate(col_chunks)
         correct_vals = tbl[colnum]
         coltype = eltype(correct_vals)
