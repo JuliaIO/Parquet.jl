@@ -11,7 +11,7 @@ if VERSION < v"1.3"
     using Missings: nonmissingtype
 end
 
-const PARQUET_JL_VERSION = v"0.5.1"
+const PARQUET_JL_VERSION = v"0.5.3"
 
 import Base: show, open, close, values, eltype, length
 import Thrift: isfilled
