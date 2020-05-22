@@ -2,6 +2,7 @@
 
 [![Build Status](https://travis-ci.org/JuliaIO/Parquet.jl.svg?branch=master)](https://travis-ci.org/JuliaIO/Parquet.jl)
 [![Build status](https://ci.appveyor.com/api/projects/status/gx8pvdiiery74r9l/branch/master?svg=true)](https://ci.appveyor.com/project/tanmaykm/parquet-jl-cufdj/branch/master)
+[![Coverage Status](https://coveralls.io/repos/github/JuliaIO/Parquet.jl/badge.svg?branch=master)](https://coveralls.io/github/JuliaIO/Parquet.jl?branch=master)
 
 ## Reader
 
