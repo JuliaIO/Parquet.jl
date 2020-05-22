@@ -193,12 +193,17 @@ end
 # layer 2 access
 # can access decoded values from pages
 
-function map_dict_vals(valdict::Vector{T1}, vals::Vector{T1}, map_vals::Vector{T2}, num_values=length(map_vals), vals_offset=0) where {T1, T2}
+function map_dict_vals(valdict::Vector{T1}, vals::Vector{T1}, map_vals::Vector{T2}, num_values, vals_offset::Int, has_defn_levels::Bool, defn_levels::Vector{Int32}, defn_level_offset::Int) where {T1, T2}
     if !isempty(valdict)
         @assert length(map_vals) == num_values
         @assert length(vals) >= (num_values + vals_offset)
+        @assert !has_defn_levels || ((length(defn_levels) - defn_level_offset) >= num_values)
+        nmissings = 0
         @inbounds for idx in 1:num_values
-            vals[idx+vals_offset] = valdict[map_vals[idx]+1]
+            while (has_defn_levels && (defn_levels[idx + defn_level_offset + nmissings] === Int32(0)))
+                nmissings += 1
+            end
+            vals[idx+vals_offset+nmissings] = valdict[map_vals[idx]+1]
         end
     end
 end
@@ -271,7 +276,7 @@ function values(par::ParFile, col::ColumnChunk, ::Type{T}) where {T}
             end
             if enc === Encoding.PLAIN_DICTIONARY || enc === Encoding.RLE_DICTIONARY
                 map_vals = read_rle_dict(io, num_values - nmissing)
-                map_dict_vals(valdict, vals, map_vals, num_values-nmissing, vals_offset)
+                map_dict_vals(valdict, vals, map_vals, num_values-nmissing, vals_offset, has_defn_levels, defn_levels, defn_level_offset-num_values)
             else
                 read_values(io, enc, ctype, num_values - nmissing, vals, vals_offset)
             end
