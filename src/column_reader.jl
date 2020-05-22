@@ -75,5 +75,3 @@ function read_column(path, filemetadata, col_num)
     end
     return res
 end
-
-()
