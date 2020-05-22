@@ -70,7 +70,7 @@ function compress_using_codec(colvals::AbstractVector{String}, codec::Int)::Vect
     for val in colvals
         # for string it needs to be stored as BYTE_ARRAY which needs the length
         # to be the first 4 bytes UInt32
-        write(io, val |> sizeof |> UInt32)
+        write(io, val |> sizeof |> UInt32 |> htol)
         # write each of the strings one after another
         write(io, val)
     end
@@ -97,7 +97,7 @@ function write_defn_levels(data_to_compress_io, colvals::AbstractVector{Union{Mi
 
     encoded_defn_data_length = length(bitpacking_header) + bytes_needed
     # write the definition data
-    write(data_to_compress_io, UInt32(encoded_defn_data_length))
+    write(data_to_compress_io, UInt32(encoded_defn_data_length) |> htol)
     write(data_to_compress_io, bitpacking_header)
     write(data_to_compress_io, encoded_defn_data)
 end
@@ -112,7 +112,7 @@ function write_defn_levels(data_to_compress_io, colvals::AbstractVector)
     encoded_defn_data_length = sizeof(rle_header) + sizeof(repeated_value)
 
     # write the definition data
-    write(data_to_compress_io, UInt32(encoded_defn_data_length))
+    write(data_to_compress_io, UInt32(encoded_defn_data_length) |> htol)
     write(data_to_compress_io, rle_header)
     write(data_to_compress_io, repeated_value)
 end
@@ -178,7 +178,7 @@ function write_encoded_data(data_to_compress_io, colvals::Union{AbstractVector{S
     for val in colvals
         # for string it needs to be stored as BYTE_ARRAY which needs the length
         # to be the first 4 bytes UInt32
-        write(data_to_compress_io, val |> sizeof |> UInt32)
+        write(data_to_compress_io, val |> sizeof |> UInt32 |> htol)
         # write each of the strings one after another
         write(data_to_compress_io, val)
     end
@@ -201,13 +201,13 @@ end
 function write_encoded_data(data_to_compress_io, colvals::AbstractArray)
     """ Efficient write of encoded data for `isbits` types"""
     @assert isbitstype(eltype(colvals))
-    write(data_to_compress_io, colvals)
+    write(data_to_compress_io, colvals |> htol)
 end
 
 function write_encoded_data(data_to_compress_io, colvals::SkipMissing)
     """ Write of encoded data for skipped missing types"""
     for val in colvals
-        write(data_to_compress_io, val)
+        write(data_to_compress_io, val |> htol)
     end
 end
 
@@ -216,7 +216,7 @@ function write_encoded_data(data_to_compress_io, colvals)
     The only requirement is that colvals has to be iterable
     """
     for val in skipmissing(colvals)
-        write(data_to_compress_io, val)
+        write(data_to_compress_io, val |> htol)
     end
 end
 
@@ -288,10 +288,10 @@ function write_col_page(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encodi
     rle_header = LittleEndianBase128.encode(UInt32(length(colvals)) << 1)
     repeated_value = UInt8(1)
 
-    encoded_defn_data_length = UInt32(sizeof(rle_header) + sizeof(repeated_value))
+    encoded_defn_data_length = sizeof(rle_header) + sizeof(repeated_value)
 
     ## write the encoded data length
-    write(fileio, encoded_defn_data_length)
+    write(fileio, encoded_defn_data_length |> UInt32 |> htol)
 
     write(fileio, rle_header)
     write(fileio, repeated_value)
@@ -593,7 +593,7 @@ function _write_parquet(itr_vectors, colnames, path, nchunks; ncols = length(itr
 
     filemetadata_size = write_thrift(fileio, filemetadata)
 
-    write(fileio, UInt32(filemetadata_size))
+    write(fileio, UInt32(filemetadata_size) |> htol)
     write(fileio, "PAR1")
     close(fileio)
 end

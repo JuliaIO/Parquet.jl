@@ -35,6 +35,7 @@ function test_write()
 
 
     for (colnum, col_chunk) in enumerate(col_chunks)
+        println(colnum)
         correct_vals = tbl[colnum]
         coltype = eltype(correct_vals)
         vals_from_file = values(pf, col_chunk)
@@ -55,4 +56,4 @@ function test_write()
     close(pf)
 end
 
-# test_write()
+test_write()
