@@ -14,6 +14,17 @@ function show(io::IO, cursor::RecordCursor)
     println(io, "    cols: $(join(colpaths, ", "))")
 end
 
+function show(io::IO, cursor::BatchedColumnsCursor)
+    par = cursor.par
+    rows = cursor.colcursors[1].row.rows
+    println(io, "Batched Columns Cursor on $(par.path)")
+    println(io, "    rows: $rows")
+    println(io, "    batches: $(length(cursor))")
+
+    colpaths = [join(colname, '.') for colname in cursor.colnames]
+    println(io, "    cols: $(join(colpaths, ", "))")
+end
+
 function show(io::IO, schema::SchemaElement, indent::AbstractString="", nchildren::Vector{Int}=Int[])
     print(io, indent)
     lchildren = length(nchildren)

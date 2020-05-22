@@ -129,6 +129,20 @@ function elemtype(schelem::SchemaElement)
     jtype
 end
 
+ntcolstype(sch::Schema, schname::T) where {T <: AbstractVector{String}} = get!(sch.nttype_lookup, schname) do
+    ntcolstype(sch, sch.name_lookup[schname])
+end
+function ntcolstype(sch::Schema, schelem::SchemaElement)
+    @assert num_children(schelem) > 0
+    idx = findfirst(x->x===schelem, sch.schema)
+    children_range = (idx+1):(idx+schelem.num_children)
+    names = [Symbol(x.name) for x in sch.schema[children_range]]
+    types = [(num_children(x) > 0) ? ntelemtype(sch, path_in_schema(sch, x)) : elemtype(sch, path_in_schema(sch, x)) for x in sch.schema[children_range]]
+    optionals = [isoptional(x) for x in sch.schema[children_range]]
+    types = [Vector{opt ? Union{t,Missing} : t} for (t,opt) in zip(types, optionals)]
+    NamedTuple{(names...,),Tuple{types...}}
+end
+
 ntelemtype(sch::Schema, schname::T) where {T <: AbstractVector{String}} = get!(sch.nttype_lookup, schname) do
     ntelemtype(sch, sch.name_lookup[schname])
 end
