@@ -19,8 +19,7 @@ import Thrift: isfilled
 export is_par_file, ParFile, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
 export schema
 export logical_timestamp, logical_string
-
-export RecordCursor
+export RecordCursor, BatchedColumnsCursor
 export write_parquet
 
 # package code goes here
