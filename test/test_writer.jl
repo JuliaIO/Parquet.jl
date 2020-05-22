@@ -33,7 +33,6 @@ function test_write()
     # the file is very small so only one rowgroup
     col_chunks = columns(pf, 1)
 
-    colnum=12
     col_chunk=col_chunks[colnum]
 
     correct_vals = tbl[colnum]
