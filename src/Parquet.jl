@@ -13,7 +13,7 @@ import Thrift: isfilled
 export is_par_file, ParFile, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
 export schema
 export logical_timestamp, logical_string
-export RecordCursor
+export RecordCursor, BatchedColumnsCursor
 
 # package code goes here
 include("PAR2/PAR2.jl")

@@ -275,6 +275,67 @@ end
 
 ##
 
+mutable struct BatchedColumnsCursor{T}
+    par::ParFile
+    colnames::Vector{Vector{String}}
+    colcursors::Vector{ColCursor}
+    colstates::Vector{Tuple{Int64,Int64}}
+    rowgroupid::Int
+    row::Int64
+end
+
+function BatchedColumnsCursor(par::ParFile)
+    sch = schema(par)
+
+    # supports only non nested columns as of now
+    if !all(num_children(schemaelem) == 0 for schemaelem in sch.schema[2:end])
+        error("nested schemas are not supported with BatchedColumnsCursor yet")
+    end
+
+    colcursors = [ColCursor(par, colname) for colname in colnames(par)]
+    rectype = ntcolstype(sch, sch.schema[1])
+    BatchedColumnsCursor{rectype}(par, colnames(par), colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), 1, 1)
+end
+
+eltype(cursor::BatchedColumnsCursor{T}) where {T} = T
+length(cursor::BatchedColumnsCursor) = length(rowgroups(cursor.par))
+
+function colcursor_values(colcursor::ColCursor)
+    defn_levels = colcursor.defn_levels
+    vals = colcursor.vals
+
+    logical_converter_fn = colcursor.logical_converter_fn
+
+    if !isempty(defn_levels) && !all(x===Int32(1) for x in defn_levels)
+        [(defn_levels[idx] === Int32(1)) ? logical_converter_fn(vals[idx]) : missing for idx in 1:length(vals)]
+    else
+        (logical_converter_fn === identity) ? vals : map(logical_converter_fn, vals)
+    end
+end
+
+function Base.iterate(cursor::BatchedColumnsCursor{T}, rowgroupid) where {T}
+    (rowgroupid > length(cursor)) && (return nothing)
+
+    colcursors = cursor.colcursors
+    for colcursor in colcursors
+        setrow(colcursor, cursor.row)
+    end
+    colvals = [colcursor_values(colcursor) for colcursor in colcursors]
+
+    cursor.row += (rowgroups(cursor.par)[cursor.rowgroupid]).num_rows
+    cursor.rowgroupid += 1
+    T(colvals), cursor.rowgroupid
+end
+
+function Base.iterate(cursor::BatchedColumnsCursor{T}) where {T}
+    cursor.row = 1
+    cursor.colstates = [_start(colcursor) for colcursor in cursor.colcursors]
+    iterate(cursor, cursor.rowgroupid)
+end
+
+
+##
+
 mutable struct RecordCursor{T}
     par::ParFile
     colnames::Vector{Vector{String}}
