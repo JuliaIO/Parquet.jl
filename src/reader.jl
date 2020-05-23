@@ -322,6 +322,11 @@ end
 function read_levels_and_nmissing(io, defn_enc::Int32, repn_enc::Int32, num_values::Int32, par::ParFile, page::Page, defn_levels::Vector{Int32}, repn_levels::Vector{Int32}, defn_offset::Int=0, repn_offset::Int=0)
     cname = colname(page.colchunk)
 
+    #@debug("before reading repn levels bytesavailable in page: $(bytesavailable(io))")
+    # read repetition levels. skipped if all columns are at 1st level
+    max_repn_level = max_repetition_level(par.schema, cname)
+    ((length(cname) > 1) && (max_repn_level > 0)) && read_levels(io, max_repn_level, repn_enc, num_values, repn_levels, repn_offset)
+
     #@debug("before reading defn levels bytesavailable in page: $(bytesavailable(io))")
     # read definition levels. skipped if column is required
     nmissing = Int32(0)
@@ -331,11 +336,6 @@ function read_levels_and_nmissing(io, defn_enc::Int32, repn_enc::Int32, num_valu
             (defn_levels[idx+defn_offset] === Int32(0)) && (nmissing += Int32(1))
         end
     end
-
-    #@debug("before reading repn levels bytesavailable in page: $(bytesavailable(io))")
-    # read repetition levels. skipped if all columns are at 1st level
-    max_repn_level = max_repetition_level(par.schema, cname)
-    ((length(cname) > 1) && (max_repn_level > 0)) && read_levels(io, max_repn_level, repn_enc, num_values, repn_levels, repn_offset)
 
     nmissing
 end
