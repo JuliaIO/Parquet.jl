@@ -4,9 +4,3 @@
 parquet-compatibility/
 julia-parquet-compatibility/
 .vscode/settings.json
-Manifest.toml
-parquet.code-workspace
-src/column_reader_rewrite.jl
-src/column_reader_to_vals.jl
-src/column_reader-dev.jl
-src/read_parquet-test.jl
