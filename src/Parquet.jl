@@ -11,7 +11,7 @@ if VERSION < v"1.3"
     using Missings: nonmissingtype
 end
 
-const PARQUET_JL_VERSION = v"0.5.1"
+const PARQUET_JL_VERSION = v"0.5.3"
 
 import Base: show, open, close, values, eltype, length
 import Thrift: isfilled
@@ -19,8 +19,7 @@ import Thrift: isfilled
 export is_par_file, ParFile, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
 export schema
 export logical_timestamp, logical_string
-
-export RecordCursor
+export RecordCursor, BatchedColumnsCursor
 export write_parquet
 export read_parquet
 
@@ -37,5 +36,6 @@ include("encoding.jl")
 include("metadata.jl")
 include("column_reader.jl")
 include("read_parquet.jl")
+include("writer.jl")
 
 end # module

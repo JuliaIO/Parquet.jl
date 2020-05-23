@@ -33,18 +33,22 @@ function test_write()
     # the file is very small so only one rowgroup
     col_chunks = columns(pf, 1)
 
-    for colnum in 1:length(col_chunks)
+    for (colnum, col_chunk) in enumerate(col_chunks)
         correct_vals = tbl[colnum]
         coltype = eltype(correct_vals)
-        vals_from_file = values(pf, col_chunks, colnum)
+        vals_from_file = values(pf, col_chunk)
         if Missing <: coltype
             @test ismissing.(correct_vals) == (vals_from_file[2] .== 0)
         end
 
+        non_missing_vals = collect(skipmissing(correct_vals))
+
         if nonmissingtype(coltype) == String
-            @test all(skipmissing(correct_vals) .== String.(vals_from_file[1]))
+            non_missing_vals_read = String.(vals_from_file[1][1:sum(vals_from_file[2])])
+            @test all(non_missing_vals .== non_missing_vals_read)
         else
-            @test all(skipmissing(correct_vals) .== vals_from_file[1])
+            non_missing_vals_read = vals_from_file[1][1:sum(vals_from_file[2])]
+            @test all(non_missing_vals .== non_missing_vals_read)
         end
     end
 

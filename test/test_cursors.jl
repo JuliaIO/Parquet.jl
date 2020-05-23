@@ -37,6 +37,20 @@ function test_row_cursor(file::String)
     @info("loaded", file, count=nr, last_record=rec, time_to_read=time()-t1)
 end
 
+function test_batchedcols_cursor(file::String)
+    p = ParFile(file)
+
+    t1 = time()
+    nr = nrows(p)
+    cnames = colnames(p)
+    cc = BatchedColumnsCursor(p)
+    batch = nothing
+    for i in cc
+        batch = i
+    end
+    @info("loaded", file, count=nr, ncols=length(propertynames(batch)), time_to_read=time()-t1)
+end
+
 function test_col_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
@@ -45,7 +59,7 @@ function test_col_cursor_all_files()
     end
 end
 
-function test_juliabuilder_row_cursor_all_files()
+function test_row_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
             test_row_cursor(joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"))
@@ -53,5 +67,14 @@ function test_juliabuilder_row_cursor_all_files()
     end
 end
 
+function test_batchedcols_cursor_all_files()
+    for encformat in ("SNAPPY", "GZIP", "NONE")
+        for fname in ("nation", "customer")
+            test_batchedcols_cursor(joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"))
+        end
+    end
+end
+
 #test_col_cursor_all_files()
-test_juliabuilder_row_cursor_all_files()
+test_row_cursor_all_files()
+test_batchedcols_cursor_all_files()

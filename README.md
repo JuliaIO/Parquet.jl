@@ -81,6 +81,32 @@ Schema:
     }
 ```
 
+Create cursor to iterate over batches of column values. Each iteration returns a named tuple of column names with batch of column values. One batch corresponds to one row group of the parquet file.
+
+```julia
+julia> cc = Parquet.BatchedColumnsCursor(par)
+Batched Columns Cursor on customer.impala.parquet
+    rows: 1:150000
+    batches: 1
+    cols: c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment
+
+julia> batchvals, state = iterate(cc);
+
+julia> propertynames(batchvals)
+(:c_custkey, :c_name, :c_address, :c_nationkey, :c_phone, :c_acctbal, :c_mktsegment, :c_comment)
+
+julia> length(batchvals.c_name)
+150000
+
+julia> batchvals.c_name[1:5]
+5-element Array{Union{Missing, String},1}:
+ "Customer#000000001"
+ "Customer#000000002"
+ "Customer#000000003"
+ "Customer#000000004"
+ "Customer#000000005"
+```
+
 Create cursor to iterate over records. In parallel mode, multiple remote cursors can be created and iterated on in parallel.
 
 ```julia
