@@ -4,6 +4,8 @@
 [![Build status](https://ci.appveyor.com/api/projects/status/gx8pvdiiery74r9l/branch/master?svg=true)](https://ci.appveyor.com/project/tanmaykm/parquet-jl-cufdj/branch/master)
 [![Coverage Status](https://coveralls.io/repos/github/JuliaIO/Parquet.jl/badge.svg?branch=master)](https://coveralls.io/github/JuliaIO/Parquet.jl?branch=master)
 
+## Reader
+
 Load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet). Only metadata is read initially, data is loaded in chunks on demand. (Note: [ParquetFiles.jl](https://github.com/queryverse/ParquetFiles.jl) also provides load support for Parquet files under the FileIO.jl package.)
 
 `ParFile` represents a Parquet file at `path` open for reading. Options to map logical types can be provided via `map_logical_types`.
@@ -132,3 +134,31 @@ The reader will interpret logical types based on the `map_logical_types` provide
 - `logical_string(v): Applicable for strings that are `BYTE_ARRAY` values. Without this, they are represented in a `Vector{UInt8}` type. With this they are converted to `String` types.
 
 Variants of these methods or custom methods can also be applied by caller.
+
+## Writer
+
+You can write any Tables.jl column-accessible table that contains columns of these types and their union with `Missing`: `Int32`, `Int64`, `String`, `Bool`, `Float32`, `Float64`.
+
+However, `CategoricalArray`s are not yet supported. Furthermore, these types are not yet supported: `Int96`, `Int128`, `Date`, and `DateTime`.
+
+### Writer Example
+
+```julia
+tbl = (
+    int32 = Int32.(1:1000),
+    int64 = Int64.(1:1000),
+    float32 = Float32.(1:1000),
+    float64 = Float64.(1:1000),
+    bool = rand(Bool, 1000),
+    string = [randstring(8) for i in 1:1000],
+    int32m = rand([missing, 1:100...], 1000),
+    int64m = rand([missing, 1:100...], 1000),
+    float32m = rand([missing, Float32.(1:100)...], 1000),
+    float64m = rand([missing, Float64.(1:100)...], 1000),
+    boolm = rand([missing, true, false], 1000),
+    stringm = rand([missing, "abc", "def", "ghi"], 1000)
+)
+
+file = tempname()*".parquet"
+write_parquet(file, tbl)
+```
