@@ -244,8 +244,8 @@ function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int64,Int64}) where {T}
     (levelpos == cursor.levelpos) || throw(InvalidStateException("Invalid column cursor state", :levelpos))
 
     maxdefn = cursor.maxdefn
-    defn_level = isempty(cursor.defn_levels) ? maxdefn : cursor.defn_levels[levelpos]
-    repn_level = isempty(cursor.repn_levels) ? 0 : cursor.repn_levels[levelpos]
+    defn_level = isempty(cursor.defn_levels) ? maxdefn : cursor.defn_levels[cursor.valpos]
+    repn_level = isempty(cursor.repn_levels) ? 0 : cursor.repn_levels[cursor.valpos]
     cursor.levelpos += 1
     if defn_level == maxdefn
         val = (cursor.vals[cursor.valpos])::T
@@ -380,7 +380,14 @@ end
 
 function _val_or_missing(dict::Dict{Symbol,Any}, k::Symbol, ::Type{T}) where {T}
     v = get(dict, k, missing)
-    (isa(v, Dict{Symbol,Any}) ? _nt(v, T) : v)::T
+    if isa(v, Vector)
+        elt = eltype(v)
+        if Dict{Symbol,Any} <: elt
+            nonmissing_elt = nonmissingtype(eltype(T))
+            v = [el === missing ? el : _nt(el,nonmissing_elt) for el in v]
+        end
+    end
+    (isa(v, Dict{Symbol,Any}) ? _nt(v, nonmissingtype(T)) : v)::T
 end
 
 @generated function _nt(dict::Dict{Symbol,Any}, ::Type{T}) where {T}
@@ -429,7 +436,7 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcurso
 
         defined = ((val === nothing) || (idx < lparts)) ? haskey(F, symleaf) : false
         mustdefine = defn_level >= Fdefn
-        mustrepeat = repeated && (repn_level == Frepn)
+        mustrepeat = repeated && (repn_level <= Frepn)
         repidx = 0
         if mustrepeat
             repkey = (colid, idx)

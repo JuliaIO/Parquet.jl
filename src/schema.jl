@@ -150,11 +150,13 @@ function ntelemtype(sch::Schema, schelem::SchemaElement)
     @assert num_children(schelem) > 0
     idx = findfirst(x->x===schelem, sch.schema)
     children_range = (idx+1):(idx+schelem.num_children)
+    repeated = isfilled(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REPEATED)
     names = [Symbol(x.name) for x in sch.schema[children_range]]
     types = [(num_children(x) > 0) ? ntelemtype(sch, path_in_schema(sch, x)) : elemtype(sch, path_in_schema(sch, x)) for x in sch.schema[children_range]]
     optionals = [isoptional(x) for x in sch.schema[children_range]]
     types = [opt ? Union{t,Missing} : t for (t,opt) in zip(types, optionals)]
-    NamedTuple{(names...,),Tuple{types...}}
+    T = NamedTuple{(names...,),Tuple{types...}}
+    repeated ? Vector{T} : T
 end
 
 bit_or_byte_length(sch::Schema, schname::Vector{String}) = bit_or_byte_length(elem(sch, schname))
