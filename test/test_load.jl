@@ -136,6 +136,23 @@ function test_load_nested()
     @test v.max_len == 64192.0
     @test v.reduced_max_len == 64
     @test String(copy(v.vocab)) == "12400277_a"
+
+    p = ParFile(joinpath(@__DIR__, "nested", "nested.parq"))
+
+    @test nrows(p) == 10
+    @test ncols(p) == 1
+
+    rc = RecordCursor(p)
+    @test length(rc) == 10
+    @test eltype(rc) == NamedTuple{(:nest,),Tuple{Union{Missing, NamedTuple{(:thing,),Tuple{Union{Missing, NamedTuple{(:list,),Tuple{Array{NamedTuple{(:element,),Tuple{Union{Missing, Array{UInt8,1}}}},1}}}}}}}}}
+
+    values = collect(rc)
+    v = first(values)
+    @test length(v.nest.thing.list) == 1
+    @test v.nest.thing.list[1].element == UInt8[0x68,0x69]
+    v = last(values)
+    @test length(v.nest.thing.list) == 1
+    @test v.nest.thing.list[1].element == UInt8[0x77,0x6f,0x72,0x6c,0x64]
 end
 
 test_load_all_pages()
