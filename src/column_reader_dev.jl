@@ -1,164 +1,97 @@
+using Parquet
+using Parquet:TYPES, read_thrift, PAR2, BitPackedIterator, decompress_with_codec
+using Thrift: isfilled
+using Snappy, CodecZlib, CodecZstd
 
+path = "c:/git/parquet-data-collection/dsd50p.parquet"
+path = "c:/data/Performance_2003Q3.txt.parquet"
+
+meta = Parquet.metadata(path);
+par = ParFile(path);
+
+nrows(par)
+
+colnames(par)
 
 using Random: randstring
-test_write1() = begin
-    tbl = (
-        int32 = rand(Int32, 1000),
-        int64 = rand(Int64, 1000),
-        float32 = rand(Float32, 1000),
-        float64 = rand(Float64, 1000),
-        bool = rand(Bool, 1000),
-        string = [randstring(8) for i in 1:1000],
-        int32m = rand([missing, rand(Int32, 10)...], 1000),
-        int64m = rand([missing, rand(Int64, 10)...], 1000),
-        float32m = rand([missing, rand(Float32, 10)...], 1000),
-        float64m = rand([missing, rand(Float64, 10)...], 1000),
-        boolm = rand([missing, true, false], 1000),
-        stringm = rand([missing, "abc", "def", "ghi"], 1000)
-    )
+tbl = (
+    int32 = rand(Int32, 1000),
+    int64 = rand(Int64, 1000),
+    float32 = rand(Float32, 1000),
+    float64 = rand(Float64, 1000),
+    bool = rand(Bool, 1000),
+    string = [randstring(8) for i in 1:1000],
+    int32m = rand([missing, rand(Int32, 10)...], 1000),
+    int64m = rand([missing, rand(Int64, 10)...], 1000),
+    float32m = rand([missing, rand(Float32, 10)...], 1000),
+    float64m = rand([missing, rand(Float64, 10)...], 1000),
+    boolm = rand([missing, true, false], 1000),
+    stringm = rand([missing, "abc", "def", "ghi"], 1000)
+)
 
-    write_parquet("c:/scratch/plsdel.parquet", tbl)
+tmpfile = tempname()*".parquet"
+
+write_parquet(tmpfile, tbl)
+
+path = tmpfile
+
+for i in 1:12
+    @time col1 = Parquet.read_column(path, i);
 end
 
-test_write1()
+@time col1 = Parquet.read_column(path, 1)
+col1 == tbl.int32
 
+col_num = 5
+
+filemetadata = Parquet.metadata(path)
 par = ParFile(path)
+fileio = open(path)
 
 T = TYPES[filemetadata.schema[col_num+1]._type+1]
+
 # TODO detect if missing is necessary
 res = Vector{Union{Missing, T}}(missing, nrows(par))
-write_cursor = 1
-for row_group in filemetadata.row_groups
-    pgs = pages(par, row_group.columns[col_num])
 
-    drop_page_count = 0
-    # is the first page a dictionary page
-    # this is not the case for boolean values for example
-    if isfilled(pgs[1].hdr, :dictionary_page_header)
-        # the first page is almost always the dictionary page
-        dictionary_page = pgs[1]
-        drop_page_count = 1
-        dictionary_of_values = T.(values(par, dictionary_page)[1])
+length(filemetadata.row_groups)
+
+from = 1
+last_from = from
+
+row_group = filemetadata.row_groups[1]
+
+colchunk_meta = row_group.columns[col_num].meta_data
+
+if isfilled(colchunk_meta, :dictionary_page_offset)
+    seek(fileio, colchunk_meta.dictionary_page_offset)
+    dict_page_header = read_thrift(fileio, PAR2.PageHeader)
+    compressed_data = read(fileio, dict_page_header.compressed_page_size)
+    uncompressed_data = decompress_with_codec(compressed_data, colchunk_meta.codec)
+    @assert length(uncompressed_data) == dict_page_header.uncompressed_page_size
+
+    if dict_page_header.dictionary_page_header.encoding == PAR2.Encoding.PLAIN_DICTIONARY
+        # see https://github.com/apache/parquet-format/blob/master/Encodings.md#dictionary-encoding-plain_dictionary--2-and-rle_dictionary--8
+        # which is in effect the plain encoding see https://github.com/apache/parquet-format/blob/master/Encodings.md#plain-plain--0
+        dict = reinterpret(T, uncompressed_data)
+    else
+        error("Only Plain Dictionary encoding is supported")
     end
-
-    # TODO deal with other types of pages e.g. dataheaderv2
-
-    # everything after the first data datapages
-    for data_page in Base.Iterators.drop(pgs, drop_page_count)
-        vals, definitions, decode = values(par, data_page)
-
-        @assert all(in((0, 1)), definitions)
-
-        l = sum(==(1), definitions)
-        # if all definitions values are 1 then it's not used
-        definitions_not_used = all(==(1), definitions)
-
-        # data_page can be either
-        # * dictionary-encoded in which case we should look into the dictionary
-        # * plained-encoded in which case just return the values
-        page_encoding = Parquet.page_encoding(data_page)
-
-        if page_encoding == Encoding.PLAIN_DICTIONARY
-            if definitions_not_used
-                res[write_cursor:write_cursor+l-1] .= dictionary_of_values[vals.+1]
-            else
-                val_index = 1
-                for (offset, definition) in enumerate(definitions)
-                    if definition != 0
-                        value = vals[val_index]
-                        res[write_cursor+offset-1] = dictionary_of_values[value + 1]
-                        val_index += 1
-                    end
-                end
-            end
-        elseif page_encoding == Encoding.PLAIN
-            if definitions_not_used
-                res[write_cursor:write_cursor+l-1] .= T.(vals)
-            else
-                val_index = 1
-                for (offset, definition)  in enumerate(definitions)
-                    if definition != 0
-                        value = vals[val_index]
-                        res[write_cursor+offset-1] = T(value)
-                        val_index += 1
-                    end
-                end
-            end
-        else
-            error("page encoding not supported yet")
-        end
-
-        write_cursor += length(definitions)
-    end
+else
+    dict = nothing
 end
-return res
-par = ParFile(path)
 
-T = TYPES[filemetadata.schema[col_num+1]._type+1]
-# TODO detect if missing is necessary
-res = Vector{Union{Missing, T}}(missing, nrows(par))
-write_cursor = 1
-for row_group in filemetadata.row_groups
-    pgs = pages(par, row_group.columns[col_num])
+# seek to the first data page
+seek(fileio, colchunk_meta.data_page_offset)
 
-    drop_page_count = 0
-    # is the first page a dictionary page
-    # this is not the case for boolean values for example
-    if isfilled(pgs[1].hdr, :dictionary_page_header)
-        # the first page is almost always the dictionary page
-        dictionary_page = pgs[1]
-        drop_page_count = 1
-        dictionary_of_values = T.(values(par, dictionary_page)[1])
-    end
+pg = read_thrift(fileio, PAR2.PageHeader)
 
-    # TODO deal with other types of pages e.g. dataheaderv2
+Parquet.read_data_page_vals!(res, fileio, dict, colchunk_meta.codec, T, from)
 
-    # everything after the first data datapages
-    for data_page in Base.Iterators.drop(pgs, drop_page_count)
-        vals, definitions, decode = values(par, data_page)
-
-        @assert all(in((0, 1)), definitions)
-
-        l = sum(==(1), definitions)
-        # if all definitions values are 1 then it's not used
-        definitions_not_used = all(==(1), definitions)
-
-        # data_page can be either
-        # * dictionary-encoded in which case we should look into the dictionary
-        # * plained-encoded in which case just return the values
-        page_encoding = Parquet.page_encoding(data_page)
-
-        if page_encoding == Encoding.PLAIN_DICTIONARY
-            if definitions_not_used
-                res[write_cursor:write_cursor+l-1] .= dictionary_of_values[vals.+1]
-            else
-                val_index = 1
-                for (offset, definition) in enumerate(definitions)
-                    if definition != 0
-                        value = vals[val_index]
-                        res[write_cursor+offset-1] = dictionary_of_values[value + 1]
-                        val_index += 1
-                    end
-                end
-            end
-        elseif page_encoding == Encoding.PLAIN
-            if definitions_not_used
-                res[write_cursor:write_cursor+l-1] .= T.(vals)
-            else
-                val_index = 1
-                for (offset, definition)  in enumerate(definitions)
-                    if definition != 0
-                        value = vals[val_index]
-                        res[write_cursor+offset-1] = T(value)
-                        val_index += 1
-                    end
-                end
-            end
-        else
-            error("page encoding not supported yet")
-        end
-
-        write_cursor += length(definitions)
-    end
+# repeated read data page
+while from - last_from  < row_group.num_rows
+    from = read_data_page_vals!(res, fileio, dict, colchunk_meta.codec, T, from) + 1
 end
-return res
+last_from = from
+
+
+res
