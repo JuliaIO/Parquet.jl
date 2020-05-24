@@ -42,6 +42,28 @@ end
 @time col1 = Parquet.read_column(path, 1)
 col1 == tbl.int32
 
+using BenchmarkTools
+
+@benchmark Parquet.read_column($path, 1)
+
+
+
+
+
+
+
+
+
+@benchmark Parquet.read_column($path, 1)
+
+
+
+
+
+
+
+
+
 col_num = 5
 
 filemetadata = Parquet.metadata(path)

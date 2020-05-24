@@ -51,9 +51,6 @@ function decompress_with_codec(compressed_data::Vector{UInt8}, codec)::Vector{UI
     end
 end
 
-zero_or_missing(::Type{String}) = missing
-zero_or_missing(::Type{T}) where T = zero(T)
-
 function read_column(path, col_num)
     filemetadata = Parquet.metadata(path)
     par = ParFile(path)
@@ -63,9 +60,6 @@ function read_column(path, col_num)
 
     # TODO detect if missing is necessary
     res = Vector{Union{Missing, T}}(undef, nrows(par))
-    res .= zero_or_missing(T)
-
-    length(filemetadata.row_groups)
 
     from = 1
     last_from = from
@@ -176,7 +170,7 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
             # raw_data = reinterpret(T, read(uncompressed_data_io))
             # len_raw_data = length(raw_data)
             # to = min(from + len_raw_data - 1, res_len)
-            #res[from:to] .= raw_data
+            # res[from:to] .= raw_data
         end
     elseif data_page_header.data_page_header.encoding == PAR2.Encoding.PLAIN_DICTIONARY
         # this means the data is encoded in integers format which form the indices to the data
