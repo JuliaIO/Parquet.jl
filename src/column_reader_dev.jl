@@ -35,16 +35,17 @@ write_parquet(tmpfile, tbl)
 
 path = tmpfile
 
+@time col1 = Parquet.read_column(path, 4)
+
 for i in 1:12
     @time col1 = Parquet.read_column(path, i);
 end
 
-@time col1 = Parquet.read_column(path, 1)
-col1 == tbl.int32
+function read_filep(path, n)
+    collect(Parquet.read_column(path, i) for i in 1:n)
+end
 
-using BenchmarkTools
-
-@benchmark Parquet.read_column($path, 1)
+@time a = read_filep(path, 4);
 
 
 

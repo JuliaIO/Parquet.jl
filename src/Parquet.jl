@@ -36,6 +36,5 @@ include("encoding.jl")
 include("metadata.jl")
 include("column_reader.jl")
 include("read_parquet.jl")
-include("writer.jl")
 
 end # module

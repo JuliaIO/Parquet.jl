@@ -117,12 +117,12 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
     # * definition levels -
     # * values
 
+    uncompressed_data_io = IOBuffer(uncompressed_data, read=true, write=false, append=false)
+
     # definition levels
     # do_read_defn_lvls = isfilled(data_page_header.data_page_header, :statistics) &&
     #     isfilled(data_page_header.data_page_header.statistics, :null_count) &&
     #     data_page_header.data_page_header.statistics.null_count > 0
-    uncompressed_data_io = IOBuffer(uncompressed_data, read=true, write=false, append=false)
-
     if data_page_header.data_page_header.definition_level_encoding == PAR2.Encoding.RLE
         # for unnested columns the highest possible value for definiton is 1
         # which can represented with just one bit so the bit width is always 1
@@ -139,6 +139,24 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
         else
             # bitpacked encoded
             bit_pack_len = Int(encoded_data_header >> 1)
+
+            bytes_to_read = bitwidth*bit_pack_len
+            data = read(uncompressed_data_io, bytes_to_read)
+
+            pos_after_reading_encoded_data = position(uncompressed_data_io)
+
+            # the structure of Vector{Union{T, Missing}} is
+            # * the T values first
+            # * the missing are stored with UInt8(0) for missing
+            # * and UInt8(1) otherwise
+            # see https://docs.julialang.org/en/v1/devdocs/isbitsunionarrays/
+            missing_bytes::Vector{UInt8} = BitPackedIterator(data, bitwidth) |> collect
+
+            src_ptr = Ptr{UInt8}(pointer(missing_bytes))
+            dest_ptr = Ptr{UInt8}(pointer(res, res_len+1))
+
+            # copy content over
+            GC.@preserve src_ptr dest_ptr unsafe_copyto!(dest_ptr, src_ptr, res_len)
         end
     else
         error("encoding not supported")
@@ -159,6 +177,8 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
             digits(UInt8, read(uncompressed_data_io), base=2)
             len_raw_data = 8length(raw_data)
         else
+            # the copying approach is alot faster than the commented out
+            # assignment approach
             pos_for_pointer = position(uncompressed_data_io) + 1
             src_ptr = Ptr{T}(pointer(uncompressed_data, pos_for_pointer))
             dest_ptr = Ptr{T}(pointer(res, from))
@@ -170,7 +190,7 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
             # raw_data = reinterpret(T, read(uncompressed_data_io))
             # len_raw_data = length(raw_data)
             # to = min(from + len_raw_data - 1, res_len)
-            # res[from:to] .= raw_data
+            # @inbounds res[from:to] .= raw_data
         end
     elseif data_page_header.data_page_header.encoding == PAR2.Encoding.PLAIN_DICTIONARY
         # this means the data is encoded in integers format which form the indices to the data
