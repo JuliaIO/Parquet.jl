@@ -13,6 +13,8 @@ nrows(par)
 
 colnames(par)
 
+@time tbl = Parquet.read_column.(Ref(path), 1:length(colnames(par)));
+
 using Random: randstring
 tbl = (
     int32 = rand(Int32, 1000),
@@ -27,94 +29,54 @@ tbl = (
     float64m = rand([missing, rand(Float64, 10)...], 1000),
     boolm = rand([missing, true, false], 1000),
     stringm = rand([missing, "abc", "def", "ghi"], 1000)
-)
+);
 
 tmpfile = tempname()*".parquet"
 
-write_parquet(tmpfile, tbl)
+write_parquet(tmpfile, tbl);
 
 path = tmpfile
 
-@time col1 = Parquet.read_column(path, 4)
+col_num = 3
+@time col1 = Parquet.read_column(path, col_num);
+col1
+correct = getproperty(tbl, keys(tbl)[col_num])
+all(ismissing.(col1) .== ismissing.(correct))
+all(skipmissing(col1) .== skipmissing(correct))
 
-for i in 1:12
-    @time col1 = Parquet.read_column(path, i);
+using Test
+checkcol(col_num) = begin
+    println(col_num)
+    @time col1 = Parquet.read_column(path, col_num);
+    # correct = getproperty(tbl, keys(tbl)[col_num])
+    # @test all(ismissing.(col1) .== ismissing.(correct))
+    # @test all(skipmissing(col1) .== skipmissing(correct))
 end
 
-function read_filep(path, n)
-    collect(Parquet.read_column(path, i) for i in 1:n)
-end
-
-@time a = read_filep(path, 4);
+@time checkcol.(1:31)
 
 
 
-
-
-
-
-
-
-@benchmark Parquet.read_column($path, 1)
-
-
-
-
-
-
-
-
-
-col_num = 5
-
-filemetadata = Parquet.metadata(path)
-par = ParFile(path)
-fileio = open(path)
-
-T = TYPES[filemetadata.schema[col_num+1]._type+1]
-
-# TODO detect if missing is necessary
-res = Vector{Union{Missing, T}}(missing, nrows(par))
-
-length(filemetadata.row_groups)
-
-from = 1
-last_from = from
-
-row_group = filemetadata.row_groups[1]
-
-colchunk_meta = row_group.columns[col_num].meta_data
-
-if isfilled(colchunk_meta, :dictionary_page_offset)
-    seek(fileio, colchunk_meta.dictionary_page_offset)
-    dict_page_header = read_thrift(fileio, PAR2.PageHeader)
-    compressed_data = read(fileio, dict_page_header.compressed_page_size)
-    uncompressed_data = decompress_with_codec(compressed_data, colchunk_meta.codec)
-    @assert length(uncompressed_data) == dict_page_header.uncompressed_page_size
-
-    if dict_page_header.dictionary_page_header.encoding == PAR2.Encoding.PLAIN_DICTIONARY
-        # see https://github.com/apache/parquet-format/blob/master/Encodings.md#dictionary-encoding-plain_dictionary--2-and-rle_dictionary--8
-        # which is in effect the plain encoding see https://github.com/apache/parquet-format/blob/master/Encodings.md#plain-plain--0
-        dict = reinterpret(T, uncompressed_data)
-    else
-        error("Only Plain Dictionary encoding is supported")
+using Base.Threads: @spawn
+read1(path, n) = begin
+    result = Vector{Any}(undef, length(n))
+    for i in n
+        result[i] = @spawn Parquet.read_column(path, i)
     end
-else
-    dict = nothing
+    fetch.(result)
 end
 
-# seek to the first data page
-seek(fileio, colchunk_meta.data_page_offset)
+@time a = read1(path, 1:5)
 
-pg = read_thrift(fileio, PAR2.PageHeader)
+using DataFrames
 
-Parquet.read_data_page_vals!(res, fileio, dict, colchunk_meta.codec, T, from)
+@time ba=DataFrame(a, copycols=false)
+@time ba=DataFrame(a)
 
-# repeated read data page
-while from - last_from  < row_group.num_rows
-    from = read_data_page_vals!(res, fileio, dict, colchunk_meta.codec, T, from) + 1
-end
-last_from = from
+b1
 
 
-res
+import Base: add_int
+@edit Base.add_int(100, 1)
+
+add_int
