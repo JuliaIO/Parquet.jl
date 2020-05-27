@@ -233,51 +233,44 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
 
                 # the tmp_missing_bytes is always in a multiple of 8 so need to
                 # be careful not to write too much
-                last_from_defn = from_defn
-
                 # compute the new from_defn
-                from_defn = min(from_defn + len_of_tmp_missing_bytes, from + num_values)
+                new_from_defn = min(from_defn + len_of_tmp_missing_bytes, from + num_values)
 
-                len_to_write = from_defn - last_from_defn
+                len_to_write = new_from_defn - from_defn
+
+                if len_to_write == len_of_tmp_missing_bytes
+                    append!(missing_bytes, tmp_missing_bytes)
+                elseif len_to_write < len_of_tmp_missing_bytes
+                    tmp_missing_bytes_smaller = unsafe_wrap(Vector{UInt8}, pointer(tmp_missing_bytes), len_to_write)
+                    append!(missing_bytes, tmp_missing_bytes_smaller)
+                else
+                    error("something is wrong")
+                end
 
                 if T == String
                     # do nothing
                 else
-                    GC.@preserve tmp_missing_bytes res begin
-                        if len_to_write == len_of_tmp_missing_bytes
-
-                            append!(missing_bytes, tmp_missing_bytes)
-
-                            # @assert from_defn-from == length(missing_bytes)
-
-                            if length(missing_bytes) > num_values
-                                println(tmp_missing_bytes)
-                                println("$last_from_defn $from_defn $(from+num_values) $len_to_write $len_of_tmp_missing_bytes")
-                            end
-                            # @assert length(missing_bytes) <= num_values
+                    if len_to_write == len_of_tmp_missing_bytes
+                        GC.@preserve tmp_missing_bytes res begin
                             # if not too long then can straight copy
                             src_ptr = Ptr{UInt8}(pointer(tmp_missing_bytes))
                             dest_ptr = Ptr{UInt8}(pointer(res, res_len+1)) + from_defn - 1
                             # copy content over
                             unsafe_copyto!(dest_ptr, src_ptr, length(tmp_missing_bytes))
-                        elseif len_to_write < len_of_tmp_missing_bytes
-                            tmp_missing_bytes_smaller = unsafe_wrap(Vector{UInt8}, pointer(tmp_missing_bytes), len_to_write)
-                            # @assert length(tmp_missing_bytes_smaller) == len_to_write
-                            append!(missing_bytes, tmp_missing_bytes_smaller)
-                            # @assert from_defn - from == length(missing_bytes)
-                            # @assert length(missing_bytes) == num_values
-
+                        end
+                    elseif len_to_write < len_of_tmp_missing_bytes
+                        GC.@preserve tmp_missing_bytes_smaller res begin
                             src_ptr = Ptr{UInt8}(pointer(tmp_missing_bytes_smaller))
                             dest_ptr = Ptr{UInt8}(pointer(res, res_len+1)) + from_defn - 1
                             # copy content over
-                            unsafe_copyto!(dest_ptr, src_ptr, length(tmp_missing_bytes_smaller))
-                        else
-                            error("something is wrong")
+                            unsafe_copyto!(dest_ptr, src_ptr, len_to_write)
                         end
+                    else
+                        error("something is wrong")
                     end
+
                 end
-                # @assert from_defn-from == length(missing_bytes)
-                # @assert length(missing_bytes) <= num_values
+                from_defn = new_from_defn
             end
         end
     else
@@ -320,7 +313,9 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
                 i = from
                 while !eof(uncompressed_data_io)
                     udi = read(uncompressed_data_io, UInt8)
-                    raw_data = Base.unsafe_wrap(Vector{Bool}, pointer(res, i) |>  Ptr{Bool}, (8,))
+                    GC.@preserve res begin
+                        raw_data = Base.unsafe_wrap(Vector{Bool}, pointer(res, i) |>  Ptr{Bool}, (8,))
+                    end
                     digits!(raw_data, udi, base=2)
 
                     if i + 8 - 1 <= res_len
@@ -357,6 +352,7 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
         else
             if has_missing
                 raw_data = reinterpret(T, read(uncompressed_data_io))
+                return raw_data, missing_bytes
                 j = 1
                 for (i, missing_byte) in zip(from:to, missing_bytes)
                     if missing_byte == 1

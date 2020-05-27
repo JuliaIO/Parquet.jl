@@ -3,23 +3,6 @@ using Parquet:TYPES, read_thrift, PAR2, BitPackedIterator, decompress_with_codec
 using Thrift: isfilled
 using Snappy, CodecZlib, CodecZstd
 
-path = "c:/git/parquet-data-collection/dsd50p.parquet"
-path = "c:/data/Performance_2003Q3.txt.parquet"
-
-col_num = 1
-@time col1 = Parquet.read_column(path, col_num);
-col1
-
-meta = Parquet.metadata(path);
-par = ParFile(path);
-
-nrows(par)
-
-colnames(par)
-close(par)
-
-#@time tbl = Parquet.read_column.(Ref(path), 1:length(colnames(par)));
-
 using Random: randstring
 tbl = (
     int32 = rand(Int32, 1000),
@@ -38,13 +21,40 @@ tbl = (
 
 tmpfile = tempname()*".parquet"
 
-write_parquet(tmpfile, tbl);
-
-@time adf = read_parquet(tmpfile);
-
-
+@time write_parquet(tmpfile, tbl);
 path = tmpfile
 
+col_num=12
+@time col1 = Parquet.read_column(path, col_num);
+all(col1 .=== tbl.stringm)
+
+
+using BenchmarkTools
+@benchmark adf = read_parquet(path)
+
+
+
+
+
+
+
+
+path = "c:/git/parquet-data-collection/dsd50p.parquet"
+path = "c:/data/Performance_2003Q3.txt.parquet"
+
+col_num = 1
+@time col1 = Parquet.read_column(path, col_num);
+col1
+
+meta = Parquet.metadata(path);
+par = ParFile(path);
+
+nrows(par)
+
+colnames(par)
+close(par)
+
+#@time tbl = Parquet.read_column.(Ref(path), 1:length(colnames(par)));
 
 
 col1
@@ -88,6 +98,8 @@ end
 
 @time checkcol(path, 31, multithreaded=true);
 @time checkcol(path, 31, multithreaded=false);
+
+@time checkcol(path, 12, multithreaded=false);
 
 
 
