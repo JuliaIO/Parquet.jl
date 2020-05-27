@@ -10,15 +10,12 @@ read_parquet(path; kwargs...) = read_parquet(path, String[]; kwargs...)
 function read_parquet(path, cols::Vector{String}; multithreaded=true, verbose = false)
 	"""function for reading parquet"""
 
-	if multithreaded
-		# use a bounded channel to limit
-	    c1 = Channel{Bool}(Threads.nthreads())
-	    atexit(()->close(c1))
-	end
+    par = ParFile(path)
+	nc = ncols(par)
 
-	nc = ncols(ParFile(path))
+    colnames = [sch.name for sch in  drop(par.schema.schema, 1)]
 
-	colnames = [sch.name for sch in  drop(ParFile(path).schema.schema, 1)]
+    close(par)
 
 	if length(cols) == 0
 		colnums = collect(1:nc)
@@ -31,13 +28,8 @@ function read_parquet(path, cols::Vector{String}; multithreaded=true, verbose = 
 	filemetadata = metadata(path)
 
 	if multithreaded
-		@showprogress for (i, j) in enumerate(colnums)
-			put!(c1, true)
-			results[i] = @spawn begin
-				res = read_column(path, filemetadata, j)
-				take!(c1)
-				res
-			end
+		for (i, j) in enumerate(colnums)
+			results[i] = @spawn read_column(path, filemetadata, j)
 		end
 	else
 		@showprogress for (i, j) in enumerate(colnums)
@@ -47,10 +39,11 @@ function read_parquet(path, cols::Vector{String}; multithreaded=true, verbose = 
 
 	symbol_col_names = collect(Symbol(col) for col in colnames[colnums])
 
-	if multithreaded
-		fnl_results = collect(fetch(result) for result in results)
-		return namedtuple(symbol_col_names, fnl_results)
-	else
-		return namedtuple(symbol_col_names, results)
-	end
+    if multithreaded
+        @showprogress for i in 1:length(results)
+            results[i] = fetch(results[i])
+        end
+    end
+
+    return namedtuple(symbol_col_names, results)
 end

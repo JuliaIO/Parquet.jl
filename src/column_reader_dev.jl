@@ -28,12 +28,13 @@ col_num=12
 @time col1 = Parquet.read_column(path, col_num);
 all(col1 .=== tbl.stringm)
 
+a = read_parquet(path)
 
 using BenchmarkTools
 @benchmark adf = read_parquet(path)
 
 
-
+adf
 
 
 
@@ -41,6 +42,9 @@ using BenchmarkTools
 
 path = "c:/git/parquet-data-collection/dsd50p.parquet"
 path = "c:/data/Performance_2003Q3.txt.parquet"
+
+@time adf = read_parquet(path);
+
 
 col_num = 1
 @time col1 = Parquet.read_column(path, col_num);
