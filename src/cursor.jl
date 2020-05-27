@@ -300,18 +300,29 @@ end
 eltype(cursor::BatchedColumnsCursor{T}) where {T} = T
 length(cursor::BatchedColumnsCursor) = length(rowgroups(cursor.par))
 
-function colcursor_values(colcursor::ColCursor)
+function colcursor_values(colcursor::ColCursor{T}, ::Type{Vector{Union{Missing,V}}}) where {T,V}
     defn_levels = colcursor.defn_levels
     vals = colcursor.vals
-
+    val_idx = 0
     logical_converter_fn = colcursor.logical_converter_fn
-
-    if !isempty(defn_levels) && !all(x===Int32(1) for x in defn_levels)
-        [(defn_levels[idx] === Int32(1)) ? logical_converter_fn(vals[idx]) : missing for idx in 1:length(vals)]
-    else
-        (logical_converter_fn === identity) ? vals : map(logical_converter_fn, vals)
-    end
+    Union{Missing,V}[defn_levels[idx] === Int32(1) ? logical_converter_fn(vals[val_idx+=1]) : missing for idx in 1:length(defn_levels)]
 end
+
+function colcursor_values(colcursor::ColCursor{T}, ::Type{Vector{Union{Missing,T}}}) where {T}
+    defn_levels = colcursor.defn_levels
+    vals = colcursor.vals
+    val_idx = 0
+    Union{Missing,T}[defn_levels[idx] === Int32(1) ? vals[val_idx+=1] : missing for idx in 1:length(defn_levels)]
+end
+
+function colcursor_values(colcursor::ColCursor{T}, ::Type{Vector{V}}) where {T,V}
+    defn_levels = colcursor.defn_levels
+    vals = colcursor.vals
+    logical_converter_fn = colcursor.logical_converter_fn
+    V[logical_converter_fn(v) for v in vals]
+end
+
+colcursor_values(colcursor::ColCursor{T}, ::Type{Vector{T}}) where {T} = colcursor.vals
 
 function Base.iterate(cursor::BatchedColumnsCursor{T}, rowgroupid) where {T}
     (rowgroupid > length(cursor)) && (return nothing)
@@ -320,7 +331,8 @@ function Base.iterate(cursor::BatchedColumnsCursor{T}, rowgroupid) where {T}
     for colcursor in colcursors
         setrow(colcursor, cursor.row)
     end
-    colvals = [colcursor_values(colcursor) for colcursor in colcursors]
+    coltypes = T.types
+    colvals = [colcursor_values(colcursor,coltype) for (colcursor,coltype) in zip(colcursors,coltypes)]
 
     cursor.row += (rowgroups(cursor.par)[cursor.rowgroupid]).num_rows
     cursor.rowgroupid += 1

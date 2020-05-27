@@ -23,8 +23,8 @@ function test_col_cursor(file::String)
     end
 end
 
-function test_row_cursor(file::String)
-    p = ParFile(file)
+function test_row_cursor(file::String, map_logical_types::Bool)
+    p = ParFile(file; map_logical_types=map_logical_types)
 
     t1 = time()
     nr = nrows(p)
@@ -37,8 +37,8 @@ function test_row_cursor(file::String)
     @info("loaded", file, count=nr, last_record=rec, time_to_read=time()-t1)
 end
 
-function test_batchedcols_cursor(file::String)
-    p = ParFile(file)
+function test_batchedcols_cursor(file::String, map_logical_types::Bool)
+    p = ParFile(file; map_logical_types=map_logical_types)
 
     t1 = time()
     nr = nrows(p)
@@ -62,7 +62,9 @@ end
 function test_row_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
-            test_row_cursor(joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"))
+            for map_logical_types in (true,false)
+                test_row_cursor(joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"), map_logical_types)
+            end
         end
     end
 end
@@ -70,7 +72,9 @@ end
 function test_batchedcols_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
-            test_batchedcols_cursor(joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"))
+            for map_logical_types in (true,false)
+                test_batchedcols_cursor(joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"), map_logical_types)
+            end
         end
     end
 end
