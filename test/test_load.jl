@@ -105,6 +105,10 @@ function test_logical_type_mapping()
 
     values = collect(rc)
     @test [v.timestamp_col for v in values] == [DateTime("2009-04-01T12:00:30"), DateTime("2009-04-01T12:01:30")]
+
+    cc = BatchedColumnsCursor(p)
+    values, _state = iterate(cc)
+    @test values.timestamp_col == [DateTime("2009-04-01T12:00:30"), DateTime("2009-04-01T12:01:30")]
 end
 
 function test_load_nested()
