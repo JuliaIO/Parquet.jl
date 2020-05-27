@@ -51,13 +51,15 @@ function decompress_with_codec(compressed_data::Vector{UInt8}, codec)::Vector{UI
     end
 end
 
-function read_column(path, col_num)
+read_column(path, col_num) = begin
     filemetadata = Parquet.metadata(path)
-    par = ParFile(path)
-    fileio = open(path)
+    read_column(path, filemetadata, col_num)
+end
 
+function read_column(path, filemetadata, col_num)
     T = TYPES[filemetadata.schema[col_num+1]._type+1]
 
+    par = ParFile(path)
     # TODO detect if missing is necessary
     if T == String
         # the memory structure of String is different to other supported types
@@ -66,6 +68,9 @@ function read_column(path, col_num)
     else
         res = Vector{Union{Missing, T}}(undef, nrows(par))
     end
+    close(par)
+
+    fileio = open(path)
 
     from = 1
     last_from = from
@@ -109,7 +114,13 @@ function read_column(path, col_num)
         # repeated read data page
 
         while (from - last_from  < row_group.num_rows) & (from <= length(res))
-            from = read_data_page_vals!(res, fileio, dict, colchunk_meta.codec, T, from) + 1
+            from = read_data_page_vals!(res, fileio, dict, colchunk_meta.codec, T, from)
+
+            if from isa Tuple
+                return from
+            else
+                from += 1
+            end
         end
         last_from = from
 
@@ -159,60 +170,83 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
         bitwidth = 1
         encoded_data_len = read(uncompressed_data_io, UInt32)
         pos_before_encoded_data = position(uncompressed_data_io)
-        encoded_data_header = Parquet._read_varint(uncompressed_data_io, UInt32)
 
-        # TODO it's possible to be mixing RLE and bitpacked in one algorithm
-        if iseven(encoded_data_header)
-            # RLE encoded
-            rle_len = Int(encoded_data_header >> 1)
-            rle_val = read(uncompressed_data_io, UInt8)
+        from_defn = from
 
-            pos_after_reading_encoded_data = position(uncompressed_data_io)
+        pos_after_reading_encoded_data = pos_before_encoded_data
 
-            if T == String
-                # strings memoery are stored differently so can't benefit from this
-            else
-                # fill the memory location with all missing
-                GC.@preserve res begin
-                    dest_ptr = Ptr{UInt8}(pointer(res, res_len+1)) + from - 1
-                    tmparray = unsafe_wrap(Vector{UInt8}, dest_ptr, num_values)
-                    fill!(tmparray, rle_val)
+        # initialise it to something
+        missing_bytes = UInt8[]
+
+        while (pos_after_reading_encoded_data - pos_before_encoded_data) < encoded_data_len
+            encoded_data_header = Parquet._read_varint(uncompressed_data_io, UInt32)
+
+            # TODO it's possible to be mixing RLE and bitpacked in one algorithm
+            if iseven(encoded_data_header)
+                # RLE encoded
+                rle_len = Int(encoded_data_header >> 1)
+                rle_val = read(uncompressed_data_io, UInt8)
+
+                pos_after_reading_encoded_data = position(uncompressed_data_io)
+
+                if T == String
+                    # strings memoery are stored differently so can't benefit from this
+                else
+                    # fill the memory location with all missing
+                    GC.@preserve res begin
+                        dest_ptr = Ptr{UInt8}(pointer(res, res_len+1)) + from_defn - 1
+                        tmparray = unsafe_wrap(Vector{UInt8}, dest_ptr, rle_len)
+                        fill!(tmparray, rle_val)
+                    end
                 end
-            end
-        else
-            # the only reaosn to use bitpacking is because there are missings
-            has_missing = true
 
-            # bitpacked encoded
-            bit_pack_len = Int(encoded_data_header >> 1)
-
-            bytes_to_read = bitwidth*bit_pack_len
-            data = read(uncompressed_data_io, bytes_to_read)
-
-            pos_after_reading_encoded_data = position(uncompressed_data_io)
-
-            # the structure of Vector{Union{T, Missing}} is
-            # * the `values::T` first
-            # * the missing are stored with UInt8(0) for missing
-            # * and UInt8(1) otherwise
-            # see https://docs.julialang.org/en/v1/devdocs/isbitsunionarrays/
-
-            # TODO I suspect this is not the fastest way to unpack bitwidth = 1
-            # data
-            @assert bitwidth == 1
-            bp = BitPackedIterator(data, bitwidth)
-
-            missing_bytes::Vector{UInt8} = BitPackedIterator(data, bitwidth) |> collect
-
-            if T == String
-                # do nothing
+                from_defn = min(from_defn + rle_len - 1, res_len)
             else
-                GC.@preserve missing_bytes res begin
-                    src_ptr = Ptr{UInt8}(pointer(missing_bytes))
-                    dest_ptr = Ptr{UInt8}(pointer(res, res_len+1)) + from - 1
-                    # copy content over
-                    unsafe_copyto!(dest_ptr, src_ptr, res_len)
+                # the only reaosn to use bitpacking is because there are missings
+                has_missing = true
+
+                # bitpacked encoded
+                bit_pack_len = Int(encoded_data_header >> 1)
+
+                bytes_to_read = bitwidth*bit_pack_len
+                data = read(uncompressed_data_io, bytes_to_read)
+
+                pos_after_reading_encoded_data = position(uncompressed_data_io)
+
+                # the structure of Vector{Union{T, Missing}} is
+                # * the `values::T` first
+                # * the missing are stored with UInt8(0) for missing
+                # * and UInt8(1) otherwise
+                # see https://docs.julialang.org/en/v1/devdocs/isbitsunionarrays/
+
+                # TODO I suspect this is not the fastest way to unpack bitwidth = 1
+                # data
+                @assert bitwidth == 1
+                bp = BitPackedIterator(data, bitwidth)
+
+                missing_bytes::Vector{UInt8} = BitPackedIterator(data, bitwidth) |> collect
+
+                if T == String
+                    # do nothing
+                else
+                    GC.@preserve missing_bytes res begin
+                        if from_defn + length(missing_bytes) - 1 <= res_len
+                            # if not too long then can straight copy
+                            src_ptr = Ptr{UInt8}(pointer(missing_bytes))
+                            dest_ptr = Ptr{UInt8}(pointer(res, res_len+1)) + from_defn - 1
+                            # copy content over
+                            unsafe_copyto!(dest_ptr, src_ptr, length(missing_bytes))
+                        else
+                            missing_bytes_smaller = unsafe_wrap(Vector{UInt8}, pointer(missing_bytes), res_len - from_defn + 1)
+                            src_ptr = Ptr{UInt8}(pointer(missing_bytes_smaller))
+                            dest_ptr = Ptr{UInt8}(pointer(res, res_len+1)) + from_defn - 1
+                            # copy content over
+                            unsafe_copyto!(dest_ptr, src_ptr, length(missing_bytes_smaller))
+                        end
+                    end
                 end
+
+                from_defn = min(from_defn + length(missing_bytes) - 1, res_len)
             end
         end
     else
@@ -222,12 +256,14 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
     # this line ensures that we have read all the encoded definition data
     @assert pos_after_reading_encoded_data - pos_before_encoded_data == encoded_data_len
 
+
     # read values
+    to = from + num_values - 1
+    @assert to <= res_len
+
     if data_page_header.data_page_header.encoding == PAR2.Encoding.PLAIN
         # just return the data as is
         if T == Bool
-            to = min(from + num_values - 1, res_len)
-
             if has_missing
                 upto = 1
                 raw_data = Vector{Bool}(undef, 8)
@@ -265,7 +301,6 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
                 end
             end
         elseif T == String
-            to = min(from + num_values - 1, res_len)
             if has_missing
                 for (i, missing_byte) in zip(from:to, missing_bytes)
                     if missing_byte == 1
@@ -286,8 +321,6 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
         else
             if has_missing
                 raw_data = reinterpret(T, read(uncompressed_data_io))
-                to = min(from + num_values - 1, res_len)
-
                 j = 1
                 for (i, missing_byte) in zip(from:to, missing_bytes)
                     if missing_byte == 1
@@ -302,11 +335,12 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
                 # the copying approach is alot faster than the commented out
                 # assignment approach
                 pos_for_pointer = position(uncompressed_data_io) + 1
-                src_ptr = Ptr{T}(pointer(uncompressed_data, pos_for_pointer))
-                dest_ptr = Ptr{T}(pointer(res, from))
-                # copy content over
-                GC.@preserve src_ptr dest_ptr unsafe_copyto!(dest_ptr, src_ptr, num_values)
-                to = min(from + num_values - 1, res_len)
+                GC.@preserve uncompressed_data res begin
+                    src_ptr = Ptr{T}(pointer(uncompressed_data, pos_for_pointer))
+                    dest_ptr = Ptr{T}(pointer(res, from))
+                    # copy content over
+                    unsafe_copyto!(dest_ptr, src_ptr, num_values)
+                end
             end
         end
     elseif data_page_header.data_page_header.encoding == PAR2.Encoding.PLAIN_DICTIONARY
@@ -317,7 +351,6 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
         @assert bitwidth <= 32
 
         while !eof(uncompressed_data_io)
-            # println(position(uncompressed_data_io))
             encoded_data_header = Parquet._read_varint(uncompressed_data_io, UInt32)
 
             if iseven(encoded_data_header)
@@ -331,8 +364,7 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
                     rle_val = rle_val | tmp
                 end
 
-                to = min(from + rle_len - 1, res_len)
-                res[from:to] .= dict[rle_val+1]
+                res[from:min(to, from + rle_len - 1)] .= dict[rle_val+1]
 
                 from = from + rle_len
             else
@@ -345,9 +377,8 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
                 # now need a decoding algorithm to break it up
                 # reading `bitwidth` bits at a time
                 l = length(bp)
-                to = min(from + l - 1, res_len)
 
-                for (v, i) in zip(bp, from:to)
+                for (v, i) in zip(bp, from:min(from + l - 1, to))
                     res[i] = dict[v+1]
                 end
                 from = from + l
@@ -356,6 +387,5 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
     else
         erorr("encoding not supported")
     end
-
     to
 end

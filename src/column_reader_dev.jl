@@ -12,8 +12,9 @@ par = ParFile(path);
 nrows(par)
 
 colnames(par)
+close(par)
 
-@time tbl = Parquet.read_column.(Ref(path), 1:length(colnames(par)));
+#@time tbl = Parquet.read_column.(Ref(path), 1:length(colnames(par)));
 
 using Random: randstring
 tbl = (
@@ -35,25 +36,39 @@ tmpfile = tempname()*".parquet"
 
 write_parquet(tmpfile, tbl);
 
+@time adf = read_parquet(tmpfile);
+
+
 path = tmpfile
 
-col_num = 3
+col_num = 5
 @time col1 = Parquet.read_column(path, col_num);
+col1
+
+uncompressed_data_io = col1[1]
+
+encoded_data_header = Parquet._read_varint(uncompressed_data_io, UInt32)
+
+using Debugger
+
+filemetadata = Parquet.metadata(path);
+Debugger.@enter Parquet.read_column(path, filemetadata, col_num);
+
 col1
 correct = getproperty(tbl, keys(tbl)[col_num])
 all(ismissing.(col1) .== ismissing.(correct))
 all(skipmissing(col1) .== skipmissing(correct))
 
 using Test
-checkcol(col_num) = begin
+checkcol(path, col_num) = begin
     println(col_num)
-    @time col1 = Parquet.read_column(path, col_num);
+    @elapsed col1 = Parquet.read_column(path, col_num);
     # correct = getproperty(tbl, keys(tbl)[col_num])
     # @test all(ismissing.(col1) .== ismissing.(correct))
     # @test all(skipmissing(col1) .== skipmissing(correct))
 end
 
-@time checkcol.(1:31)
+@time checkcol.(path, 1:31)
 
 
 

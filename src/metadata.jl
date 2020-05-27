@@ -10,4 +10,8 @@ function metadata(path)
     datasize = sz - meta_len - 2SZ_PAR_MAGIC - SZ_FOOTER
     seek(io, SZ_PAR_MAGIC + datasize)
     filemetadata = read_thrift(io, PAR2.FileMetaData)
+
+    close(io)
+
+    filemetadata
 end
