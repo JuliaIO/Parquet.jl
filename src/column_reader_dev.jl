@@ -45,6 +45,8 @@ path = "c:/data/Performance_2003Q3.txt.parquet"
 
 @time adf = read_parquet(path);
 
+adf.V5
+
 
 col_num = 1
 @time col1 = Parquet.read_column(path, col_num);

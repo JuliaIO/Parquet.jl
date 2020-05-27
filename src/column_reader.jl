@@ -352,7 +352,6 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
         else
             if has_missing
                 raw_data = reinterpret(T, read(uncompressed_data_io))
-                return raw_data, missing_bytes
                 j = 1
                 for (i, missing_byte) in zip(from:to, missing_bytes)
                     if missing_byte == 1
