@@ -6,6 +6,10 @@ using Snappy, CodecZlib, CodecZstd
 path = "c:/git/parquet-data-collection/dsd50p.parquet"
 path = "c:/data/Performance_2003Q3.txt.parquet"
 
+col_num = 1
+@time col1 = Parquet.read_column(path, col_num);
+col1
+
 meta = Parquet.metadata(path);
 par = ParFile(path);
 
@@ -41,9 +45,13 @@ write_parquet(tmpfile, tbl);
 
 path = tmpfile
 
-col_num = 5
-@time col1 = Parquet.read_column(path, col_num);
+
+
 col1
+
+col1[19:20]
+
+last(col1)
 
 uncompressed_data_io = col1[1]
 
@@ -60,15 +68,26 @@ all(ismissing.(col1) .== ismissing.(correct))
 all(skipmissing(col1) .== skipmissing(correct))
 
 using Test
-checkcol(path, col_num) = begin
-    println(col_num)
-    @elapsed col1 = Parquet.read_column(path, col_num);
-    # correct = getproperty(tbl, keys(tbl)[col_num])
-    # @test all(ismissing.(col1) .== ismissing.(correct))
-    # @test all(skipmissing(col1) .== skipmissing(correct))
+using Base.Threads: @spawn
+
+checkcol(path, n; multithreaded=true) = begin
+    res = Vector{Any}(undef, n)
+    if multithreaded
+        for col_num in 1:n
+            res[col_num] = @spawn Parquet.read_column(path, col_num);
+        end
+        return fetch.(res)
+    else
+        for col_num in 1:n
+            println(col_num)
+            res[col_num] = Parquet.read_column(path, col_num);
+        end
+        return res
+    end
 end
 
-@time checkcol.(path, 1:31)
+@time checkcol(path, 31, multithreaded=true);
+@time checkcol(path, 31, multithreaded=false);
 
 
 

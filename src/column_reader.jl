@@ -140,8 +140,6 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
     # the result length is used latter on to prevent writing too much data
     res_len = length(res)
 
-    to = from # intialise to something
-
     data_page_header = read_thrift(fileio, PAR2.PageHeader)
     compressed_data = read(fileio, data_page_header.compressed_page_size)
     uncompressed_data = decompress_with_codec(compressed_data, codec)
@@ -200,7 +198,11 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
                     end
                 end
 
-                from_defn = min(from_defn + rle_len - 1, res_len)
+                append!(missing_bytes, fill(rle_val, rle_len))
+
+                from_defn += rle_len
+                @assert from_defn - from == length(missing_bytes)
+                @assert length(missing_bytes) <= num_values
             else
                 # the only reaosn to use bitpacking is because there are missings
                 has_missing = true
@@ -224,29 +226,58 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
                 @assert bitwidth == 1
                 bp = BitPackedIterator(data, bitwidth)
 
-                missing_bytes::Vector{UInt8} = BitPackedIterator(data, bitwidth) |> collect
+                tmp_missing_bytes::Vector{UInt8} = BitPackedIterator(data, bitwidth) |> collect
+
+                len_of_tmp_missing_bytes = length(tmp_missing_bytes)
+                @assert mod(len_of_tmp_missing_bytes, 8) == 0
+
+                # the tmp_missing_bytes is always in a multiple of 8 so need to
+                # be careful not to write too much
+                last_from_defn = from_defn
+
+                # compute the new from_defn
+                from_defn = min(from_defn + len_of_tmp_missing_bytes, from + num_values)
+
+                len_to_write = from_defn - last_from_defn
 
                 if T == String
                     # do nothing
                 else
-                    GC.@preserve missing_bytes res begin
-                        if from_defn + length(missing_bytes) - 1 <= res_len
+                    GC.@preserve tmp_missing_bytes res begin
+                        if len_to_write == len_of_tmp_missing_bytes
+
+                            append!(missing_bytes, tmp_missing_bytes)
+
+                            # @assert from_defn-from == length(missing_bytes)
+
+                            if length(missing_bytes) > num_values
+                                println(tmp_missing_bytes)
+                                println("$last_from_defn $from_defn $(from+num_values) $len_to_write $len_of_tmp_missing_bytes")
+                            end
+                            # @assert length(missing_bytes) <= num_values
                             # if not too long then can straight copy
-                            src_ptr = Ptr{UInt8}(pointer(missing_bytes))
+                            src_ptr = Ptr{UInt8}(pointer(tmp_missing_bytes))
                             dest_ptr = Ptr{UInt8}(pointer(res, res_len+1)) + from_defn - 1
                             # copy content over
-                            unsafe_copyto!(dest_ptr, src_ptr, length(missing_bytes))
+                            unsafe_copyto!(dest_ptr, src_ptr, length(tmp_missing_bytes))
+                        elseif len_to_write < len_of_tmp_missing_bytes
+                            tmp_missing_bytes_smaller = unsafe_wrap(Vector{UInt8}, pointer(tmp_missing_bytes), len_to_write)
+                            # @assert length(tmp_missing_bytes_smaller) == len_to_write
+                            append!(missing_bytes, tmp_missing_bytes_smaller)
+                            # @assert from_defn - from == length(missing_bytes)
+                            # @assert length(missing_bytes) == num_values
+
+                            src_ptr = Ptr{UInt8}(pointer(tmp_missing_bytes_smaller))
+                            dest_ptr = Ptr{UInt8}(pointer(res, res_len+1)) + from_defn - 1
+                            # copy content over
+                            unsafe_copyto!(dest_ptr, src_ptr, length(tmp_missing_bytes_smaller))
                         else
-                            missing_bytes_smaller = unsafe_wrap(Vector{UInt8}, pointer(missing_bytes), res_len - from_defn + 1)
-                            src_ptr = Ptr{UInt8}(pointer(missing_bytes_smaller))
-                            dest_ptr = Ptr{UInt8}(pointer(res, res_len+1)) + from_defn - 1
-                            # copy content over
-                            unsafe_copyto!(dest_ptr, src_ptr, length(missing_bytes_smaller))
+                            error("something is wrong")
                         end
                     end
                 end
-
-                from_defn = min(from_defn + length(missing_bytes) - 1, res_len)
+                # @assert from_defn-from == length(missing_bytes)
+                # @assert length(missing_bytes) <= num_values
             end
         end
     else
@@ -256,12 +287,17 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
     # this line ensures that we have read all the encoded definition data
     @assert pos_after_reading_encoded_data - pos_before_encoded_data == encoded_data_len
 
+    if has_missing
+        @assert length(missing_bytes) == num_values
+    end
+
 
     # read values
     to = from + num_values - 1
     @assert to <= res_len
 
     if data_page_header.data_page_header.encoding == PAR2.Encoding.PLAIN
+        # println("meh")
         # just return the data as is
         if T == Bool
             if has_missing
@@ -364,7 +400,16 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
                     rle_val = rle_val | tmp
                 end
 
-                res[from:min(to, from + rle_len - 1)] .= dict[rle_val+1]
+                if has_missing
+                    index = from:min(to, from + rle_len - 1)
+                    for (i, missing_byte) in zip(index, missing_bytes)
+                        if missing_byte == 1
+                            res[i] = dict[rle_val+1]
+                        end
+                    end
+                else
+                    res[from:min(to, from + rle_len - 1)] .= dict[rle_val+1]
+                end
 
                 from = from + rle_len
             else
@@ -373,19 +418,35 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
                 @assert (bit_pack_len >= 1) && (bit_pack_len <= 2^31 - 1)
                 bytes_to_read = bitwidth*bit_pack_len
                 data = read(uncompressed_data_io, bytes_to_read)
-                bp = BitPackedIterator(data, bitwidth)
+                # TODO remove the collect here
+                bp = BitPackedIterator(data, bitwidth) |> collect
                 # now need a decoding algorithm to break it up
                 # reading `bitwidth` bits at a time
                 l = length(bp)
 
-                for (v, i) in zip(bp, from:min(from + l - 1, to))
-                    res[i] = dict[v+1]
+                index = from:min(from + l - 1, to)
+
+                if has_missing
+                    j = 1
+                    for (i, missing_byte) in zip(index, missing_bytes)
+                        if missing_byte == 1
+                            res[i] = dict[bp[j]+1]
+                            j += 1
+                        end
+                    end
+                else
+                    for (i, v) in zip(index, bp)
+                        res[i] = dict[v+1]
+                    end
                 end
+
+
                 from = from + l
             end
         end
     else
         erorr("encoding not supported")
     end
-    to
+
+    return to
 end
