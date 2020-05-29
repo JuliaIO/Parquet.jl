@@ -70,7 +70,22 @@ function read_column(path, filemetadata, col_num)
     end
     close(par)
 
+
     fileio = open(path)
+
+    # I thnk there is a bug with Julia's multithreaded reads
+    # which can be fixed by doing the below
+    # DO NOT remove the code below or multithreading will fail
+    println("$(position(fileio))")
+    if true
+        not_used = open(tempname()*string(col_num), "w")
+        write(not_used, position(fileio))
+        close(not_used)
+    end
+
+    # to reduce allocations we make a compressed_data array to store compressed data
+    compressed_data_buffer = Vector{UInt8}(undef, 100)
+    compressed_data = UInt8[] # initialise it
 
     from = 1
     last_from = from
@@ -82,7 +97,14 @@ function read_column(path, filemetadata, col_num)
         if isfilled(colchunk_meta, :dictionary_page_offset)
             seek(fileio, colchunk_meta.dictionary_page_offset)
             dict_page_header = read_thrift(fileio, PAR2.PageHeader)
-            compressed_data = read(fileio, dict_page_header.compressed_page_size)
+
+            # use the
+            readbytes!(fileio, compressed_data_buffer, dict_page_header.compressed_page_size)
+            GC.@preserve compressed_data_buffer begin
+                compressed_data = unsafe_wrap(Vector{UInt8}, pointer(compressed_data_buffer), dict_page_header.compressed_page_size)
+            end
+            # compressed_data = read(fileio, dict_page_header.compressed_page_size)
+
             uncompressed_data = decompress_with_codec(compressed_data, colchunk_meta.codec)
             @assert length(uncompressed_data) == dict_page_header.uncompressed_page_size
 
@@ -100,6 +122,10 @@ function read_column(path, filemetadata, col_num)
                     end
                 else
                     dict = reinterpret(T, uncompressed_data)
+                    # nvals = dict_page_header.dictionary_page_header.num_values
+                    # GC.@preserve uncompressed_data begin
+                    #     dict = unsafe_wrap(Vector{T}, Ptr{T}(pointer(uncompressed_data)), nvals)
+                    # end
                 end
             else
                 error("Only Plain Dictionary encoding is supported")
@@ -111,8 +137,8 @@ function read_column(path, filemetadata, col_num)
         # seek to the first data page
         seek(fileio, colchunk_meta.data_page_offset)
 
-        # repeated read data page
 
+        # repeated read data page
         while (from - last_from  < row_group.num_rows) & (from <= length(res))
             from = read_data_page_vals!(res, fileio, dict, colchunk_meta.codec, T, from)
 
@@ -124,7 +150,7 @@ function read_column(path, filemetadata, col_num)
         end
         last_from = from
 
-        # (j == 1) && return res
+        # (j == 2) && return res
         j += 1
 
     end
@@ -141,15 +167,22 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
     res_len = length(res)
 
     data_page_header = read_thrift(fileio, PAR2.PageHeader)
-    compressed_data = read(fileio, data_page_header.compressed_page_size)
-    uncompressed_data = decompress_with_codec(compressed_data, codec)
+
+    #compressed_data = read(fileio, data_page_header.compressed_page_size)
+    compressed_data_buffer = Vector{UInt8}(undef, ceil(Int, data_page_header.compressed_page_size*1.5))
+
+    readbytes!(fileio, compressed_data_buffer, data_page_header.compressed_page_size)
+    GC.@preserve compressed_data_buffer begin
+        compressed_data = unsafe_wrap(Vector{UInt8}, pointer(compressed_data_buffer), data_page_header.compressed_page_size)
+        uncompressed_data = decompress_with_codec(compressed_data, codec)
+    end
+
     @assert length(uncompressed_data) == data_page_header.uncompressed_page_size
 
     # this is made up of these 3 things written back to back
     # * repetition levels - can be ignored for unnested data
     # * definition levels -
     # * values
-
     uncompressed_data_io = IOBuffer(uncompressed_data, read=true, write=false, append=false)
 
     # this will be set in future
@@ -158,10 +191,11 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
     # the number of values stored in this page
     num_values = data_page_header.data_page_header.num_values
 
+    # initialise it to something
+    missing_bytes = Vector{UInt8}(undef, num_values)
+    missing_bytes_io = IOBuffer(missing_bytes, write=true)
+
     # definition levels
-    # do_read_defn_lvls = isfilled(data_page_header.data_page_header, :statistics) &&
-    #     isfilled(data_page_header.data_page_header.statistics, :null_count) &&
-    #     data_page_header.data_page_header.statistics.null_count > 0
     if data_page_header.data_page_header.definition_level_encoding == PAR2.Encoding.RLE
         # for unnested columns the highest possible value for definiton is 1
         # which can represented with just one bit so the bit width is always 1
@@ -173,13 +207,9 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
 
         pos_after_reading_encoded_data = pos_before_encoded_data
 
-        # initialise it to something
-        missing_bytes = UInt8[]
-
         while (pos_after_reading_encoded_data - pos_before_encoded_data) < encoded_data_len
             encoded_data_header = Parquet._read_varint(uncompressed_data_io, UInt32)
 
-            # TODO it's possible to be mixing RLE and bitpacked in one algorithm
             if iseven(encoded_data_header)
                 # RLE encoded
                 rle_len = Int(encoded_data_header >> 1)
@@ -198,11 +228,11 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
                     end
                 end
 
-                append!(missing_bytes, fill(rle_val, rle_len))
+                write(missing_bytes_io, fill(rle_val, rle_len))
 
                 from_defn += rle_len
-                @assert from_defn - from == length(missing_bytes)
-                @assert length(missing_bytes) <= num_values
+                @assert from_defn - from == position(missing_bytes_io)
+                @assert position(missing_bytes_io) <= num_values
             else
                 # the only reaosn to use bitpacking is because there are missings
                 has_missing = true
@@ -239,10 +269,10 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
                 len_to_write = new_from_defn - from_defn
 
                 if len_to_write == len_of_tmp_missing_bytes
-                    append!(missing_bytes, tmp_missing_bytes)
+                    write(missing_bytes_io, tmp_missing_bytes)
                 elseif len_to_write < len_of_tmp_missing_bytes
                     tmp_missing_bytes_smaller = unsafe_wrap(Vector{UInt8}, pointer(tmp_missing_bytes), len_to_write)
-                    append!(missing_bytes, tmp_missing_bytes_smaller)
+                    write(missing_bytes_io, tmp_missing_bytes_smaller)
                 else
                     error("something is wrong")
                 end
@@ -281,7 +311,7 @@ function read_data_page_vals!(res, fileio::IOStream, dict, codec, T, from::Integ
     @assert pos_after_reading_encoded_data - pos_before_encoded_data == encoded_data_len
 
     if has_missing
-        @assert length(missing_bytes) == num_values
+        @assert position(missing_bytes_io) == num_values
     end
 
 

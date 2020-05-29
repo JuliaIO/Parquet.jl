@@ -1,6 +1,6 @@
 using Base.Threads: @spawn
 using Base.Iterators: drop
-using ProgressMeter: @showprogress
+using ProgressMeter: @showprogress, Progress, next!
 using NamedTupleTools: namedtuple
 
 read_parquet(path, cols::Vector{Symbol}; kwargs...) = read_parquet(path, String.(cols); kwargs...)
@@ -25,25 +25,28 @@ function read_parquet(path, cols::Vector{String}; multithreaded=true, verbose = 
 
 	results = Vector{Any}(undef, length(colnums))
 
-	filemetadata = metadata(path)
+    filemetadata = metadata(path)
 
-	if multithreaded
+    symbol_col_names = collect(Symbol(col) for col in colnames[colnums])
+
+    p = Progress(length(colnums))
+    if multithreaded
 		for (i, j) in enumerate(colnums)
-			results[i] = @spawn read_column(path, filemetadata, j)
-		end
-	else
-		@showprogress for (i, j) in enumerate(colnums)
-			results[i] = read_column(path, filemetadata, j)
+            results[i] = @spawn begin
+                # next!(p)
+                res = read_column(path, filemetadata, j)
+                res
+            end
+        end
+        results = fetch.(results)
+    else
+
+		for (i, j) in enumerate(colnums)
+            results[i] = read_column(path, filemetadata, j)
+            next!(p)
 		end
 	end
 
-	symbol_col_names = collect(Symbol(col) for col in colnames[colnums])
-
-    if multithreaded
-        @showprogress for i in 1:length(results)
-            results[i] = fetch(results[i])
-        end
-    end
 
     return namedtuple(symbol_col_names, results)
 end

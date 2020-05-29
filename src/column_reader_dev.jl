@@ -1,7 +1,21 @@
 using Parquet
-using Parquet:TYPES, read_thrift, PAR2, BitPackedIterator, decompress_with_codec
-using Thrift: isfilled
-using Snappy, CodecZlib, CodecZstd
+
+path = "c:/data/Performance_2003Q3.txt.parquet"
+@time Parquet.read_column(path, 1);
+
+
+@time read_parquet(path);
+
+path = "c:/git/parquet-data-collection/dsd50p.parquet"
+@time adf = read_parquet(path);
+
+@time adf = read_parquet(path, multithreaded=false);
+
+
+
+using JDF: type_compress!
+
+@time adf = type_compress!(DataFrame(read_parquet(path, multithreaded=false), copycols=false));
 
 using Random: randstring
 tbl = (
@@ -22,31 +36,16 @@ tbl = (
 tmpfile = tempname()*".parquet"
 
 @time write_parquet(tmpfile, tbl);
+
 path = tmpfile
+@time adf = read_parquet(path);
 
-col_num=12
-@time col1 = Parquet.read_column(path, col_num);
-all(col1 .=== tbl.stringm)
+all([all(c1 .=== c2) for (c1, c2) in zip(tbl, adf)])
 
-a = read_parquet(path)
+
 
 using BenchmarkTools
 @benchmark adf = read_parquet(path)
-
-
-adf
-
-
-
-
-
-path = "c:/git/parquet-data-collection/dsd50p.parquet"
-path = "c:/data/Performance_2003Q3.txt.parquet"
-
-@time adf = read_parquet(path);
-
-adf.V5
-
 
 col_num = 1
 @time col1 = Parquet.read_column(path, col_num);
