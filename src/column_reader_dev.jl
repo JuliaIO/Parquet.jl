@@ -1,7 +1,13 @@
 using Parquet
 
 path = "c:/data/Performance_2003Q3.txt.parquet"
-@time Parquet.read_column(path, 1);
+#Parquet.metadata(path)
+@time col = Parquet.read_column(path, 5);
+
+for i in 1:31
+    println(i)
+    @time Parquet.read_column(path, i);
+end
 
 
 @time read_parquet(path);
