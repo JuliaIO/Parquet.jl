@@ -38,7 +38,7 @@ function setrow(cursor::RowCursor, row::Int64)
             startrow = last(rowgroup_row_range) + 1
         end
     end
-    throw(BoundsError(par.path, row))
+    throw(BoundsError(cursor.par.path, row))
 end
 
 rowgroup_offset(cursor::RowCursor) = cursor.row - first(cursor.rgrange)
@@ -60,7 +60,7 @@ function Base.iterate(cursor::RowCursor, state)
 end
 
 function Base.iterate(cursor::RowCursor)
-    r = iterate(x, _start(x))
+    r = iterate(cursor, _start(cursor))
     return r
 end
 
