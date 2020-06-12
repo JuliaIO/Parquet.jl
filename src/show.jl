@@ -6,7 +6,7 @@ end
 
 function show(io::IO, cursor::RecordCursor)
     par = cursor.par
-    rows = cursor.colcursors[1].row.rows
+    rows = cursor.colcursors[1].rows
     println(io, "Record Cursor on $(par.path)")
     println(io, "    rows: $rows")
 
@@ -16,7 +16,7 @@ end
 
 function show(io::IO, cursor::BatchedColumnsCursor)
     par = cursor.par
-    rows = cursor.colcursors[1].row.rows
+    rows = cursor.colcursors[1].rows
     println(io, "Batched Columns Cursor on $(par.path)")
     println(io, "    rows: $rows")
     println(io, "    batches: $(length(cursor))")

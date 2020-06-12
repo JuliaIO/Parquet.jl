@@ -18,8 +18,20 @@ function test_decode(file)
             pgs = pages(p, cc)
             println("\t\treading column chunk with $(length(pgs)) pages, $(colname(cc))")
             println("\t\tre-reading column chunk for values. total $(length(pgs)) pages")
-            vals, defn_levels, repn_levels = values(p, cc)
-            println("\t\t\tread $(length(vals)) values, $(length(defn_levels)) defn levels, $(length(repn_levels)) repn levels")
+            jtype = Parquet.elemtype(Parquet.elem(schema(p), colname(cc)))
+
+            ccpv = Parquet.ColumnChunkPageValues(p, cc, jtype)
+            result = iterate(ccpv)
+            valcount = repncount = defncount = 0
+            while result !== nothing
+                resultdata,nextpos = result
+                valcount += resultdata.value.offset
+                repncount += resultdata.repn_level.offset
+                defncount += resultdata.defn_level.offset
+                result = iterate(ccpv, nextpos)
+            end
+
+            println("\t\t\tread $valcount values, $defncount defn levels, $repncount repn levels")
         end
     end
 

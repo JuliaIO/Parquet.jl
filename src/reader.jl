@@ -10,6 +10,7 @@ mutable struct Page
     hdr::PageHeader
     pos::Int
     data::Vector{UInt8}
+    uncompressed_data::Vector{UInt8}
 end
 
 mutable struct PageLRU
@@ -136,6 +137,17 @@ function rowgroups(par::ParFile, cnames::Vector{Vector{String}}, rowrange::UnitR
     R
 end
 
+function rowgroup_row_positions(par::ParFile)
+    rgs = rowgroups(par)
+    positions = Array{Int64}(undef, length(rgs)+1)
+    idx = 1
+    positions[idx] = Int64(1)
+    for rg in rgs
+        positions[idx+=1] = rg.num_rows
+    end
+    cumsum!(positions, positions)
+end
+
 columns(par::ParFile, rowgroupidx) = columns(par, rowgroups(par)[rowgroupidx])
 columns(par::ParFile, rowgroup::RowGroup) = rowgroup.columns
 columns(par::ParFile, rowgroup::RowGroup, colname::Vector{String}) = columns(par, rowgroup, [colname])
@@ -147,22 +159,138 @@ function columns(par::ParFile, rowgroup::RowGroup, cnames::Vector{Vector{String}
     R
 end
 
+##
+# Iterator for pages in a column chunk
+mutable struct ColumnChunkPages
+    par::ParFile
+    col::ColumnChunk
+    startpos::Int64
+    endpos::Int64
+
+    function ColumnChunkPages(par::ParFile, col::ColumnChunk)
+        startpos = page_offset(col)
+        endpos = end_offset(col)
+        new(par, col, startpos, endpos)
+    end
+end
+eltype(ccp::ColumnChunkPages) = Page
+Base.iterate(ccp::ColumnChunkPages) = iterate(ccp, ccp.startpos)
+function Base.iterate(ccp::ColumnChunkPages, startpos::Int64)
+    if startpos >= ccp.endpos
+        return nothing
+    end
+
+    par = ccp.par
+    io = par.handle
+    seek(io, startpos)
+    pagehdr = read_thrift(io, PageHeader)
+
+    page_data_pos = position(io)
+    pagesz = page_size(pagehdr)
+    data = _use_mmap ? Mmap.mmap(io, Vector{UInt8}, (pagesz,), page_data_pos; grow=false, shared=false) : read!(io, Array{UInt8}(undef, pagesz))
+    page = Page(ccp.col, pagehdr, page_data_pos, data, UInt8[])
+    nextpos = page_data_pos + pagesz
+    page, nextpos
+end
+
+##
+# Iterator for page values in a column chunk
+mutable struct ColumnChunkPageValues{T}
+    ccp::ColumnChunkPages
+    max_repn::Int64
+    max_defn::Int64
+    has_repn_levels::Bool
+    has_defn_levels::Bool
+    repn_out::OutputState{Int32}
+    defn_out::OutputState{Int32}
+    valdict_out::OutputState{T}
+    vals_out::OutputState{T}
+end
+
+function ColumnChunkPageValues(par::ParFile, col::ColumnChunk, ::Type{T}) where {T}
+    cname = colname(col)
+
+    max_repn = max_repetition_level(par.schema, cname)
+    max_defn = max_definition_level(par.schema, cname)
+    has_repn_levels = ((length(cname) > 1) && (max_repn > 0))
+    has_defn_levels = !isrequired(par.schema, cname)
+
+    repn_out = OutputState(Int32, 0)
+    defn_out = OutputState(Int32, 0)
+    valdict_out = OutputState(T, 0)
+    vals_out = OutputState(T, 0)
+
+    ccp = ColumnChunkPages(par, col)
+    ColumnChunkPageValues{T}(ccp, max_repn, max_defn, has_repn_levels, has_defn_levels, repn_out, defn_out, valdict_out, vals_out)
+end
+
+function eltype(ccpv::ColumnChunkPageValues{T}) where {T}
+   NamedTuple{(:value,:repn_level,:defn_level),Tuple{OutputState{T},OutputState{Int32},OutputState{Int32}}}
+end
+
+function Base.iterate(ccpv::ColumnChunkPageValues{T}) where {T}
+    iterate(ccpv, ccpv.ccp.startpos)
+end
+
+function map_dict_vals(valdict::OutputState{T1}, vals::OutputState{T1}, map_vals::Vector{T2}) where {T1, T2}
+    if !isempty(valdict.data) && (valdict.offset > 0)
+        num_values = length(map_vals)
+        @inbounds for idx in 1:num_values
+            vals.data[idx] = valdict.data[map_vals[idx]+1]
+        end
+        vals.offset += num_values
+    end
+end
+
+function Base.iterate(ccpv::ColumnChunkPageValues{T}, startpos::Int64) where {T}
+    if startpos >= ccpv.ccp.endpos
+        return nothing
+    end
+
+    read_data_page = false
+    nextpos = startpos
+
+    while !read_data_page
+        page, nextpos = iterate(ccpv.ccp, nextpos)
+
+        pagetype = page.hdr._type
+        num_values = page_num_values(page)
+        inp = InputState(bytes(page), 0)
+
+        if (pagetype === PageType.DATA_PAGE) || (pagetype === PageType.DATA_PAGE_V2)
+            read_data_page = true
+            ccpv.has_repn_levels && reset_to_size(ccpv.repn_out, num_values)
+            ccpv.has_defn_levels && reset_to_size(ccpv.defn_out, num_values)
+
+            @debug("reading a data page for columnchunk")
+            enc, defn_enc, repn_enc = page_encodings(page)
+            nmissing = read_levels_and_nmissing(inp, ccpv.defn_out, ccpv.repn_out, defn_enc, repn_enc, ccpv.max_defn, ccpv.max_repn, num_values)
+            nnonmissing = num_values - nmissing
+            reset_to_size(ccpv.vals_out, nnonmissing)
+
+            if enc === Encoding.PLAIN_DICTIONARY || enc === Encoding.RLE_DICTIONARY
+                map_vals = read_data_dict(inp, nnonmissing)
+                map_dict_vals(ccpv.valdict_out, ccpv.vals_out, map_vals)
+            else
+                read_plain_values(inp, ccpv.vals_out, nnonmissing)
+            end
+        elseif pagetype === PageType.DICTIONARY_PAGE
+            ensure_additional_size(ccpv.valdict_out, num_values)
+            read_plain_values(inp, ccpv.valdict_out, num_values)
+        else
+            error("unsupported page type $typ")
+        end
+    end
+    iterator_result = NamedTuple{(:value,:repn_level,:defn_level),Tuple{OutputState{T},OutputState{Int32},OutputState{Int32}}}((ccpv.vals_out, ccpv.repn_out, ccpv.defn_out))
+    iterator_result, nextpos
+end
+
 function _pagevec(par::ParFile, col::ColumnChunk)
     # read pages from the file
-    pos = page_offset(col)
-    endpos = end_offset(col)
-    io = par.handle
+    ccp = ColumnChunkPages(par, col)
     pagevec = Page[]
-    while pos < endpos
-        seek(io, pos)
-        pagehdr = read_thrift(io, PageHeader)
-
-        buff = Array{UInt8}(undef, page_size(pagehdr))
-        page_data_pos = position(io)
-        data = read!(io, buff)
-        page = Page(col, pagehdr, page_data_pos, data)
+    for page in ccp
         push!(pagevec, page)
-        pos = position(io)
     end
     pagevec
 end
@@ -174,17 +302,22 @@ function bytes(page::Page, uncompressed::Bool=true)
     data = page.data
     codec = page.colchunk.meta_data.codec
     if uncompressed && (codec != CompressionCodec.UNCOMPRESSED)
-        uncompressed_sz = page.hdr.uncompressed_page_size
-        if codec == CompressionCodec.SNAPPY
-            data = Snappy.uncompress(data)
-        elseif codec == CompressionCodec.GZIP
-            data = transcode(GzipDecompressor, data)
-        elseif codec == CompressionCodec.ZSTD
-            data = transcode(ZstdDecompressor, data)
-        else
-            error("Unknown compression codec for column chunk: $codec")
+        if isempty(page.uncompressed_data)
+            uncompressed_sz = page.hdr.uncompressed_page_size
+            uncompressed_data = _use_mmap ? Mmap.mmap(Mmap.Anonymous(), Vector{UInt8}, (uncompressed_sz,), 0) : Array{UInt8}(undef, uncompressed_sz)
+            if codec == CompressionCodec.SNAPPY
+                Snappy.snappy_uncompress(data, uncompressed_data)
+            elseif codec == CompressionCodec.GZIP
+                readbytes!(GzipDecompressorStream(IOBuffer(data)), uncompressed_data)
+            elseif codec == CompressionCodec.ZSTD
+                readbytes!(ZstdDecompressorStream(IOBuffer(data)), uncompressed_data)
+            else
+                error("Unknown compression codec for column chunk: $codec")
+            end
+            (length(uncompressed_data) == uncompressed_sz) || error("failed to uncompress page. expected $(uncompressed_sz), got $(length(uncompressed_data)) bytes")
+            page.uncompressed_data = uncompressed_data
         end
-        (length(data) == uncompressed_sz) || error("failed to uncompress page. expected $(uncompressed_sz), got $(length(data)) bytes")
+        data = page.uncompressed_data
     end
     data
 end
@@ -192,35 +325,6 @@ end
 ##
 # layer 2 access
 # can access decoded values from pages
-
-function map_dict_vals(valdict::Vector{T1}, vals::Vector{T1}, map_vals::Vector{T2}, num_values, vals_offset::Int, has_defn_levels::Bool, defn_levels::Vector{Int32}, defn_level_offset::Int) where {T1, T2}
-    if !isempty(valdict)
-        @assert length(map_vals) == num_values
-        @assert length(vals) >= (num_values + vals_offset)
-        @assert !has_defn_levels || ((length(defn_levels) - defn_level_offset) >= num_values)
-        nmissings = 0
-        @inbounds for idx in 1:num_values
-            while (has_defn_levels && (defn_levels[idx + defn_level_offset + nmissings] === Int32(0)))
-                nmissings += 1
-            end
-            vals[idx+vals_offset+nmissings] = valdict[map_vals[idx]+1]
-        end
-    end
-end
-
-function column_value_types(col::ColumnChunk)
-    ctype = coltype(col)
-    jtype = PLAIN_JTYPES[ctype+1]
-    if (ctype === _Type.BYTE_ARRAY) || (ctype === _Type.FIXED_LEN_BYTE_ARRAY)
-        jtype = Vector{jtype}
-    end
-    ctype, jtype
-end
-
-function values(par::ParFile, col::ColumnChunk)
-    ctype, jtype = column_value_types(col)
-    values(par, col, jtype)
-end
 
 function estimate_sizes(par::ParFile, col::ColumnChunk)
     pgs = pages(par, col)
@@ -237,101 +341,33 @@ function estimate_sizes(par::ParFile, col::ColumnChunk)
     nvals, nvaldict
 end
 
-function values(par::ParFile, col::ColumnChunk, ::Type{T}) where {T}
-    ctype, jtype = column_value_types(col)
-    cname = colname(col)
-    @assert jtype === T
-    pgs = pages(par, col)
-
-    vals_offset = 0
-    valdict_offset = 0
-    defn_level_offset = 0
-    repn_level_offset = 0
-
-    nvals, nvaldict = estimate_sizes(par, col)
-    valdict = Array{T}(undef, nvaldict)
-    vals = Array{T}(undef, nvals)
-
-    max_repn_level = max_repetition_level(par.schema, cname)
-    has_defn_levels = !isrequired(par.schema, cname)
-    has_repn_levels = ((length(cname) > 1) && (max_repn_level > 0))
-
-    defn_levels = has_defn_levels ? Array{Int32}(undef, nvals) : Int32[]
-    repn_levels = has_repn_levels ? Array{Int32}(undef, nvals) : Int32[]
-
-    for pg in pgs
-        typ = pg.hdr._type
-        num_values = page_num_values(pg)
-        rawbytes = bytes(pg)
-        io = IOBuffer(rawbytes)
-        if (typ === PageType.DATA_PAGE) || (typ === PageType.DATA_PAGE_V2)
-            @debug("reading a data page for columnchunk")
-            enc, defn_enc, repn_enc = page_encodings(pg)
-            nmissing = read_levels_and_nmissing(io, defn_enc, repn_enc, num_values, par, pg, defn_levels, repn_levels, defn_level_offset, repn_level_offset)
-            if has_defn_levels
-                defn_level_offset += num_values
-            end
-            if has_repn_levels
-                repn_level_offset += num_values
-            end
-            if enc === Encoding.PLAIN_DICTIONARY || enc === Encoding.RLE_DICTIONARY
-                map_vals = read_rle_dict(io, num_values - nmissing)
-                map_dict_vals(valdict, vals, map_vals, num_values-nmissing, vals_offset, has_defn_levels, defn_levels, defn_level_offset-num_values)
-            else
-                read_values(io, enc, ctype, num_values - nmissing, vals, vals_offset)
-            end
-            vals_offset += num_values
-        elseif typ === PageType.DICTIONARY_PAGE
-            read_plain_values(io, num_values, ctype, valdict, valdict_offset)
-            valdict_offset += num_values
-        else
-            error("unsupported page type $typ")
-        end
-    end
-    vals, defn_levels, repn_levels
-end
-
-function read_levels(io::IO, max_val::Int, enc::Int32, num_values::Int32, arr::Vector{Int32}, offset::Int=0)::Vector{Int32} # levels are always withing 32 bits
+function read_levels(inp::InputState, out::OutputState{Int32}, max_val::Int, enc::Int32, num_values::Int32) # levels are always 32 bits
     bit_width = UInt8(@bitwidth(max_val))
     @assert(bit_width !== 0)
     #@debug("reading levels. enc:$enc ($(Thrift.enumstr(Encoding,enc))), max_val:$max_val, num_values:$num_values")
 
     if enc === Encoding.RLE
-        read_hybrid(io, num_values, bit_width, arr, offset)
+        byte_width = @bit2bytewidth(bit_width)
+        read_hybrid(inp, out, num_values, bit_width, byte_width)
     elseif enc === Encoding.BIT_PACKED
-        read_bitpacked_run_old(io, num_values, bit_width, arr, offset)
-    #elseif enc == Encoding.PLAIN
-    #    # levels should never be of this type though
-    #    read_plain_values(io, _Type.INT32, num_values)
+        read_bitpacked_run_old(inp, out, num_values, bit_width)
     else
         error("unsupported encoding $enc ($(Thrift.enumstr(Encoding,enc))) for levels")
     end
 end
 
-function read_values(io::IO, enc::Int32, typ::Int32, num_values::Int32, arr::Vector{T}, offset::Int=0) where {T}
-    #@debug("reading values. enc:$enc ($(Thrift.enumstr(Encoding,enc))), num_values:$num_values")
-    if enc === Encoding.PLAIN
-        read_plain_values(io, num_values, typ, arr, offset)
-    elseif enc === Encoding.PLAIN_DICTIONARY || enc === Encoding.RLE_DICTIONARY
-        read_rle_dict(io, num_values, arr, offset)
-    else
-        error("unsupported encoding $enc ($(Thrift.enumstr(Encoding,enc))) for pages")
-    end
-end
-
-function read_levels_and_nmissing(io, defn_enc::Int32, repn_enc::Int32, num_values::Int32, par::ParFile, page::Page, defn_levels::Vector{Int32}, repn_levels::Vector{Int32}, defn_offset::Int=0, repn_offset::Int=0)
-    cname = colname(page.colchunk)
-
-    #@debug("before reading repn levels bytesavailable in page: $(bytesavailable(io))")
+function read_levels_and_nmissing(inp::InputState, defn_out::OutputState{Int32}, repn_out::OutputState{Int32}, defn_enc::Int32, repn_enc::Int32, max_defn::Int, max_repn::Int, num_values::Int32)
     # read repetition levels. skipped if all columns are at 1st level
-    max_repn_level = max_repetition_level(par.schema, cname)
-    ((length(cname) > 1) && (max_repn_level > 0)) && read_levels(io, max_repn_level, repn_enc, num_values, repn_levels, repn_offset)
+    if !isempty(repn_out.data)
+        read_levels(inp, repn_out, max_repn, repn_enc, num_values)
+    end
 
-    #@debug("before reading defn levels bytesavailable in page: $(bytesavailable(io))")
     # read definition levels. skipped if column is required
     nmissing = Int32(0)
-    if !isrequired(par.schema, cname)
-        read_levels(io, max_definition_level(par.schema, cname), defn_enc, num_values, defn_levels, defn_offset)
+    if !isempty(defn_out.data)
+        defn_levels = defn_out.data
+        defn_offset = defn_out.offset
+        read_levels(inp, defn_out, max_defn, defn_enc, num_values)
         @inbounds for idx in 1:num_values
             (defn_levels[idx+defn_offset] === Int32(0)) && (nmissing += Int32(1))
         end
@@ -394,7 +430,7 @@ page_num_values(page::Page) = page_num_values(page.hdr)
 function page_num_values(page::PageHeader)
     Thrift.isfilled(page, :data_page_header) ? page_num_values(page.data_page_header) :
     Thrift.isfilled(page, :data_page_header_v2) ? page_num_values(page.data_page_header_v2) :
-    Thrift.isfilled(page, :dictionary_page_header) ? page_num_values(page.dictionary_page_header) : 0
+    Thrift.isfilled(page, :dictionary_page_header) ? page_num_values(page.dictionary_page_header) : Int32(0)
 end
 page_num_values(page::Union{DataPageHeader,DataPageHeaderV2,DictionaryPageHeader}) = page.num_values
 

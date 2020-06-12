@@ -152,14 +152,36 @@ function test_load_nested()
 
     values = collect(rc)
     v = first(values)
-    @test length(v.nest.thing.list) == 1
+    @test length(v.nest.thing.list) == 2
     @test v.nest.thing.list[1].element == UInt8[0x68,0x69]
     v = last(values)
-    @test length(v.nest.thing.list) == 1
+    @test length(v.nest.thing.list) == 2
     @test v.nest.thing.list[1].element == UInt8[0x77,0x6f,0x72,0x6c,0x64]
+end
+
+function test_load_multiple_rowgroups()
+    println("testing multiple rowgroups...")
+    p = ParFile(joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet"))
+
+    @test nrows(p) == 100
+    @test ncols(p) == 12
+
+    rc = RecordCursor(p)
+    @test length(rc) == 100
+    vals = collect(rc)
+    @test length(vals) == 100
+    @test vals[1].int64 == vals[51].int64
+    @test vals[1].int32 == vals[51].int32
+
+    cc = BatchedColumnsCursor(p)
+    @test length(cc) == 2
+    colvals = collect(cc)
+    @test length(colvals) == 2
+    @test length(colvals[1].int32) == 50
 end
 
 test_load_all_pages()
 test_load_boolean_and_ts()
 test_logical_type_mapping()
 test_load_nested()
+test_load_multiple_rowgroups()
