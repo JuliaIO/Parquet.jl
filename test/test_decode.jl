@@ -16,9 +16,9 @@ function test_decode(file)
 
         for cc in ccs
             pgs = pages(p, cc)
-            println("\t\treading column chunk with $(length(pgs)) pages, $(colname(cc))")
+            println("\t\treading column chunk with $(length(pgs)) pages, $(colname(p,cc))")
             println("\t\tre-reading column chunk for values. total $(length(pgs)) pages")
-            jtype = Parquet.elemtype(Parquet.elem(schema(p), colname(cc)))
+            jtype = Parquet.elemtype(Parquet.elem(schema(p), colname(p,cc)))
 
             ccpv = Parquet.ColumnChunkPageValues(p, cc, jtype)
             result = iterate(ccpv)

@@ -38,7 +38,7 @@ function test_write()
     for (colnum, col_chunk) in enumerate(col_chunks)
         correct_vals = tbl[colnum]
         coltype = eltype(correct_vals)
-        jtype = Parquet.elemtype(Parquet.elem(schema(pf), colname(col_chunk)))
+        jtype = Parquet.elemtype(Parquet.elem(schema(pf), colname(pf,col_chunk)))
         ccpv = Parquet.ColumnChunkPageValues(pf, col_chunk, jtype)
         resultdata,nextpos = iterate(ccpv)
 

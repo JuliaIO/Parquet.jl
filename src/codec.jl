@@ -213,17 +213,6 @@ function read_data_dict(inp::InputState, count::Int32)
 end
 
 # read RLE or bit backed format (RLE = 3)
-#=
-function read_hybrid(inp::InputState, count::Int32, ::Val{W}; read_len::Bool=true) where {W}
-    byte_width = @bit2bytewidth(W)
-    typ = @byt2itype(byte_width)
-    out = OutputState(typ, count)
-
-    #@info("reading read_hybrid", count, read_len)
-    read_hybrid(inp, out, count, W, byte_width; read_len=read_len)
-    out.data
-end
-=#
 function read_hybrid(inp::InputState, out::OutputState{T}, count::Int32, bits::UInt8, byt::Int; read_len::Bool=true) where {T}
     len = Int32(0)
     if read_len

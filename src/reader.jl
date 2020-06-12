@@ -78,15 +78,10 @@ function close(par::ParFile)
     close(par.handle)
 end
 
-##
-# layer 1 access
-# can access raw (uncompressed) bytes from pages
-
 schema(par::ParFile) = par.schema
 
-colname(col::ColumnChunk) = colname(col.meta_data)
+colname(par::ParFile, col::ColumnChunk) = colname(metadata(par,col))
 colname(col::ColumnMetaData) = col.path_in_schema
-colnames(rowgroup::RowGroup) = [colname(col) for col in rowgroup.columns]
 function colnames(par::ParFile)
     names = Vector{Vector{String}}()
     cs = Int[]
@@ -114,28 +109,11 @@ end
 ncols(par::ParFile) = length(colnames(par))
 nrows(par::ParFile) = par.meta.num_rows
 
-coltype(col::ColumnChunk) = coltype(col.meta_data)
+coltype(par::ParFile, col::ColumnChunk) = coltype(metadata(par,col))
 coltype(col::ColumnMetaData) = col._type
 
 # return all rowgroups in the par file
 rowgroups(par::ParFile) = par.meta.row_groups
-
-# Return rowgroups that stores all the columns mentioned in `cnames`.
-# Returned row groups can be further queried to get the range of rows.
-rowgroups(par::ParFile, colname::Vector{String}, rowrange::UnitRange=1:typemax(Int64)) = rowgroups(par, [colname], rowrange)
-function rowgroups(par::ParFile, cnames::Vector{Vector{String}}, rowrange::UnitRange=1:typemax(Int64))
-    R = RowGroup[]
-    L = length(cnames)
-    beginrow = 1
-    for rowgrp in rowgroups(par)
-        cnamesrg = colnames(rowgrp)
-        found = length(intersect(cnames, cnamesrg))
-        endrow = beginrow + rowgrp.num_rows - 1
-        (found == L) && (length(beginrow:endrow) > 0) && push!(R, rowgrp)
-        beginrow = endrow + 1
-    end
-    R
-end
 
 function rowgroup_row_positions(par::ParFile)
     rgs = rowgroups(par)
@@ -154,7 +132,7 @@ columns(par::ParFile, rowgroup::RowGroup, colname::Vector{String}) = columns(par
 function columns(par::ParFile, rowgroup::RowGroup, cnames::Vector{Vector{String}})
     R = ColumnChunk[]
     for col in columns(par, rowgroup)
-        (colname(col) in cnames) && push!(R, col)
+        (colname(par,col) in cnames) && push!(R, col)
     end
     R
 end
@@ -168,8 +146,8 @@ mutable struct ColumnChunkPages
     endpos::Int64
 
     function ColumnChunkPages(par::ParFile, col::ColumnChunk)
-        startpos = page_offset(col)
-        endpos = end_offset(col)
+        startpos = page_offset(par, col)
+        endpos = end_offset(par, col)
         new(par, col, startpos, endpos)
     end
 end
@@ -208,7 +186,7 @@ mutable struct ColumnChunkPageValues{T}
 end
 
 function ColumnChunkPageValues(par::ParFile, col::ColumnChunk, ::Type{T}) where {T}
-    cname = colname(col)
+    cname = colname(par, col)
 
     max_repn = max_repetition_level(par.schema, cname)
     max_defn = max_definition_level(par.schema, cname)
@@ -255,7 +233,7 @@ function Base.iterate(ccpv::ColumnChunkPageValues{T}, startpos::Int64) where {T}
 
         pagetype = page.hdr._type
         num_values = page_num_values(page)
-        inp = InputState(bytes(page), 0)
+        inp = InputState(bytes(ccpv.ccp.par,page), 0)
 
         if (pagetype === PageType.DATA_PAGE) || (pagetype === PageType.DATA_PAGE_V2)
             read_data_page = true
@@ -298,9 +276,9 @@ pages(par::ParFile, rowgroupidx, colidx) = pages(par, columns(par, rowgroupidx),
 pages(par::ParFile, cols::Vector{ColumnChunk}, colidx) = pages(par, cols[colidx])
 pages(par::ParFile, col::ColumnChunk) = cacheget(par.page_cache, col, col->_pagevec(par,col))
 
-function bytes(page::Page, uncompressed::Bool=true)
+function bytes(par::ParFile, page::Page, uncompressed::Bool=true)
     data = page.data
-    codec = page.colchunk.meta_data.codec
+    codec = metadata(par, page.colchunk).codec
     if uncompressed && (codec != CompressionCodec.UNCOMPRESSED)
         if isempty(page.uncompressed_data)
             uncompressed_sz = page.hdr.uncompressed_page_size
@@ -325,22 +303,6 @@ end
 ##
 # layer 2 access
 # can access decoded values from pages
-
-function estimate_sizes(par::ParFile, col::ColumnChunk)
-    pgs = pages(par, col)
-    nvals = nvaldict = 0
-    for pg in pgs
-        typ = pg.hdr._type
-        num_values = page_num_values(pg)
-        if (typ === PageType.DATA_PAGE) || (typ === PageType.DATA_PAGE_V2)
-            nvals += num_values
-        elseif typ === PageType.DICTIONARY_PAGE
-            nvaldict += num_values
-        end
-    end
-    nvals, nvaldict
-end
-
 function read_levels(inp::InputState, out::OutputState{Int32}, max_val::Int, enc::Int32, num_values::Int32) # levels are always 32 bits
     bit_width = UInt8(@bitwidth(max_val))
     @assert(bit_width !== 0)
@@ -382,14 +344,14 @@ open(par::ParFile, col::ColumnChunk) = open(par.handle, par.path, col)
 close(par::ParFile, col::ColumnChunk, io) = (par.handle == io) || close(io)
 function open(io, path::AbstractString, col::ColumnChunk)
     if isfilled(col, :file_path)
-        @debug("opening file $(col.file_path) to read column metadata at $(col.file_offset)")
+        @debug("opening file to read column metadata", file=col.file_path, offset=col.file_offset)
         open(col.file_path)
     else
-        if io == nothing
-            @debug("opening file $path to read column metadata at $(col.file_offset)")
+        if io === nothing
+            @debug("opening file to read column metadata", file=path, offset=col.file_offset)
             open(path)
         else
-            @debug("reading column metadata at $(col.file_offset)")
+            @debug("reading column metadata", offset=col.file_offset)
             io
         end
     end
@@ -403,14 +365,14 @@ function metadata(io, path::AbstractString, col::ColumnChunk)
     meta
 end
 
-function page_offset(col::ColumnChunk)
-    colmeta = col.meta_data
+function page_offset(par::ParFile, col::ColumnChunk)
+    colmeta = metadata(par, col)
     offset = colmeta.data_page_offset
     Thrift.isfilled(colmeta, :index_page_offset) && (offset = min(offset, colmeta.index_page_offset))
     Thrift.isfilled(colmeta, :dictionary_page_offset) && (offset = min(offset, colmeta.dictionary_page_offset))
     offset
 end
-end_offset(col::ColumnChunk) = page_offset(col) + col.meta_data.total_compressed_size
+end_offset(par::ParFile, col::ColumnChunk) = page_offset(par, col) + metadata(par,col).total_compressed_size
 
 page_size(page::PageHeader) = Thrift.isfilled(page, :compressed_page_size) ? page.compressed_page_size : page.uncompressed_page_size
 
@@ -448,23 +410,33 @@ function metadata_length(io)
 end
 
 function metadata(io, path::AbstractString, len::Integer=metadata_length(io))
-    @debug("metadata len = $len")
+    @debug("reading file metadata", len)
     sz = filesize(io)
     seek(io, sz - SZ_PAR_MAGIC - SZ_FOOTER - len)
     meta = read_thrift(io, FileMetaData)
-    # go through all column chunks and read metadata from file offsets if required
-    for grp in meta.row_groups
-        for col in grp.columns
-            if !isfilled(col, :meta_data)
-                # need to read metadata from an offset
-                col.meta_data = metadata(io, path, col)
-            end
-        end
-    end
     meta
 end
 
 metadata(par::ParFile) = par.meta
+
+#=
+function fill_column_metadata(par::ParFile)
+    meta = par.meta
+    # go through all column chunks and read metadata from file offsets if required
+    for grp in meta.row_groups
+        for col in grp.columns
+            metadata(par, col)
+        end
+    end
+end
+=#
+
+function metadata(par::ParFile, col::ColumnChunk)
+    if !isfilled(col, :meta_data)
+        col.meta_data = metadata(par.handle, par.path, col)
+    end
+    col.meta_data
+end
 
 # file format verification
 function is_par_file(fname::AbstractString)
