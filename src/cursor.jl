@@ -9,6 +9,7 @@
 mutable struct ColCursor{T}
     par::ParFile
     colname::Vector{String}                                 # column name (full path in schema)
+    colnamesym::Vector{Symbol}                              # column name converted to symbols
     required_at::Vector{Bool}                               # at what level in the schema the column is required
     repeated_at::Vector{Bool}                               # at what level in the schema the column is repeated
     logical_converter_fn::Function                          # column converter function as per schema or options (identity if none)
@@ -34,6 +35,7 @@ mutable struct ColCursor{T}
     levelend::Int64
 
     function ColCursor{T}(par::ParFile, row_positions::Vector{Int64}, colname::Vector{String}, rows::UnitRange) where T
+        colnamesym = [Symbol(name) for name in colname]
         sch = schema(par)
 
         len_colname_parts = length(colname)
@@ -47,7 +49,7 @@ mutable struct ColCursor{T}
 
         logical_converter_fn = logical_converter(sch, colname)
         maxdefn = max_definition_level(sch, colname)
-        new{T}(par, colname, required_at, repeated_at, logical_converter_fn, maxdefn, 0, rows, rowgroups(par), row_positions, 0, nothing, 0, nothing, nothing, 0)
+        new{T}(par, colname, colnamesym, required_at, repeated_at, logical_converter_fn, maxdefn, 0, rows, rowgroups(par), row_positions, 0, nothing, 0, nothing, nothing, 0)
     end
 end
 
@@ -178,7 +180,7 @@ function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int64,Int64}) where {T}
 
     maxdefn = cursor.maxdefn
     defn_level = cursor.pageiter.has_defn_levels ? cursor.page_defn.data[cursor.levelpos] : maxdefn
-    repn_level = cursor.pageiter.has_repn_levels ? cursor.page_repn.data[cursor.levelpos] : 0
+    repn_level = cursor.pageiter.has_repn_levels ? cursor.page_repn.data[cursor.levelpos] : Int32(0)
     if defn_level == maxdefn
         val = (cursor.pagevals.data[cursor.valpos])::T
     else
@@ -213,13 +215,15 @@ mutable struct BatchedColumnsCursor{T}
     colnames::Vector{Vector{String}}
     colcursors::Vector{ColCursor}
     colstates::Vector{Tuple{Int64,Int64}}
+    colbuffs::Vector{Union{Nothing,Vector}}
     batchid::Int
     row::Int64
     batchsize::Int64
     nbatches::Int
+    reusebuffer::Bool
 end
 
-function BatchedColumnsCursor(par::ParFile; batchsize::Int64=first(rowgroups(par)).num_rows)
+function BatchedColumnsCursor(par::ParFile; batchsize::Int64=first(rowgroups(par)).num_rows, reusebuffer::Bool=false)
     sch = schema(par)
 
     # supports only non nested columns as of now
@@ -230,7 +234,9 @@ function BatchedColumnsCursor(par::ParFile; batchsize::Int64=first(rowgroups(par
     colcursors = [ColCursor(par, colname) for colname in colnames(par)]
     rectype = ntcolstype(sch, sch.schema[1])
     nbatches = ceil(Int, nrows(par)/batchsize)
-    BatchedColumnsCursor{rectype}(par, colnames(par), colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), 1, 1, batchsize, nbatches)
+    colbuffs = Union{Nothing,Vector}[nothing for idx in 1:length(colcursors)]
+
+    BatchedColumnsCursor{rectype}(par, colnames(par), colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), colbuffs, 1, 1, batchsize, nbatches, reusebuffer)
 end
 
 eltype(cursor::BatchedColumnsCursor{T}) where {T} = T
@@ -247,62 +253,62 @@ function colcursor_advance(colcursor::ColCursor, rows_by::Int64, vals_by::Int64=
     nothing
 end
 
-function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{Union{Missing,V}}}) where {T,V}
+function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{Union{Missing,V}}}, cache) where {T,V}
     row = colcursor.row
     batchsize = min(batchsize, last(colcursor.rows)-row+1)
     logical_converter_fn = colcursor.logical_converter_fn
-    vals = Array{Union{Missing,V}}(undef, batchsize)
+    vals = (cache === nothing) ? Array{Union{Missing,V}}(undef, batchsize) : resize!(cache::Vector{Union{Missing,V}}, batchsize)
 
     fillpos = 1
     while fillpos <= batchsize
         pagevals = colcursor.pagevals
         defn_levels = colcursor.page_defn
-        val_idx = colcursor.valpos-1
-        nvals_from_page = min(batchsize - fillpos + 1, defn_levels.offset - colcursor.valpos + 1)
+        val_idx = (colcursor.valpos == 0) ? 0 : (colcursor.valpos-1)
+        nvals_from_page = min(batchsize - fillpos + 1, defn_levels.offset - colcursor.levelpos + 1)
         @inbounds for idx in 1:nvals_from_page
             if defn_levels.data[colcursor.levelpos+idx-1] === Int32(1)
-                (val_idx < 0) && (val_idx += 1)
                 vals[fillpos+idx-1] = logical_converter_fn(pagevals.data[val_idx+=1])
             else
                 vals[fillpos+idx-1] = missing
             end
         end
         fillpos += nvals_from_page
-        colcursor_advance(colcursor, nvals_from_page, val_idx - colcursor.valpos + 1)
+        valposincr = (colcursor.valpos == 0) ? val_idx : (val_idx - colcursor.valpos + 1)
+        colcursor_advance(colcursor, nvals_from_page, valposincr)
     end
     vals
 end
 
-function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{Union{Missing,T}}}) where {T}
+function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{Union{Missing,T}}}, cache) where {T}
     row = colcursor.row
     batchsize = min(batchsize, last(colcursor.rows)-row+1)
-    vals = Array{Union{Missing,T}}(undef, batchsize)
+    vals = (cache === nothing) ? Array{Union{Missing,T}}(undef, batchsize) : resize!(cache::Vector{Union{Missing,T}}, batchsize)
 
     fillpos = 1
     while fillpos <= batchsize
         pagevals = colcursor.pagevals
         defn_levels = colcursor.page_defn
-        val_idx = colcursor.valpos-1
-        nvals_from_page = min(batchsize - fillpos + 1, defn_levels.offset - colcursor.valpos + 1)
+        val_idx = (colcursor.valpos == 0) ? 0 : (colcursor.valpos-1)
+        nvals_from_page = min(batchsize - fillpos + 1, defn_levels.offset - colcursor.levelpos + 1)
         @inbounds for idx in 1:nvals_from_page
             if defn_levels.data[colcursor.levelpos+idx-1] === Int32(1)
-                (val_idx < 0) && (val_idx += 1)
                 vals[fillpos+idx-1] = pagevals.data[val_idx+=1]
             else
                 vals[fillpos+idx-1] = missing
             end
         end
         fillpos += nvals_from_page
-        colcursor_advance(colcursor, nvals_from_page, val_idx - colcursor.valpos + 1)
+        valposincr = (colcursor.valpos == 0) ? val_idx : (val_idx - colcursor.valpos + 1)
+        colcursor_advance(colcursor, nvals_from_page, valposincr)
     end
     vals
 end
 
-function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{V}}) where {T,V}
+function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{V}}, cache) where {T,V}
     row = colcursor.row
     batchsize = min(batchsize, last(colcursor.rows)-row+1)
     logical_converter_fn = colcursor.logical_converter_fn
-    vals = Array{V}(undef, batchsize)
+    vals = (cache === nothing) ? Array{V}(undef, batchsize) : resize!(cache::Vector{V}, batchsize)
 
     fillpos = 1
     while fillpos <= batchsize
@@ -317,10 +323,10 @@ function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vect
     vals
 end
 
-function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{T}}) where {T}
+function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{T}}, cache) where {T}
     row = colcursor.row
     batchsize = min(batchsize, last(colcursor.rows)-row+1)
-    vals = Array{T}(undef, batchsize)
+    vals = (cache === nothing) ? Array{T}(undef, batchsize) : resize!(cache::Vector{T}, batchsize)
 
     fillpos = 1
     while fillpos <= batchsize
@@ -340,7 +346,11 @@ function Base.iterate(cursor::BatchedColumnsCursor{T}, batchid) where {T}
 
     colcursors = cursor.colcursors
     coltypes = T.types
-    colvals = [colcursor_values(colcursor,cursor.batchsize,coltype) for (colcursor,coltype) in zip(colcursors,coltypes)]
+    if cursor.reusebuffer
+        colvals = cursor.colbuffs = [colcursor_values(colcursor,cursor.batchsize,coltype,colbuff) for (colcursor,coltype,colbuff) in zip(colcursors,coltypes,cursor.colbuffs)]
+    else
+        colvals = [colcursor_values(colcursor,cursor.batchsize,coltype,nothing) for (colcursor,coltype) in zip(colcursors,coltypes)]
+    end
 
     cursor.row += cursor.batchsize
     cursor.batchid += 1
@@ -437,6 +447,7 @@ end
 
 function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor, val, defn_level::Int64, repn_level::Int64, col_repeat_state::Dict{Tuple{Int,Int},Int})
     nameparts = colcursor.colname
+    symnameparts = colcursor.colnamesym
     required_at = colcursor.required_at
     repeated_at = colcursor.repeated_at
     logical_converter_fn = colcursor.logical_converter_fn
@@ -452,7 +463,7 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcurso
         colname = view(nameparts, 1:idx)
         #@debug("updating part $colname of $nameparts isnull:$(val === nothing), def:$(defn_level), rep:$(repn_level)")
         leaf = nameparts[idx]
-        symleaf = Symbol(leaf)
+        symleaf = symnameparts[idx]
 
         required = required_at[idx]                 # determine whether field is optional and repeated
         repeated = repeated_at[idx]
