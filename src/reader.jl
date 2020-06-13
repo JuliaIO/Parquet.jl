@@ -9,25 +9,29 @@ mutable struct Page
     colchunk::ColumnChunk
     hdr::PageHeader
     pos::Int
-    data::Vector{UInt8}
     uncompressed_data::Vector{UInt8}
+    nextpos::Int64
 end
 
-mutable struct PageLRU
-    refs::Dict{ColumnChunk,DRef}
+"""
+Keeps a cache of pages read from a file.
+Pages are kept as weak refs, so that they can be collected when there's memory pressure.
+"""
+struct PageLRU
+    refs::Dict{Tuple{ColumnChunk,Int64},WeakRef}
     function PageLRU()
-        new(Dict{ColumnChunk,DRef}())
+        new(Dict{Tuple{ColumnChunk,Int64},WeakRef}())
     end
 end
 
-function cacheget(lru::PageLRU, chunk::ColumnChunk, nf)
-    if chunk in keys(lru.refs)
-        poolget(lru.refs[chunk])
-    else
-        data = nf(chunk)
-        lru.refs[chunk] = poolset(data)
-        data
+function cacheget(fetcher, lru::PageLRU, chunk::ColumnChunk, startpos::Int64)
+    key = (chunk,startpos)
+    page = haskey(lru.refs, key) ? lru.refs[key].value : nothing
+    if page === nothing
+        page = fetcher()::Page
+        lru.refs[key] = WeakRef(page)
     end
+    page
 end
 
 """
@@ -158,17 +162,40 @@ function Base.iterate(ccp::ColumnChunkPages, startpos::Int64)
         return nothing
     end
 
-    par = ccp.par
-    io = par.handle
-    seek(io, startpos)
-    pagehdr = read_thrift(io, PageHeader)
+    page = cacheget(ccp.par.page_cache, ccp.col, startpos) do
+        par = ccp.par
+        io = par.handle
+        seek(io, startpos)
+        pagehdr = read_thrift(io, PageHeader)
 
-    page_data_pos = position(io)
-    pagesz = page_size(pagehdr)
-    data = _use_mmap ? Mmap.mmap(io, Vector{UInt8}, (pagesz,), page_data_pos; grow=false, shared=false) : read!(io, Array{UInt8}(undef, pagesz))
-    page = Page(ccp.col, pagehdr, page_data_pos, data, UInt8[])
-    nextpos = page_data_pos + pagesz
-    page, nextpos
+        page_data_pos = position(io)
+        pagesz = page_size(pagehdr)
+        data = _use_mmap ? Mmap.mmap(io, Vector{UInt8}, (pagesz,), page_data_pos; grow=false, shared=false) : read!(io, Array{UInt8}(undef, pagesz))
+        codec = metadata(ccp.par, ccp.col).codec
+
+        if (codec != CompressionCodec.UNCOMPRESSED)
+            uncompressed_sz = pagehdr.uncompressed_page_size
+            #uncompressed_data = _use_mmap ? Mmap.mmap(Mmap.Anonymous(), Vector{UInt8}, (uncompressed_sz,), 0) : Array{UInt8}(undef, uncompressed_sz)
+            uncompressed_data = Array{UInt8}(undef, uncompressed_sz)
+            if codec == CompressionCodec.SNAPPY
+                Snappy.snappy_uncompress(data, uncompressed_data)
+            elseif codec == CompressionCodec.GZIP
+                readbytes!(GzipDecompressorStream(IOBuffer(data)), uncompressed_data)
+            elseif codec == CompressionCodec.ZSTD
+                readbytes!(ZstdDecompressorStream(IOBuffer(data)), uncompressed_data)
+            else
+                error("Unknown compression codec for column chunk: $codec")
+            end
+            (length(uncompressed_data) == uncompressed_sz) || error("failed to uncompress page. expected $(uncompressed_sz), got $(length(uncompressed_data)) bytes")
+        else
+            uncompressed_data = data
+        end
+
+        nextpos = page_data_pos + pagesz
+        page = Page(ccp.col, pagehdr, page_data_pos, uncompressed_data, nextpos)
+    end
+
+    page, page.nextpos
 end
 
 ##
@@ -233,7 +260,7 @@ function Base.iterate(ccpv::ColumnChunkPageValues{T}, startpos::Int64) where {T}
 
         pagetype = page.hdr._type
         num_values = page_num_values(page)
-        inp = InputState(bytes(ccpv.ccp.par,page), 0)
+        inp = InputState(page.uncompressed_data, 0)
 
         if (pagetype === PageType.DATA_PAGE) || (pagetype === PageType.DATA_PAGE_V2)
             read_data_page = true
@@ -261,43 +288,6 @@ function Base.iterate(ccpv::ColumnChunkPageValues{T}, startpos::Int64) where {T}
     end
     iterator_result = NamedTuple{(:value,:repn_level,:defn_level),Tuple{OutputState{T},OutputState{Int32},OutputState{Int32}}}((ccpv.vals_out, ccpv.repn_out, ccpv.defn_out))
     iterator_result, nextpos
-end
-
-function _pagevec(par::ParFile, col::ColumnChunk)
-    # read pages from the file
-    ccp = ColumnChunkPages(par, col)
-    pagevec = Page[]
-    for page in ccp
-        push!(pagevec, page)
-    end
-    pagevec
-end
-pages(par::ParFile, rowgroupidx, colidx) = pages(par, columns(par, rowgroupidx), colidx)
-pages(par::ParFile, cols::Vector{ColumnChunk}, colidx) = pages(par, cols[colidx])
-pages(par::ParFile, col::ColumnChunk) = cacheget(par.page_cache, col, col->_pagevec(par,col))
-
-function bytes(par::ParFile, page::Page, uncompressed::Bool=true)
-    data = page.data
-    codec = metadata(par, page.colchunk).codec
-    if uncompressed && (codec != CompressionCodec.UNCOMPRESSED)
-        if isempty(page.uncompressed_data)
-            uncompressed_sz = page.hdr.uncompressed_page_size
-            uncompressed_data = _use_mmap ? Mmap.mmap(Mmap.Anonymous(), Vector{UInt8}, (uncompressed_sz,), 0) : Array{UInt8}(undef, uncompressed_sz)
-            if codec == CompressionCodec.SNAPPY
-                Snappy.snappy_uncompress(data, uncompressed_data)
-            elseif codec == CompressionCodec.GZIP
-                readbytes!(GzipDecompressorStream(IOBuffer(data)), uncompressed_data)
-            elseif codec == CompressionCodec.ZSTD
-                readbytes!(ZstdDecompressorStream(IOBuffer(data)), uncompressed_data)
-            else
-                error("Unknown compression codec for column chunk: $codec")
-            end
-            (length(uncompressed_data) == uncompressed_sz) || error("failed to uncompress page. expected $(uncompressed_sz), got $(length(uncompressed_data)) bytes")
-            page.uncompressed_data = uncompressed_data
-        end
-        data = page.uncompressed_data
-    end
-    data
 end
 
 ##

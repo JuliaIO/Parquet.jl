@@ -7,26 +7,35 @@ function test_load(file::String)
     println("loaded $file")
     @test isa(p.meta, Parquet.FileMetaData)
 
-    rg = rowgroups(p)
-    @test length(rg) > 0
-    println("\tfound $(length(rg)) row groups")
-
-    cc = columns(p, 1)
-    println("\tfound $(length(cc)) column chunks in row group 1")
+    rgs = rowgroups(p)
+    @test length(rgs) > 0
 
     cnames = colnames(p)
-    @test length(cnames) == length(cc)
+    @test length(cnames) > 0
     println("\tcolumns: $cnames")
 
-    pg = pages(p, 1, 1)
-    println("\tfound $(length(pg)) pages in column chunk 1 of row group 1")
+    for rg in rgs
+        ccs = columns(p, rg)
+        println("\treading row group with $(length(ccs)) column chunks")
 
-    bpg = bytes(p, pg[1])
-    println("\tread $(length(bpg)) bytes from page 1, column chunk 1 of row group 1")
+        for cc in ccs
+            npages = 0
+            ccp = Parquet.ColumnChunkPages(p, cc)
+            result = iterate(ccp)
+            npages = 0
+            ncompressedbytes = 0
+            nuncompressedbytes = 0
+            while result !== nothing
+                page,nextpos = result
+                result = iterate(ccp, nextpos)
+                npages += 1
+                ncompressedbytes += Parquet.page_size(page.hdr)
+                nuncompressedbytes += page.hdr.uncompressed_page_size
+            end
+            println("\tread column chunk with $npages pages, $ncompressedbytes compressed, $nuncompressedbytes uncompressed")
+        end
+    end
 
-    cc1 = columns(p, rg[1], cnames[1:2:3])
-    @test length(cc) > length(cc1)
-    #@test length(rowgroups(p, [cnames[1], ["xyz"]])) == 0
 
     iob = IOBuffer()
     show(iob, p)
@@ -66,8 +75,6 @@ function test_load_boolean_and_ts()
     cnames = colnames(p)
     @test length(cnames) == length(cc)
     @test cnames[2] == ["bool_col"]
-    pg = pages(p, 1, 1)
-    @test length(pg) == 2
 
     rc = RecordCursor(p; rows=1:2, colnames=colnames(p))
     @test length(rc) == 2

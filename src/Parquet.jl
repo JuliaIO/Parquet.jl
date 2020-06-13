@@ -4,7 +4,6 @@ using Thrift
 using Snappy
 using CodecZlib
 using CodecZstd
-using MemPool
 using Dates
 using Mmap
 
