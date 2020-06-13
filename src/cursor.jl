@@ -217,13 +217,33 @@ mutable struct BatchedColumnsCursor{T}
     colstates::Vector{Tuple{Int64,Int64}}
     colbuffs::Vector{Union{Nothing,Vector}}
     batchid::Int
+    rows::UnitRange{Int64}
     row::Int64
     batchsize::Int64
     nbatches::Int
     reusebuffer::Bool
+    use_threads::Bool
 end
 
-function BatchedColumnsCursor(par::ParFile; batchsize::Int64=first(rowgroups(par)).num_rows, reusebuffer::Bool=false)
+"""
+Create cursor to iterate over batches of column values. Each iteration returns a named tuple of column names with batch of column values. Files with nested schemas can not be read with this cursor.
+
+```julia
+BatchedColumnsCursor(par::ParFile; kwargs...)
+```
+
+Cursor options:
+- `rows`: the row range to iterate through, all rows by default.
+- `batchsize`: maximum number of rows to read in each batch (default: row count of first row group).
+- `reusebuffer`: boolean to indicate whether to reuse the buffers with every iteration; if each iteration processes the batch and does not need to refer to the same data buffer again, then setting this to `true` reduces GC pressure and can help significantly while processing large files.
+- `use_threads`: whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
+"""
+function BatchedColumnsCursor(par::ParFile;
+        rows::UnitRange=1:nrows(par),
+        batchsize::Signed=first(rowgroups(par)).num_rows,
+        reusebuffer::Bool=false,
+        use_threads::Bool=(nthreads() > 1))
+
     sch = schema(par)
 
     # supports only non nested columns as of now
@@ -233,10 +253,10 @@ function BatchedColumnsCursor(par::ParFile; batchsize::Int64=first(rowgroups(par
 
     colcursors = [ColCursor(par, colname) for colname in colnames(par)]
     rectype = ntcolstype(sch, sch.schema[1])
-    nbatches = ceil(Int, nrows(par)/batchsize)
+    nbatches = ceil(Int, length(rows)/batchsize)
     colbuffs = Union{Nothing,Vector}[nothing for idx in 1:length(colcursors)]
 
-    BatchedColumnsCursor{rectype}(par, colnames(par), colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), colbuffs, 1, 1, batchsize, nbatches, reusebuffer)
+    BatchedColumnsCursor{rectype}(par, colnames(par), colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), colbuffs, 1, rows, first(rows), batchsize, nbatches, reusebuffer, (VERSION < v"1.3") ? false : use_threads)
 end
 
 eltype(cursor::BatchedColumnsCursor{T}) where {T} = T
@@ -346,10 +366,20 @@ function Base.iterate(cursor::BatchedColumnsCursor{T}, batchid) where {T}
 
     colcursors = cursor.colcursors
     coltypes = T.types
-    if cursor.reusebuffer
-        colvals = cursor.colbuffs = [colcursor_values(colcursor,cursor.batchsize,coltype,colbuff) for (colcursor,coltype,colbuff) in zip(colcursors,coltypes,cursor.colbuffs)]
+    if cursor.use_threads
+        L = length(colcursors)
+        colvals = Array{Any}(undef, L)
+        @threads for idx in 1:L
+            colbuff = cursor.reusebuffer ? cursor.colbuffs[idx] : nothing
+            colvals[idx] = colcursor_values(colcursors[idx], cursor.batchsize, coltypes[idx], colbuff)
+        end
+        cursor.reusebuffer && (cursor.colbuffs = colvals)
     else
-        colvals = [colcursor_values(colcursor,cursor.batchsize,coltype,nothing) for (colcursor,coltype) in zip(colcursors,coltypes)]
+        if cursor.reusebuffer
+            colvals = cursor.colbuffs = [colcursor_values(colcursor,cursor.batchsize,coltype,colbuff) for (colcursor,coltype,colbuff) in zip(colcursors,coltypes,cursor.colbuffs)]
+        else
+            colvals = [colcursor_values(colcursor,cursor.batchsize,coltype,nothing) for (colcursor,coltype) in zip(colcursors,coltypes)]
+        end
     end
 
     cursor.row += cursor.batchsize
@@ -358,7 +388,7 @@ function Base.iterate(cursor::BatchedColumnsCursor{T}, batchid) where {T}
 end
 
 function Base.iterate(cursor::BatchedColumnsCursor{T}) where {T}
-    cursor.row = 1
+    cursor.row = first(cursor.rows)
     for colcursor in cursor.colcursors
         setrow(colcursor, cursor.row)
     end
@@ -377,11 +407,22 @@ mutable struct RecordCursor{T}
     row::Int64                                  # current row
 end
 
-function RecordCursor(par::ParFile; rows::UnitRange=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par), row::Signed=first(rows))
-    colcursors = [ColCursor(par, colname; rows=rows, row=row) for colname in colnames]
+"""
+Create cursor to iterate over records. In parallel mode, multiple remote cursors can be created and iterated on in parallel.
+
+```julia
+RecordCursor(par::ParFile; kwargs...)
+```
+
+Cursor options:
+- `rows`: the row range to iterate through, all rows by default.
+- `colnames`: the column names to retrieve; all by default
+"""
+function RecordCursor(par::ParFile; rows::UnitRange=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par))
+    colcursors = [ColCursor(par, colname; rows=rows, row=first(rows)) for colname in colnames]
     sch = schema(par)
     rectype = ntelemtype(sch, sch.schema[1])
-    RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), rows, row)
+    RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), rows, first(rows))
 end
 
 eltype(cursor::RecordCursor{T}) where {T} = T

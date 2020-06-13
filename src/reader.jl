@@ -19,19 +19,22 @@ Pages are kept as weak refs, so that they can be collected when there's memory p
 """
 struct PageLRU
     refs::Dict{Tuple{ColumnChunk,Int64},WeakRef}
+    lck::ReentrantLock
     function PageLRU()
-        new(Dict{Tuple{ColumnChunk,Int64},WeakRef}())
+        new(Dict{Tuple{ColumnChunk,Int64},WeakRef}(), ReentrantLock())
     end
 end
 
 function cacheget(fetcher, lru::PageLRU, chunk::ColumnChunk, startpos::Int64)
     key = (chunk,startpos)
-    page = haskey(lru.refs, key) ? lru.refs[key].value : nothing
-    if page === nothing
-        page = fetcher()::Page
-        lru.refs[key] = WeakRef(page)
+    lock(lru.lck) do
+        page = haskey(lru.refs, key) ? lru.refs[key].value : nothing
+        if page === nothing
+            page = fetcher()::Page
+            lru.refs[key] = WeakRef(page)
+        end
+        return page
     end
-    page
 end
 
 """

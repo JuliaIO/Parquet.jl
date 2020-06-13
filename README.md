@@ -71,10 +71,24 @@ Schema:
     }
 ```
 
-Create cursor to iterate over batches of column values. Each iteration returns a named tuple of column names with batch of column values. One batch corresponds to one row group of the parquet file.
+### BatchedColumnsCursor
+
+Create cursor to iterate over batches of column values. Each iteration returns a named tuple of column names with batch of column values. Files with nested schemas can not be read with this cursor.
 
 ```julia
-julia> cc = Parquet.BatchedColumnsCursor(par)
+BatchedColumnsCursor(par::ParFile; kwargs...)
+```
+
+Cursor options:
+- `rows`: the row range to iterate through, all rows by default.
+- `batchsize`: maximum number of rows to read in each batch (default: row count of first row group).
+- `reusebuffer`: boolean to indicate whether to reuse the buffers with every iteration; if each iteration processes the batch and does not need to refer to the same data buffer again, then setting this to `true` reduces GC pressure and can help significantly while processing large files.
+- `use_threads`: whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
+
+Example:
+
+```julia
+julia> cc = BatchedColumnsCursor(par)
 Batched Columns Cursor on customer.impala.parquet
     rows: 1:150000
     batches: 1
@@ -97,7 +111,19 @@ julia> batchvals.c_name[1:5]
  "Customer#000000005"
 ```
 
+### RecordCursor
+
 Create cursor to iterate over records. In parallel mode, multiple remote cursors can be created and iterated on in parallel.
+
+```julia
+RecordCursor(par::ParFile; kwargs...)
+```
+
+Cursor options:
+- `rows`: the row range to iterate through, all rows by default.
+- `colnames`: the column names to retrieve; all by default
+
+Example:
 
 ```julia
 julia> rc = RecordCursor(p)

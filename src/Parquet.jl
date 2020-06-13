@@ -6,6 +6,7 @@ using CodecZlib
 using CodecZstd
 using Dates
 using Mmap
+using Base.Threads
 
 if VERSION < v"1.3"
     using Missings: nonmissingtype
