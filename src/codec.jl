@@ -155,6 +155,18 @@ function read_plain_values(inp::InputState, out::OutputState{Vector{UInt8}}, cou
     out.offset += count
     nothing
 end
+function read_plain_values(inp::InputState, out::OutputState{String}, count::Int32, converter_fn::Function)
+    # _Type.FIXED_LEN_BYTE_ARRAY is most likely same as byte array
+    #@debug("reading plain values", type=Vector{UInt8}, count=count)
+    arr = out.data
+    offset = out.offset
+    @assert (offset + count) <= length(arr)
+    @inbounds for i in 1:count
+        arr[i+offset] = converter_fn(read_plain_byte_array(inp))
+    end
+    out.offset += count
+    nothing
+end
 # read_plain_values of type T
 function read_plain_values(inp::InputState, out::OutputState{T}, count::Int32) where {T}
     #@debug("reading plain values", type=T, count=count)
@@ -163,6 +175,18 @@ function read_plain_values(inp::InputState, out::OutputState{T}, count::Int32) w
     @assert (offset + count) <= length(arr)
     @inbounds for i in 1:count
         arr[i+offset] = read_fixed(inp, T)
+    end
+    #@debug("read $(length(arr)) plain values")
+    out.offset += count
+    nothing
+end
+function read_plain_values(inp::InputState, out::OutputState{DateTime}, count::Int32, converter_fn::Function)
+    #@debug("reading plain values", type=T, count=count)
+    arr = out.data
+    offset = out.offset
+    @assert (offset + count) <= length(arr)
+    @inbounds for i in 1:count
+        arr[i+offset] = converter_fn(read_fixed(inp, Int128))
     end
     #@debug("read $(length(arr)) plain values")
     out.offset += count
@@ -369,4 +393,4 @@ function logical_timestamp(i128::Int128; offset::Dates.Period=Dates.Second(0))
     logical_timestamp(take!(iob); offset=offset)
 end
 
-logical_string(bytes::Vector{UInt8}) = String(copy(bytes))
+logical_string(bytes::Vector{UInt8}) = String(bytes)

@@ -2,10 +2,6 @@
 # It contains mapping of a column to a logical type and the converter function to be applied.
 # Columns can be indentified either by their actual type or column name (the full path in the schema)
 const TLogicalTypeMap = Dict{Union{Int32,Vector{String}},Tuple{DataType,Function}}
-const DEFAULT_LOGICAL_TYPE_MAP = TLogicalTypeMap(
-    _Type.INT96 => (DateTime, logical_timestamp),
-    _Type.BYTE_ARRAY => (String, logical_string)
-)
 
 # schema and helper methods
 mutable struct Schema
@@ -24,6 +20,14 @@ mutable struct Schema
             sch = elems[idx]
             nested_name = [name_stack; sch.name]
             name_lookup[nested_name] = sch
+
+            if !haskey(map_logical_types, nested_name)
+                if is_logical_string(sch)
+                    map_logical_types[nested_name] = (String, logical_string)
+                elseif is_logical_timestamp(sch)
+                    map_logical_types[nested_name] = (DateTime, logical_timestamp)
+                end
+            end
 
             if (idx > 1) && (num_children(sch) > 0)
                 push!(nchildren_stack, sch.num_children)
@@ -63,6 +67,11 @@ isoptional(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionTy
 
 isrepeated(sch::Schema, schname::T) where {T <: AbstractVector{String}} = isrepeated(elem(sch, schname))
 isrepeated(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.REPEATED)
+
+is_logical_string(sch::SchemaElement) = (sch._type === _Type.BYTE_ARRAY) && ((isfilled(sch, :converted_type) && (sch.converted_type === ConvertedType.UTF8)) || (isfilled(sch, :logicalType) && isfilled(sch.logicalType, :STRING)))
+
+# converted_type is usually not set for INT96 types, but they are used exclusively used for timestamps only
+is_logical_timestamp(sch::SchemaElement) = (sch._type === _Type.INT96)
 
 function path_in_schema(sch::Schema, schelem::SchemaElement)
     for (n,v) in sch.name_lookup

@@ -57,7 +57,7 @@ function ColCursor(par::ParFile, colname::Vector{String}; rows::UnitRange=1:nrow
     row_positions = rowgroup_row_positions(par)
     @assert last(rows) <= nrows(par)
     @assert first(rows) >= 1
-    T = elemtype(elem(schema(par), colname))
+    T = elemtype(schema(par), colname)
     cursor = ColCursor{T}(par, row_positions, colname, rows)
     setrow(cursor, Int64(row))
     cursor
@@ -108,7 +108,7 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
         if cursor.pageiter === nothing
             # need to start a page cursor for a new column chunk
             cursor.ccidx += 1
-            cursor.pageiter = ColumnChunkPageValues(par, cursor.colchunks[cursor.ccidx], T)
+            cursor.pageiter = ColumnChunkPageValues(par, cursor.colchunks[cursor.ccidx], T, cursor.logical_converter_fn)
             cursor.pageiternext = 0
         end
         page_iter_result = (cursor.pageiternext > 0) ? iterate(cursor.pageiter, cursor.pageiternext) : iterate(cursor.pageiter)
@@ -273,32 +273,6 @@ function colcursor_advance(colcursor::ColCursor, rows_by::Int64, vals_by::Int64=
     nothing
 end
 
-function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{Union{Missing,V}}}, cache) where {T,V}
-    row = colcursor.row
-    batchsize = min(batchsize, last(colcursor.rows)-row+1)
-    logical_converter_fn = colcursor.logical_converter_fn
-    vals = (cache === nothing) ? Array{Union{Missing,V}}(undef, batchsize) : resize!(cache::Vector{Union{Missing,V}}, batchsize)
-
-    fillpos = 1
-    while fillpos <= batchsize
-        pagevals = colcursor.pagevals
-        defn_levels = colcursor.page_defn
-        val_idx = (colcursor.valpos == 0) ? 0 : (colcursor.valpos-1)
-        nvals_from_page = min(batchsize - fillpos + 1, defn_levels.offset - colcursor.levelpos + 1)
-        @inbounds for idx in 1:nvals_from_page
-            if defn_levels.data[colcursor.levelpos+idx-1] === Int32(1)
-                vals[fillpos+idx-1] = logical_converter_fn(pagevals.data[val_idx+=1])
-            else
-                vals[fillpos+idx-1] = missing
-            end
-        end
-        fillpos += nvals_from_page
-        valposincr = (colcursor.valpos == 0) ? val_idx : (val_idx - colcursor.valpos + 1)
-        colcursor_advance(colcursor, nvals_from_page, valposincr)
-    end
-    vals
-end
-
 function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{Union{Missing,T}}}, cache) where {T}
     row = colcursor.row
     batchsize = min(batchsize, last(colcursor.rows)-row+1)
@@ -320,25 +294,6 @@ function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vect
         fillpos += nvals_from_page
         valposincr = (colcursor.valpos == 0) ? val_idx : (val_idx - colcursor.valpos + 1)
         colcursor_advance(colcursor, nvals_from_page, valposincr)
-    end
-    vals
-end
-
-function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{V}}, cache) where {T,V}
-    row = colcursor.row
-    batchsize = min(batchsize, last(colcursor.rows)-row+1)
-    logical_converter_fn = colcursor.logical_converter_fn
-    vals = (cache === nothing) ? Array{V}(undef, batchsize) : resize!(cache::Vector{V}, batchsize)
-
-    fillpos = 1
-    while fillpos <= batchsize
-        pagevals = colcursor.pagevals
-        nvals_from_page = min(batchsize - fillpos + 1, pagevals.offset - colcursor.valpos + 1)
-        @inbounds for idx in 1:nvals_from_page
-            vals[fillpos+idx-1] = logical_converter_fn(pagevals.data[pagevals.offset+idx])
-        end
-        fillpos += nvals_from_page
-        colcursor_advance(colcursor, nvals_from_page)
     end
     vals
 end
@@ -491,7 +446,6 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcurso
     symnameparts = colcursor.colnamesym
     required_at = colcursor.required_at
     repeated_at = colcursor.repeated_at
-    logical_converter_fn = colcursor.logical_converter_fn
 
     lparts = length(nameparts)
     sch = par.schema
@@ -540,7 +494,7 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcurso
             F = Vrep[repidx]
         elseif !defined && mustdefine
             if idx == length(nameparts)
-                V = logical_converter_fn(val)
+                V = val
             else
                 Vtyp = elemtype(sch, colname)
                 V = default_init(Vtyp)

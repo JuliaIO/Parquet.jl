@@ -58,7 +58,7 @@ mutable struct ParFile
     page_cache::PageLRU
 end
 
-function ParFile(path::AbstractString; map_logical_types::Union{Bool,Dict}=false)
+function ParFile(path::AbstractString; map_logical_types::Dict=TLogicalTypeMap())
     f = open(path)
     try
         return ParFile(path, f; map_logical_types=map_logical_types)
@@ -68,15 +68,11 @@ function ParFile(path::AbstractString; map_logical_types::Union{Bool,Dict}=false
     end
 end
 
-function ParFile(path::AbstractString, handle::IOStream; map_logical_types::Union{Bool,Dict}=false)
+function ParFile(path::AbstractString, handle::IOStream; map_logical_types::Dict=TLogicalTypeMap())
     is_par_file(handle) || error("Not a parquet format file: $path")
     meta_len = metadata_length(handle)
     meta = metadata(handle, path, meta_len)
-
-    typemap = map_logical_types == false ? TLogicalTypeMap() :
-              map_logical_types == true  ? DEFAULT_LOGICAL_TYPE_MAP :
-              TLogicalTypeMap(map_logical_types)
-
+    typemap = merge!(TLogicalTypeMap(), map_logical_types)
     ParFile(String(path), handle, meta, Schema(meta.schema, typemap), PageLRU())
 end
 
@@ -213,9 +209,10 @@ mutable struct ColumnChunkPageValues{T}
     defn_out::OutputState{Int32}
     valdict_out::OutputState{T}
     vals_out::OutputState{T}
+    converter_fn::Function
 end
 
-function ColumnChunkPageValues(par::ParFile, col::ColumnChunk, ::Type{T}) where {T}
+function ColumnChunkPageValues(par::ParFile, col::ColumnChunk, ::Type{T}, converter_fn::Function=identity) where {T}
     cname = colname(par, col)
 
     max_repn = max_repetition_level(par.schema, cname)
@@ -229,7 +226,7 @@ function ColumnChunkPageValues(par::ParFile, col::ColumnChunk, ::Type{T}) where 
     vals_out = OutputState(T, 0)
 
     ccp = ColumnChunkPages(par, col)
-    ColumnChunkPageValues{T}(ccp, max_repn, max_defn, has_repn_levels, has_defn_levels, repn_out, defn_out, valdict_out, vals_out)
+    ColumnChunkPageValues{T}(ccp, max_repn, max_defn, has_repn_levels, has_defn_levels, repn_out, defn_out, valdict_out, vals_out, converter_fn)
 end
 
 function eltype(ccpv::ColumnChunkPageValues{T}) where {T}
@@ -280,11 +277,19 @@ function Base.iterate(ccpv::ColumnChunkPageValues{T}, startpos::Int64) where {T}
                 map_vals = read_data_dict(inp, nnonmissing)
                 map_dict_vals(ccpv.valdict_out, ccpv.vals_out, map_vals)
             else
-                read_plain_values(inp, ccpv.vals_out, nnonmissing)
+                if ccpv.converter_fn === identity
+                    read_plain_values(inp, ccpv.vals_out, nnonmissing)
+                else
+                    read_plain_values(inp, ccpv.vals_out, nnonmissing, ccpv.converter_fn)
+                end
             end
         elseif pagetype === PageType.DICTIONARY_PAGE
             ensure_additional_size(ccpv.valdict_out, num_values)
-            read_plain_values(inp, ccpv.valdict_out, num_values)
+            if ccpv.converter_fn === identity
+                read_plain_values(inp, ccpv.valdict_out, num_values)
+            else
+                read_plain_values(inp, ccpv.valdict_out, num_values, ccpv.converter_fn)
+            end
         else
             error("unsupported page type $typ")
         end
