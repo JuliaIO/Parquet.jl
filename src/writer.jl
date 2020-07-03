@@ -460,9 +460,8 @@ tbl                 -   A Tables.jl columnaccessible table e.g. a DataFrame
 compression_code    -   Default "SNAPPY". The compression codec. The supported
                         values are "UNCOMPRESSED", "SNAPPY", "ZSTD", "GZIP"
 """
-function write_parquet(path, tbl; compression_codec = "SNAPPY")
-    # tbl needs to be iterable by column as parquet is a columnar format
-    @assert Tables.columnaccess(tbl)
+function write_parquet(path, x; compression_codec = "SNAPPY")
+    tbl = Tables.columns(x)
 
     # check that all types are supported
     sch = Tables.schema(tbl)
