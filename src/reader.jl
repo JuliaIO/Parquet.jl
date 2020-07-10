@@ -337,6 +337,11 @@ function read_levels_and_nmissing(io, defn_enc::Int32, repn_enc::Int32, num_valu
         end
     end
 
+    #@debug("before reading repn levels bytesavailable in page: $(bytesavailable(io))")
+    # read repetition levels. skipped if all columns are at 1st level
+    max_repn_level = max_repetition_level(par.schema, cname)
+    ((length(cname) > 1) && (max_repn_level > 0)) && read_levels(io, max_repn_level, repn_enc, num_values, repn_levels, repn_offset)
+
     nmissing
 end
 
@@ -445,7 +450,7 @@ function is_par_file(io)
     magic = Array{UInt8}(undef, 4)
     read!(io, magic)
     (String(magic) == PAR_MAGIC) || return false
-    
+
     seek(io, sz - SZ_PAR_MAGIC)
     magic = Array{UInt8}(undef, 4)
     read!(io, magic)

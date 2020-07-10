@@ -21,6 +21,7 @@ export schema
 export logical_timestamp, logical_string
 export RecordCursor, BatchedColumnsCursor
 export write_parquet
+export read_parquet
 
 # package code goes here
 include("PAR2/PAR2.jl")
@@ -31,5 +32,9 @@ include("reader.jl")
 include("cursor.jl")
 include("show.jl")
 include("writer.jl")
+include("encoding.jl")
+include("metadata.jl")
+include("column_reader.jl")
+include("read_parquet.jl")
 
 end # module
