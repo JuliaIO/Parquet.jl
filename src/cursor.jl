@@ -166,7 +166,7 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
 end
 
 function _start(cursor::ColCursor)
-    setrow(cursor, first(cursor.rows))
+    setrow(cursor, Int64(first(cursor.rows)))
     cursor.row, cursor.levelpos
 end
 function _done(cursor::ColCursor, rowandlevel::Tuple{Int64,Int64})
@@ -192,7 +192,7 @@ function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int64,Int64}) where {T}
     if cursor.levelpos > cursor.levelend
         row += 1
         cursor.levelend = -1
-        setrow(cursor, row)
+        setrow(cursor, Int64(row))
     end
 
     NamedTuple{(:value, :defn_level, :repn_level),Tuple{Union{Nothing,T},Int64,Int64}}((val, defn_level, repn_level)), (row, cursor.levelpos)
@@ -264,7 +264,7 @@ length(cursor::BatchedColumnsCursor) = cursor.nbatches
 
 function colcursor_advance(colcursor::ColCursor, rows_by::Int64, vals_by::Int64=rows_by)
     if (colcursor.row + rows_by) > last(colcursor.pagerange)
-        setrow(colcursor, colcursor.row+rows_by)
+        setrow(colcursor, Int64(colcursor.row+rows_by))
     else
         colcursor.valpos += vals_by
         colcursor.row += rows_by
@@ -293,7 +293,7 @@ function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vect
         end
         fillpos += nvals_from_page
         valposincr = (colcursor.valpos == 0) ? val_idx : (val_idx - colcursor.valpos + 1)
-        colcursor_advance(colcursor, nvals_from_page, valposincr)
+        colcursor_advance(colcursor, nvals_from_page, Int64(valposincr))
     end
     vals
 end
@@ -345,7 +345,7 @@ end
 function Base.iterate(cursor::BatchedColumnsCursor{T}) where {T}
     cursor.row = first(cursor.rows)
     for colcursor in cursor.colcursors
-        setrow(colcursor, cursor.row)
+        setrow(colcursor, Int64(cursor.row))
     end
     iterate(cursor, cursor.batchid)
 end

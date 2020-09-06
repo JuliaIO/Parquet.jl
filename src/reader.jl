@@ -269,7 +269,7 @@ function Base.iterate(ccpv::ColumnChunkPageValues{T}, startpos::Int64) where {T}
 
             @debug("reading a data page for columnchunk")
             enc, defn_enc, repn_enc = page_encodings(page)
-            nmissing = read_levels_and_nmissing(inp, ccpv.defn_out, ccpv.repn_out, defn_enc, repn_enc, ccpv.max_defn, ccpv.max_repn, num_values)
+            nmissing = read_levels_and_nmissing(inp, ccpv.defn_out, ccpv.repn_out, defn_enc, repn_enc, Int(ccpv.max_defn), Int(ccpv.max_repn), num_values)
             nnonmissing = num_values - nmissing
             reset_to_size(ccpv.vals_out, nnonmissing)
 
