@@ -4,14 +4,21 @@ using Thrift
 using Snappy
 using CodecZlib
 using CodecZstd
-using MemPool
 using Dates
+using Mmap
+using Base.Threads
 
 if VERSION < v"1.3"
     using Missings: nonmissingtype
 end
 
 const PARQUET_JL_VERSION = v"0.6.0"
+
+const _use_mmap = true
+
+function use_mmap(b::Bool)
+    global _use_mmap = b
+end
 
 import Base: show, open, close, values, eltype, length
 import Thrift: isfilled

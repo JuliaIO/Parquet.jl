@@ -15,11 +15,21 @@ function test_decode(file)
         println("\treading row group with $(length(ccs)) column chunks")
 
         for cc in ccs
-            pgs = pages(p, cc)
-            println("\t\treading column chunk with $(length(pgs)) pages, $(colname(cc))")
-            println("\t\tre-reading column chunk for values. total $(length(pgs)) pages")
-            vals, defn_levels, repn_levels = values(p, cc)
-            println("\t\t\tread $(length(vals)) values, $(length(defn_levels)) defn levels, $(length(repn_levels)) repn levels")
+            jtype = Parquet.elemtype(Parquet.elem(schema(p), colname(p,cc)))
+            npages = 0
+            ccpv = Parquet.ColumnChunkPageValues(p, cc, jtype)
+            result = iterate(ccpv)
+            valcount = repncount = defncount = 0
+            while result !== nothing
+                resultdata,nextpos = result
+                valcount += resultdata.value.offset
+                repncount += resultdata.repn_level.offset
+                defncount += resultdata.defn_level.offset
+                result = iterate(ccpv, nextpos)
+                npages += 1
+            end
+
+            println("\t\t\tread $npages pages, $valcount values, $defncount defn levels, $repncount repn levels")
         end
     end
 

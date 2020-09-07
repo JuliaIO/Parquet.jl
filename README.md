@@ -8,19 +8,13 @@
 
 Load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet). Only metadata is read initially, data is loaded in chunks on demand. (Note: [ParquetFiles.jl](https://github.com/queryverse/ParquetFiles.jl) also provides load support for Parquet files under the FileIO.jl package.)
 
-`ParFile` represents a Parquet file at `path` open for reading. Options to map logical types can be provided via `map_logical_types`.
+`ParFile` represents a Parquet file at `path` open for reading.
 
 ```
-ParFile(path; map_logical_types) => ParFile
+ParFile(path) => ParFile
 ```
 
-`map_logical_types` can be one of:
-
-- `false`: no mapping is done (default)
-- `true`: default mappings are attempted on all columns (bytearray => String, int96 => DateTime)
-- A user supplied dict mapping column names to a tuple of type and a converter function
-
-`ParFile` also keeps a handle to the open file and the file metadata and also holds a LRU cache of raw bytes of the pages read. If the parquet file references other files in its metadata, they will be opened as and when required for reading and closed when they are not needed anymore.
+`ParFile` keeps a handle to the open file and the file metadata and also holds a weakly referenced cache of page data read. If the parquet file references other files in its metadata, they will be opened as and when required for reading and closed when they are not needed anymore.
 
 The `close` method closes the reader, releases open files and makes cached internal data structures available for GC. A `ParFile` instance must not be used once closed.
 
@@ -29,7 +23,7 @@ julia> using Parquet
 
 julia> parfile = "customer.impala.parquet";
 
-julia> p = ParFile(parfile; map_logical_types=true)
+julia> p = ParFile(parfile)
 Parquet file: customer.impala.parquet
     version: 1
     nrows: 150000
@@ -71,10 +65,43 @@ Schema:
     }
 ```
 
-Create cursor to iterate over batches of column values. Each iteration returns a named tuple of column names with batch of column values. One batch corresponds to one row group of the parquet file.
+The reader performs logical type conversions automatically for String (from byte arrays) and DateTime (from Int96). It depends on the converted type being populated correctly in the file metadata to detect such conversions. To take care of files where such metadata is not populated, an optional `map_logical_types` argument can be provided while opening the parquet file. The `map_logical_types` value must map column names to a tuple of return type and converter functon. Return types of String and DateTime are supported as of now, and default implementations for them are included in the package.
 
 ```julia
-julia> cc = Parquet.BatchedColumnsCursor(par)
+julia> mapping = Dict(["column_name"] => (String, Parquet.logical_string));
+
+julia> par = ParFile("filename"; map_logical_types=mapping);
+```
+
+The reader will interpret logical types based on the `map_logical_types` provided. The following logical type mapping methods are available in the Parquet package.
+
+- `logical_timestamp(v; offset::Dates.Period=Dates.Second(0))`: Applicable for timestamps that are `INT96` values. This converts the data read as `Int128` types to `DateTime` types.
+- `logical_string(v): Applicable for strings that are `BYTE_ARRAY` values. Without this, they are represented in a `Vector{UInt8}` type. With this they are converted to `String` types.
+
+Variants of these methods or custom methods can also be applied by caller.
+
+### BatchedColumnsCursor
+
+Create cursor to iterate over batches of column values. Each iteration returns a named tuple of column names with batch of column values. Files with nested schemas can not be read with this cursor.
+
+```julia
+BatchedColumnsCursor(par::ParFile; kwargs...)
+```
+
+Cursor options:
+- `rows`: the row range to iterate through, all rows by default.
+- `batchsize`: maximum number of rows to read in each batch (default: row count of first row group).
+- `reusebuffer`: boolean to indicate whether to reuse the buffers with every iteration; if each iteration processes the batch and does not need to refer to the same data buffer again, then setting this to `true` reduces GC pressure and can help significantly while processing large files.
+- `use_threads`: whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
+
+Example:
+
+```julia
+julia> typemap = Dict(["c_name"]=>(String,Parquet.logical_string), ["c_address"]=>(String,Parquet.logical_string));
+
+julia> par = ParFile("customer.impala.parquet"; map_logical_types=typemap);
+
+julia> cc = BatchedColumnsCursor(par)
 Batched Columns Cursor on customer.impala.parquet
     rows: 1:150000
     batches: 1
@@ -97,9 +124,25 @@ julia> batchvals.c_name[1:5]
  "Customer#000000005"
 ```
 
+### RecordCursor
+
 Create cursor to iterate over records. In parallel mode, multiple remote cursors can be created and iterated on in parallel.
 
 ```julia
+RecordCursor(par::ParFile; kwargs...)
+```
+
+Cursor options:
+- `rows`: the row range to iterate through, all rows by default.
+- `colnames`: the column names to retrieve; all by default
+
+Example:
+
+```julia
+julia> typemap = Dict(["c_name"]=>(String,Parquet.logical_string), ["c_address"]=>(String,Parquet.logical_string));
+
+julia> p = ParFile("customer.impala.parquet"; map_logical_types=typemap);
+
 julia> rc = RecordCursor(p)
 Record Cursor on customer.impala.parquet
     rows: 1:150000
@@ -127,13 +170,6 @@ julia> first_record.c_name
 julia> first_record.c_address
 "IVhzIApeRb ot,c,E"
 ```
-
-The reader will interpret logical types based on the `map_logical_types` provided. The following logical type mapping methods are available in the Parquet package and are applied by default if `map_logical_types` is set to `true`.
-
-- `logical_timestamp(v; offset::Dates.Period=Dates.Second(0))`: Applicable for timestamps that are `INT96` values. Without this they are represented in a `Int128` type. With this they are converted to `DateTime` types.
-- `logical_string(v): Applicable for strings that are `BYTE_ARRAY` values. Without this, they are represented in a `Vector{UInt8}` type. With this they are converted to `String` types.
-
-Variants of these methods or custom methods can also be applied by caller.
 
 ## Writer
 

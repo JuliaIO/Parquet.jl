@@ -3,93 +3,40 @@
 # read data as records which are named tuple representations of the schema
 
 ##
-# Row cursor iterates through row numbers of a column 
-mutable struct RowCursor
-    par::ParFile
-
-    rows::UnitRange{Int64}                      # rows to scan over
-    row::Int64                                  # current row
-    
-    rowgroups::Vector{RowGroup}                 # row groups in range
-    rg::Union{Int,Nothing}                      # current row group
-    rgrange::Union{UnitRange{Int64},Nothing}    # current rowrange
-
-    function RowCursor(par::ParFile, rows::UnitRange{Int64}, col::Vector{String}, row::Int64=first(rows))
-        rgs = rowgroups(par, col, rows)
-        cursor = new(par, rows, row, rgs, nothing, nothing)
-        setrow(cursor, row)
-        cursor
-    end
-end
-
-function setrow(cursor::RowCursor, row::Int64)
-    cursor.row = row
-    (cursor.rgrange !== nothing) && (cursor.row in cursor.rgrange) && return
-    startrow = Int64(1)
-    rowgroups = cursor.rowgroups
-    for rowgroup_idx in 1:length(rowgroups)
-        rowgroup_row_range = startrow:(startrow + rowgroups[rowgroup_idx].num_rows)
-        if row in rowgroup_row_range
-            cursor.row = row
-            cursor.rg = rowgroup_idx
-            cursor.rgrange = rowgroup_row_range
-            return
-        else
-            startrow = last(rowgroup_row_range) + 1
-        end
-    end
-    throw(BoundsError(cursor.par.path, row))
-end
-
-rowgroup_offset(cursor::RowCursor) = cursor.row - first(cursor.rgrange)
-
-function _start(cursor::RowCursor)
-    row = first(cursor.rows)
-    (cursor.row === row) || setrow(cursor, row)
-    row
-end
-_done(cursor::RowCursor, row::Int64) = (row > last(cursor.rows))
-function _next(cursor::RowCursor, row::Int64)
-    setrow(cursor, row)
-    row, (row+1)
-end
-
-function Base.iterate(cursor::RowCursor, state)
-    _done(cursor, state) && return nothing
-    return _next(cursor, state)
-end
-
-function Base.iterate(cursor::RowCursor)
-    r = iterate(cursor, _start(cursor))
-    return r
-end
-
-##
 # Column cursor iterates through all values of the column, including null values.
 # Each iteration returns the value (as a Union{T,Nothing}), definition level, and repetition level for each value.
 # Row can be deduced from repetition level.
 mutable struct ColCursor{T}
-    row::RowCursor
-    colname::Vector{String}
-    required_at::Vector{Bool}
-    repeated_at::Vector{Bool}
-    logical_converter_fn::Function
-    maxdefn::Int32
+    par::ParFile
+    colname::Vector{String}                                 # column name (full path in schema)
+    colnamesym::Vector{Symbol}                              # column name converted to symbols
+    required_at::Vector{Bool}                               # at what level in the schema the column is required
+    repeated_at::Vector{Bool}                               # at what level in the schema the column is repeated
+    logical_converter_fn::Function                          # column converter function as per schema or options (identity if none)
+    maxdefn::Int32                                          # maximum definition level of the column as per schema
 
-    colchunks::Union{Vector{ColumnChunk},Nothing}
-    cc::Union{Int,Nothing}
-    ccrange::Union{UnitRange{Int64},Nothing}
+    row::Int                                                # current row
+    rows::UnitRange{Int}                                    # row range to limit to
+    rowgroups::Vector{RowGroup}                             # list of row groups
+    row_positions::Vector{Int64}                            # starting positions if each rowgroup
+    rgidx::Int                                              # current rowgroup
+    colchunks::Union{Vector{ColumnChunk},Nothing}           # list of column chunk in the current rowgroup (metadata only)
+    ccidx::Int                                              # index of column chunk that contains the current position
 
-    vals::Vector{T}
-    valpos::Int64
+    pageiter::Union{Nothing,ColumnChunkPageValues{T}}       # iterator for the current page
+    pagerange::Union{UnitRange{Int64},Nothing}              # range of positions (rows) that the current page contains
+    pageiternext::Int64
+    pagevals::OutputState{T}
+    page_defn::OutputState{Int32}
+    page_repn::OutputState{Int32}
 
-    defn_levels::Vector{Int32}
-    repn_levels::Vector{Int32}
-    levelpos::Int64
-    levelrange::UnitRange{Int}
+    valpos::Int64                                           # current position within values of the current page
+    levelpos::Int64                                         # current position within levels of the current page
+    levelend::Int64
 
-    function ColCursor{T}(row::RowCursor, colname::Vector{String}) where T
-        sch = schema(row.par)
+    function ColCursor{T}(par::ParFile, row_positions::Vector{Int64}, colname::Vector{String}, rows::UnitRange) where T
+        colnamesym = [Symbol(name) for name in colname]
+        sch = schema(par)
 
         len_colname_parts = length(colname)
         required_at = Array{Bool}(undef, len_colname_parts)
@@ -102,22 +49,16 @@ mutable struct ColCursor{T}
 
         logical_converter_fn = logical_converter(sch, colname)
         maxdefn = max_definition_level(sch, colname)
-        new{T}(row, colname, required_at, repeated_at, logical_converter_fn, maxdefn, nothing, nothing, nothing)
+        new{T}(par, colname, colnamesym, required_at, repeated_at, logical_converter_fn, maxdefn, 0, rows, rowgroups(par), row_positions, 0, nothing, 0, nothing, nothing, 0)
     end
 end
 
 function ColCursor(par::ParFile, colname::Vector{String}; rows::UnitRange=1:nrows(par), row::Signed=first(rows))
-    rowcursor = RowCursor(par, UnitRange{Int64}(rows), colname, Int64(row))
-
-    rowgroup = rowcursor.rowgroups[rowcursor.rg] 
-    colchunks = columns(par, rowgroup, colname)
-    parquet_coltype = coltype(colchunks[1])
-    T = PLAIN_JTYPES[parquet_coltype+1]
-    if (parquet_coltype == _Type.BYTE_ARRAY) || (parquet_coltype == _Type.FIXED_LEN_BYTE_ARRAY)
-        T = Vector{T}
-    end
-
-    cursor = ColCursor{T}(rowcursor, colname)
+    row_positions = rowgroup_row_positions(par)
+    @assert last(rows) <= nrows(par)
+    @assert first(rows) >= 1
+    T = elemtype(schema(par), colname)
+    cursor = ColCursor{T}(par, row_positions, colname, rows)
     setrow(cursor, Int64(row))
     cursor
 end
@@ -126,117 +67,111 @@ eltype(cursor::ColCursor{T}) where {T} = NamedTuple{(:value, :defn_level, :repn_
 length(cursor::ColCursor) = length(cursor.row.rows)
 
 function setrow(cursor::ColCursor{T}, row::Int64) where {T}
-    par = cursor.row.par
-    rg = cursor.row.rowgroups[cursor.row.rg]
-    ccincr = (row - cursor.row.row) == 1 # whether this is just an increment within the column chunk
-    setrow(cursor.row, row) # set the row cursor
-    if cursor.colchunks === nothing
-        cursor.colchunks = columns(par, rg, cursor.colname)
-    end
-
     # check if cursor is done
-    if _done(cursor.row, row)
-        cursor.cc = length(cursor.colchunks) + 1
-        #cursor.ccrange = row:(row-1)
-        #cursor.vals = Vector{T}()
-        #cursor.repn_levels = cursor.defn_levels = Int32[]
+    if (cursor.row > 0) && !(cursor.row in cursor.rows)
+        cursor.colchunks = nothing
+        cursor.ccidx = 0
         cursor.valpos = cursor.levelpos = 0
-        cursor.levelrange = 0:-1
+        cursor.levelend = -1
         return
     end
 
-    # find the column chunk with the row
-    if (cursor.ccrange === nothing) || !(row in cursor.ccrange)
-        offset = rowgroup_offset(cursor.row) # the offset of row from beginning of current rowgroup
-        colchunks = (cursor.colchunks)::Vector{ColumnChunk}
+    # check if we are already on that row
+    (cursor.row == row) && return
 
-        startrow = row - offset
-        for cc in 1:length(colchunks)
-            vals, defn_levels, repn_levels = values(par, colchunks[cc], T)
-            if isempty(repn_levels)
-                nrowscc = length(vals) # number of values is number of rows
+    par = cursor.par
+    prevrow = cursor.row
+    cursor.row = row
+
+    # advance row group if needed
+    if (cursor.rgidx == 0) || (cursor.row_positions[cursor.rgidx+1] <= row)
+        rgidx = findfirst(x->x>row, cursor.row_positions)
+        if rgidx == nothing
+            cursor.rgidx = length(cursor.rowgroups) + 1
+            return
+        else
+            cursor.rgidx = rgidx - 1
+            rg = cursor.rowgroups[cursor.rgidx]
+            cursor.colchunks = columns(par, rg, cursor.colname)
+            cursor.pagerange = nothing
+            cursor.pageiternext = 0
+            cursor.pageiter = nothing
+            cursor.ccidx = 0
+        end
+    end
+
+    # advance column chunk and page within column  chunk if needed
+    while (cursor.pagerange === nothing) || !(row in cursor.pagerange)
+        cursor.valpos = cursor.levelpos = 0
+        cursor.levelend = -1
+        startrow = (cursor.pagerange === nothing) ? cursor.row_positions[cursor.rgidx] : (last(cursor.pagerange) + 1)
+        if cursor.pageiter === nothing
+            # need to start a page cursor for a new column chunk
+            cursor.ccidx += 1
+            cursor.pageiter = ColumnChunkPageValues(par, cursor.colchunks[cursor.ccidx], T, cursor.logical_converter_fn)
+            cursor.pageiternext = 0
+        end
+        page_iter_result = (cursor.pageiternext > 0) ? iterate(cursor.pageiter, cursor.pageiternext) : iterate(cursor.pageiter)
+        if page_iter_result === nothing
+            # need to start on a new column chunk
+            cursor.pageiter = nothing
+        else
+            resultdata,cursor.pageiternext = page_iter_result
+            cursor.pagevals = resultdata.value
+            cursor.page_repn = resultdata.repn_level
+            cursor.page_defn = resultdata.defn_level
+            nrowspage = 0
+            if cursor.pageiter.has_repn_levels
+                for i in 1:cursor.page_repn.offset
+                    (cursor.page_repn.data[i] !== Int32(0)) && (nrowspage += 1)
+                end
             else
-                nrowscc = 0
-                for i in 1:length(repn_levels)
-                    (repn_levels[i] !== Int32(0)) && (nrowscc += 1)
+                if cursor.pageiter.has_defn_levels
+                    nrowspage = cursor.page_defn.offset
+                else
+                    nrowspage = cursor.pagevals.offset # number of values is number of rows
                 end
             end
-            ccrange = startrow:(startrow + nrowscc)
-
-            if row in ccrange
-                cursor.cc = cc
-                cursor.ccrange = ccrange
-                cursor.vals = vals
-                cursor.defn_levels = defn_levels
-                cursor.repn_levels = repn_levels
-                cursor.valpos = cursor.levelpos = 0
-                ccincr = false
-                break
-            else
-                startrow = last(ccrange) + 1
+            if nrowspage > 0
+                cursor.pagerange = startrow:(startrow+nrowspage-1)
             end
         end
     end
 
-    if cursor.ccrange === nothing
-        # we did not find the row in this column
-        cursor.valpos = cursor.levelpos = 0
-        cursor.levelrange = 0:-1
+    # advance value and level positions within the page
+    if cursor.pageiter.has_defn_levels
+        if cursor.levelpos == 0
+            for idx in 1:(row - first(cursor.pagerange) + 1)
+                cursor.levelpos += 1
+                (cursor.page_defn.data[cursor.levelpos] === cursor.maxdefn) && (cursor.valpos += 1)
+            end
+        elseif cursor.page_defn.data[cursor.levelpos] === cursor.maxdefn
+            cursor.valpos += 1
+        end
     else
-        # find the starting positions for values and levels
-        ccrange = (cursor.ccrange)::UnitRange{Int64}
-        defn_levels = cursor.defn_levels
-        repn_levels = cursor.repn_levels
-        levelpos = valpos = Int64(0)
+        # all entries are required, so there must be a corresponding value
+        cursor.valpos = cursor.levelpos = row - first(cursor.pagerange) + 1
+    end
 
-        # compute the level and value pos for row
-        if isempty(repn_levels)
-            # no repetitions, so each entry corresponds to one full row
-            levelpos = row - first(ccrange) + 1
-            levelrange = levelpos:levelpos
-        else
-            # multiple entries may constitute one row
-            idx = first(ccrange)
-            levelpos = Int64(findfirst(x->x===Int32(0), repn_levels)) # NOTE: can start from cursor.levelpos to optimize, but that will prevent using setrow to go backwards
-            while idx < row
-                levelpos = Int64(findnext(x->x===Int32(0), repn_levels, levelpos+1))
-                idx += 1
-            end
-            levelend = Int64(max(findnext(x->x===Int32(0), repn_levels, levelpos+1)-1, length(repn_levels)))
-            levelrange = levelpos:levelend
+    if cursor.pageiter.has_repn_levels
+        # multiple entries may constitute one row
+        if cursor.levelend == -1
+            cursor.levelend = Int64(something(findnext(x->x===Int32(0), cursor.page_repn.data, cursor.levelpos+1), cursor.page_repn.offset+1) - 1)
         end
-
-        # compute the val pos for row
-        if isempty(defn_levels)
-            # all entries are required, so there must be a corresponding value
-            valpos = levelpos
-        else
-            maxdefn = cursor.maxdefn
-            if ccincr
-                valpos = cursor.valpos
-            else
-                valpos = 1
-                for idx in 1:(levelpos-1)
-                    (defn_levels[idx] === maxdefn) && (valpos += 1)
-                end
-            end
-        end
-
-        cursor.levelpos = levelpos
-        cursor.levelrange = levelrange
-        cursor.valpos = valpos
+    else
+        # no repetitions, so each entry corresponds to one full row
+        cursor.levelend = cursor.levelpos
     end
     nothing
 end
 
 function _start(cursor::ColCursor)
-    row = _start(cursor.row)
-    setrow(cursor, row)
-    row, cursor.levelpos
+    setrow(cursor, Int64(first(cursor.rows)))
+    cursor.row, cursor.levelpos
 end
 function _done(cursor::ColCursor, rowandlevel::Tuple{Int64,Int64})
     row, levelpos = rowandlevel
-    (levelpos > last(cursor.levelrange)) || _done(cursor.row, row)
+    (levelpos > cursor.levelend) || !(row in cursor.rows)
 end
 function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int64,Int64}) where {T}
     # find values for current row and level in row
@@ -244,20 +179,20 @@ function _next(cursor::ColCursor{T}, rowandlevel::Tuple{Int64,Int64}) where {T}
     (levelpos == cursor.levelpos) || throw(InvalidStateException("Invalid column cursor state", :levelpos))
 
     maxdefn = cursor.maxdefn
-    defn_level = isempty(cursor.defn_levels) ? maxdefn : cursor.defn_levels[cursor.valpos]
-    repn_level = isempty(cursor.repn_levels) ? 0 : cursor.repn_levels[cursor.valpos]
-    cursor.levelpos += 1
+    defn_level = cursor.pageiter.has_defn_levels ? cursor.page_defn.data[cursor.levelpos] : maxdefn
+    repn_level = cursor.pageiter.has_repn_levels ? cursor.page_repn.data[cursor.levelpos] : Int32(0)
     if defn_level == maxdefn
-        val = (cursor.vals[cursor.valpos])::T
-        cursor.valpos += 1
+        val = (cursor.pagevals.data[cursor.valpos])::T
     else
         val = nothing
     end
 
     # advance row
-    if cursor.levelpos > last(cursor.levelrange)
+    cursor.levelpos += 1
+    if cursor.levelpos > cursor.levelend
         row += 1
-        setrow(cursor, row)
+        cursor.levelend = -1
+        setrow(cursor, Int64(row))
     end
 
     NamedTuple{(:value, :defn_level, :repn_level),Tuple{Union{Nothing,T},Int64,Int64}}((val, defn_level, repn_level)), (row, cursor.levelpos)
@@ -280,11 +215,35 @@ mutable struct BatchedColumnsCursor{T}
     colnames::Vector{Vector{String}}
     colcursors::Vector{ColCursor}
     colstates::Vector{Tuple{Int64,Int64}}
-    rowgroupid::Int
+    colbuffs::Vector{Union{Nothing,Vector}}
+    batchid::Int
+    rows::UnitRange{Int64}
     row::Int64
+    batchsize::Int64
+    nbatches::Int
+    reusebuffer::Bool
+    use_threads::Bool
 end
 
-function BatchedColumnsCursor(par::ParFile)
+"""
+Create cursor to iterate over batches of column values. Each iteration returns a named tuple of column names with batch of column values. Files with nested schemas can not be read with this cursor.
+
+```julia
+BatchedColumnsCursor(par::ParFile; kwargs...)
+```
+
+Cursor options:
+- `rows`: the row range to iterate through, all rows by default.
+- `batchsize`: maximum number of rows to read in each batch (default: row count of first row group).
+- `reusebuffer`: boolean to indicate whether to reuse the buffers with every iteration; if each iteration processes the batch and does not need to refer to the same data buffer again, then setting this to `true` reduces GC pressure and can help significantly while processing large files.
+- `use_threads`: whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
+"""
+function BatchedColumnsCursor(par::ParFile;
+        rows::UnitRange=1:nrows(par),
+        batchsize::Signed=first(rowgroups(par)).num_rows,
+        reusebuffer::Bool=false,
+        use_threads::Bool=(nthreads() > 1))
+
     sch = schema(par)
 
     # supports only non nested columns as of now
@@ -294,55 +253,101 @@ function BatchedColumnsCursor(par::ParFile)
 
     colcursors = [ColCursor(par, colname) for colname in colnames(par)]
     rectype = ntcolstype(sch, sch.schema[1])
-    BatchedColumnsCursor{rectype}(par, colnames(par), colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), 1, 1)
+    nbatches = ceil(Int, length(rows)/batchsize)
+    colbuffs = Union{Nothing,Vector}[nothing for idx in 1:length(colcursors)]
+
+    BatchedColumnsCursor{rectype}(par, colnames(par), colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), colbuffs, 1, rows, first(rows), batchsize, nbatches, reusebuffer, (VERSION < v"1.3") ? false : use_threads)
 end
 
 eltype(cursor::BatchedColumnsCursor{T}) where {T} = T
-length(cursor::BatchedColumnsCursor) = length(rowgroups(cursor.par))
+length(cursor::BatchedColumnsCursor) = cursor.nbatches
 
-function colcursor_values(colcursor::ColCursor{T}, ::Type{Vector{Union{Missing,V}}}) where {T,V}
-    defn_levels = colcursor.defn_levels
-    vals = colcursor.vals
-    val_idx = 0
-    logical_converter_fn = colcursor.logical_converter_fn
-    Union{Missing,V}[defn_levels[idx] === Int32(1) ? logical_converter_fn(vals[val_idx+=1]) : missing for idx in 1:length(defn_levels)]
+function colcursor_advance(colcursor::ColCursor, rows_by::Int64, vals_by::Int64=rows_by)
+    if (colcursor.row + rows_by) > last(colcursor.pagerange)
+        setrow(colcursor, Int64(colcursor.row+rows_by))
+    else
+        colcursor.valpos += vals_by
+        colcursor.row += rows_by
+        colcursor.levelpos += rows_by
+    end
+    nothing
 end
 
-function colcursor_values(colcursor::ColCursor{T}, ::Type{Vector{Union{Missing,T}}}) where {T}
-    defn_levels = colcursor.defn_levels
-    vals = colcursor.vals
-    val_idx = 0
-    Union{Missing,T}[defn_levels[idx] === Int32(1) ? vals[val_idx+=1] : missing for idx in 1:length(defn_levels)]
+function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{Union{Missing,T}}}, cache) where {T}
+    row = colcursor.row
+    batchsize = min(batchsize, last(colcursor.rows)-row+1)
+    vals = (cache === nothing) ? Array{Union{Missing,T}}(undef, batchsize) : resize!(cache::Vector{Union{Missing,T}}, batchsize)
+
+    fillpos = 1
+    while fillpos <= batchsize
+        pagevals = colcursor.pagevals
+        defn_levels = colcursor.page_defn
+        val_idx = (colcursor.valpos == 0) ? 0 : (colcursor.valpos-1)
+        nvals_from_page = min(batchsize - fillpos + 1, defn_levels.offset - colcursor.levelpos + 1)
+        @inbounds for idx in 1:nvals_from_page
+            if defn_levels.data[colcursor.levelpos+idx-1] === Int32(1)
+                vals[fillpos+idx-1] = pagevals.data[val_idx+=1]
+            else
+                vals[fillpos+idx-1] = missing
+            end
+        end
+        fillpos += nvals_from_page
+        valposincr = (colcursor.valpos == 0) ? val_idx : (val_idx - colcursor.valpos + 1)
+        colcursor_advance(colcursor, nvals_from_page, Int64(valposincr))
+    end
+    vals
 end
 
-function colcursor_values(colcursor::ColCursor{T}, ::Type{Vector{V}}) where {T,V}
-    defn_levels = colcursor.defn_levels
-    vals = colcursor.vals
-    logical_converter_fn = colcursor.logical_converter_fn
-    V[logical_converter_fn(v) for v in vals]
+function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vector{T}}, cache) where {T}
+    row = colcursor.row
+    batchsize = min(batchsize, last(colcursor.rows)-row+1)
+    vals = (cache === nothing) ? Array{T}(undef, batchsize) : resize!(cache::Vector{T}, batchsize)
+
+    fillpos = 1
+    while fillpos <= batchsize
+        pagevals = colcursor.pagevals
+        nvals_from_page = min(batchsize - fillpos + 1, pagevals.offset - colcursor.valpos + 1)
+        @inbounds for idx in 1:nvals_from_page
+            vals[fillpos+idx-1] = pagevals.data[pagevals.offset+idx]
+        end
+        fillpos += nvals_from_page
+        colcursor_advance(colcursor, nvals_from_page)
+    end
+    vals
 end
 
-colcursor_values(colcursor::ColCursor{T}, ::Type{Vector{T}}) where {T} = colcursor.vals
-
-function Base.iterate(cursor::BatchedColumnsCursor{T}, rowgroupid) where {T}
-    (rowgroupid > length(cursor)) && (return nothing)
+function Base.iterate(cursor::BatchedColumnsCursor{T}, batchid) where {T}
+    (batchid > length(cursor)) && (return nothing)
 
     colcursors = cursor.colcursors
-    for colcursor in colcursors
-        setrow(colcursor, cursor.row)
-    end
     coltypes = T.types
-    colvals = [colcursor_values(colcursor,coltype) for (colcursor,coltype) in zip(colcursors,coltypes)]
+    if cursor.use_threads
+        L = length(colcursors)
+        colvals = Array{Any}(undef, L)
+        @threads for idx in 1:L
+            colbuff = cursor.reusebuffer ? cursor.colbuffs[idx] : nothing
+            colvals[idx] = colcursor_values(colcursors[idx], cursor.batchsize, coltypes[idx], colbuff)
+        end
+        cursor.reusebuffer && (cursor.colbuffs = colvals)
+    else
+        if cursor.reusebuffer
+            colvals = cursor.colbuffs = [colcursor_values(colcursor,cursor.batchsize,coltype,colbuff) for (colcursor,coltype,colbuff) in zip(colcursors,coltypes,cursor.colbuffs)]
+        else
+            colvals = [colcursor_values(colcursor,cursor.batchsize,coltype,nothing) for (colcursor,coltype) in zip(colcursors,coltypes)]
+        end
+    end
 
-    cursor.row += (rowgroups(cursor.par)[cursor.rowgroupid]).num_rows
-    cursor.rowgroupid += 1
-    T(colvals), cursor.rowgroupid
+    cursor.row += cursor.batchsize
+    cursor.batchid += 1
+    T(colvals), cursor.batchid
 end
 
 function Base.iterate(cursor::BatchedColumnsCursor{T}) where {T}
-    cursor.row = 1
-    cursor.colstates = [_start(colcursor) for colcursor in cursor.colcursors]
-    iterate(cursor, cursor.rowgroupid)
+    cursor.row = first(cursor.rows)
+    for colcursor in cursor.colcursors
+        setrow(colcursor, Int64(cursor.row))
+    end
+    iterate(cursor, cursor.batchid)
 end
 
 
@@ -357,11 +362,22 @@ mutable struct RecordCursor{T}
     row::Int64                                  # current row
 end
 
-function RecordCursor(par::ParFile; rows::UnitRange=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par), row::Signed=first(rows))
-    colcursors = [ColCursor(par, colname; rows=rows, row=row) for colname in colnames]
+"""
+Create cursor to iterate over records. In parallel mode, multiple remote cursors can be created and iterated on in parallel.
+
+```julia
+RecordCursor(par::ParFile; kwargs...)
+```
+
+Cursor options:
+- `rows`: the row range to iterate through, all rows by default.
+- `colnames`: the column names to retrieve; all by default
+"""
+function RecordCursor(par::ParFile; rows::UnitRange=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par))
+    colcursors = [ColCursor(par, colname; rows=rows, row=first(rows)) for colname in colnames]
     sch = schema(par)
     rectype = ntelemtype(sch, sch.schema[1])
-    RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), rows, row)
+    RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), rows, first(rows))
 end
 
 eltype(cursor::RecordCursor{T}) where {T} = T
@@ -415,18 +431,21 @@ default_init(::Type{Dict{Symbol,Any}}) = Dict{Symbol,Any}()
 default_init(::Type{T}) where {T} = ccall(:jl_new_struct_uninit, Any, (Any,), T)::T
 
 function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor, colcursor_state::Tuple{Int64,Int64}, col_repeat_state::Dict{Tuple{Int,Int},Int})
-    if !_done(colcursor, colcursor_state)
-        colval, colcursor_state = _next(colcursor, colcursor_state)                                                         # for each value, defn level, repn level in column
+    colpos = colcursor.row
+    # iterate all repeated values from the column cursor (until it advances to the next row)
+    while !_done(colcursor, colcursor_state)
+        colval, colcursor_state = _next(colcursor, colcursor_state)                                                        # for each value, defn level, repn level in column
         update_record(par, row, colid, colcursor, colval.value, colval.defn_level, colval.repn_level, col_repeat_state)    # update record
+        (colcursor.row > colpos) && break
     end
     colcursor_state # return new colcursor state
 end
 
 function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor, val, defn_level::Int64, repn_level::Int64, col_repeat_state::Dict{Tuple{Int,Int},Int})
     nameparts = colcursor.colname
+    symnameparts = colcursor.colnamesym
     required_at = colcursor.required_at
     repeated_at = colcursor.repeated_at
-    logical_converter_fn = colcursor.logical_converter_fn
 
     lparts = length(nameparts)
     sch = par.schema
@@ -439,7 +458,7 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcurso
         colname = view(nameparts, 1:idx)
         #@debug("updating part $colname of $nameparts isnull:$(val === nothing), def:$(defn_level), rep:$(repn_level)")
         leaf = nameparts[idx]
-        symleaf = Symbol(leaf)
+        symleaf = symnameparts[idx]
 
         required = required_at[idx]                 # determine whether field is optional and repeated
         repeated = repeated_at[idx]
@@ -475,7 +494,7 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcurso
             F = Vrep[repidx]
         elseif !defined && mustdefine
             if idx == length(nameparts)
-                V = logical_converter_fn(val)
+                V = val
             else
                 Vtyp = elemtype(sch, colname)
                 V = default_init(Vtyp)

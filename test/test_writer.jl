@@ -30,7 +30,7 @@ function test_write()
 
     write_parquet(tmpfile, tbl)
 
-    pf = ParFile(tmpfile; map_logical_types=true)
+    pf = ParFile(tmpfile)
 
     # the file is very small so only one rowgroup
     col_chunks = columns(pf, 1)
@@ -38,19 +38,20 @@ function test_write()
     for (colnum, col_chunk) in enumerate(col_chunks)
         correct_vals = tbl[colnum]
         coltype = eltype(correct_vals)
-        vals_from_file = values(pf, col_chunk)
+        jtype = Parquet.elemtype(Parquet.elem(schema(pf), colname(pf,col_chunk)))
+        ccpv = Parquet.ColumnChunkPageValues(pf, col_chunk, jtype)
+        resultdata,nextpos = iterate(ccpv)
+
         if Missing <: coltype
-            @test ismissing.(correct_vals) == (vals_from_file[2] .== 0)
+            @test ismissing.(correct_vals) == (resultdata.defn_level.data .== 0)
         end
 
         non_missing_vals = collect(skipmissing(correct_vals))
 
         if nonmissingtype(coltype) == String
-            non_missing_vals_read = String.(vals_from_file[1][1:sum(vals_from_file[2])])
-            @test all(non_missing_vals .== non_missing_vals_read)
+            @test all(non_missing_vals .== String.(resultdata.value.data))
         else
-            non_missing_vals_read = vals_from_file[1][1:sum(vals_from_file[2])]
-            @test all(non_missing_vals .== non_missing_vals_read)
+            @test all(non_missing_vals .== resultdata.value.data)
         end
     end
 
