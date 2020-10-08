@@ -55,6 +55,13 @@ function _read_fixed(io::IO, ret::T, N::Int) where {T <: Unsigned}
     ret
 end
 
+function _read_fixed_bigendian(io::IO, ret::T, N::Int) where {T <: Unsigned}
+    for n in (N-1):0
+        byte = convert(T, read(io, UInt8))
+        ret |= (byte << *(8,n))
+    end
+end
+
 mutable struct InputState
     data::Vector{UInt8}
     offset::Int
@@ -130,8 +137,8 @@ end
 const PLAIN_JTYPES = (Bool, Int32, Int64, Int128, Float32, Float64,      UInt8,               UInt8)
 
 # read plain encoding (PLAIN = 0)
-function read_plain_byte_array(inp::InputState)
-    count = read_fixed(inp, Int32)
+read_plain_byte_array(inp::InputState) = read_plain_byte_array(inp::InputState, read_fixed(inp, Int32))
+function read_plain_byte_array(inp::InputState, count::Int32)
     arr = inp.data[(1+inp.offset):(inp.offset+count)]  # TODO: Return subarr?
     inp.offset += count
     arr
@@ -151,6 +158,18 @@ function read_plain_values(inp::InputState, out::OutputState{Vector{UInt8}}, cou
     @assert (offset + count) <= length(arr)
     @inbounds for i in 1:count
         arr[i+offset] = read_plain_byte_array(inp)
+    end
+    out.offset += count
+    nothing
+end
+function read_plain_values(inp::InputState, out::OutputState{Decimal}, count::Int32, converter_fn::Function)
+    arr = out.data
+    offset = out.offset
+    @assert (offset + count) <= length(arr)
+    elem_bytes_len = Int32((length(inp.data) - inp.offset) / length(arr))
+    #@debug("reading decimal plain values", offset, count, length(arr), length(inp.data), inp.offset, elem_bytes_len)
+    @inbounds for i in 1:count
+        arr[i+offset] = converter_fn(read_plain_byte_array(inp, elem_bytes_len))
     end
     out.offset += count
     nothing
@@ -394,3 +413,38 @@ function logical_timestamp(i128::Int128; offset::Dates.Period=Dates.Second(0))
 end
 
 logical_string(bytes::Vector{UInt8}) = String(bytes)
+
+function logical_decimal(bytes::Vector{UInt8}, precision::Integer, scale::Integer; use_float::Bool=false)
+    T = logical_decimal_unscaled_type(Int32(precision))
+    if scale == 0
+        logical_decimal_integer(bytes, T)
+    elseif use_float
+        logical_decimal_float64(bytes, T, scale)
+    else
+        logical_decimal_scaled(bytes, T, scale)
+    end
+end
+
+function logical_decimal_integer(bytes::Vector{UInt8}, ::Type{T}) where T <: Union{UInt16,UInt32,UInt64,UInt128}
+    N = length(bytes)
+    uintval = T(0)
+    for idx in 1:N
+        uintval |= (T(bytes[idx]) << *(8,N-idx))
+    end
+    reinterpret(signed(T), uintval)
+end
+
+function logical_decimal_float64(bytes::Vector{UInt8}, ::Type{T}, scale::Int32) where T <: Union{UInt16,UInt32,UInt64,UInt128}
+    if scale > 0
+        logical_decimal_integer(bytes, T) / 10^scale
+    else
+        logical_decimal_integer(bytes, T) * 10^abs(scale)
+    end
+end
+
+function logical_decimal_scaled(bytes::Vector{UInt8}, ::Type{T}, scale::Int32) where T <: Union{UInt16,UInt32,UInt64,UInt128}
+    intval = logical_decimal_integer(bytes, T)
+    sign = (intval < 0) ? 1 : 0
+    intval = abs(intval)
+    Decimal(sign, intval, -scale)
+end

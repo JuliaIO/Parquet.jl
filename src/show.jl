@@ -39,11 +39,11 @@ function show(io::IO, schema::SchemaElement, indent::AbstractString="", nchildre
     isfilled(schema, :field_id) && print(io, " (", schema.field_id, ")")
 
     if isfilled(schema, :converted_type)
-        print(io, "# (from ", Thrift.enumstr(ConvertedType, schema.converted_type))
+        print(io, " # (from ", Thrift.enumstr(ConvertedType, schema.converted_type))
         if schema.converted_type == ConvertedType.DECIMAL
-            print(io, "(", schema.scale, ".", schema.precision)
+            print(io, "(", schema.precision, ",", schema.scale, ")")
         end
-        print(") ")
+        print(io, ") ")
     end
 
     if isfilled(schema, :num_children)
