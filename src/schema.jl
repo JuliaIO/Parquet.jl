@@ -26,6 +26,8 @@ mutable struct Schema
                     map_logical_types[nested_name] = (String, logical_string)
                 elseif is_logical_timestamp(sch)
                     map_logical_types[nested_name] = (DateTime, logical_timestamp)
+                elseif is_logical_decimal(sch)
+                    map_logical_types[nested_name] = map_logical_decimal(sch.precision, sch.scale)
                 end
             end
 
@@ -72,6 +74,8 @@ is_logical_string(sch::SchemaElement) = (sch._type === _Type.BYTE_ARRAY) && ((is
 
 # converted_type is usually not set for INT96 types, but they are used exclusively used for timestamps only
 is_logical_timestamp(sch::SchemaElement) = (sch._type === _Type.INT96)
+
+is_logical_decimal(sch::SchemaElement) = (sch._type === _Type.FIXED_LEN_BYTE_ARRAY) && ((isfilled(sch, :converted_type) && (sch.converted_type === ConvertedType.DECIMAL)) || (isfilled(sch, :logicalType) && isfilled(sch.logicalType, :DECIMAL)))
 
 function path_in_schema(sch::Schema, schelem::SchemaElement)
     for (n,v) in sch.name_lookup
@@ -182,3 +186,21 @@ function max_definition_level(sch::Schema, schname::T) where {T <: AbstractVecto
     lev = isrequired(sch, schname) ? 0 : 1
     istoplevel(schname) ? lev : (lev + max_definition_level(sch, parentname(schname)))
 end 
+
+logical_decimal_unscaled_type(precision::Int32) = (precision < 5) ? UInt16 :
+    (precision < 10) ? UInt32 :
+    (precision < 19) ? UInt64 : UInt128
+
+function map_logical_decimal(precision::Int32, scale::Int32; use_float::Bool=false)
+    T = logical_decimal_unscaled_type(precision)
+    if scale == 0
+        # integral values
+        return (signed(T), (bytes)->logical_decimal_integer(bytes, T))
+    elseif use_float
+        # use Float64
+        return (Float64, (bytes)->logical_decimal_float64(bytes, T, scale))
+    else
+        # use Decimal
+        return (Decimal, (bytes)->logical_decimal_scaled(bytes, T, scale))
+    end
+end

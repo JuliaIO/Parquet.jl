@@ -65,7 +65,7 @@ Schema:
     }
 ```
 
-The reader performs logical type conversions automatically for String (from byte arrays) and DateTime (from Int96). It depends on the converted type being populated correctly in the file metadata to detect such conversions. To take care of files where such metadata is not populated, an optional `map_logical_types` argument can be provided while opening the parquet file. The `map_logical_types` value must map column names to a tuple of return type and converter functon. Return types of String and DateTime are supported as of now, and default implementations for them are included in the package.
+The reader performs logical type conversions automatically for String (from byte arrays), decimals (from fixed length byte arrays) and DateTime (from Int96). It depends on the converted type being populated correctly in the file metadata to detect such conversions. To take care of files where such metadata is not populated, an optional `map_logical_types` argument can be provided while opening the parquet file. The `map_logical_types` value must map column names to a tuple of return type and converter functon. Return types of String and DateTime are supported as of now, and default implementations for them are included in the package.
 
 ```julia
 julia> mapping = Dict(["column_name"] => (String, Parquet.logical_string));
@@ -75,8 +75,9 @@ julia> par = ParFile("filename"; map_logical_types=mapping);
 
 The reader will interpret logical types based on the `map_logical_types` provided. The following logical type mapping methods are available in the Parquet package.
 
-- `logical_timestamp(v; offset::Dates.Period=Dates.Second(0))`: Applicable for timestamps that are `INT96` values. This converts the data read as `Int128` types to `DateTime` types.
+- `logical_timestamp(v; offset=Dates.Second(0))`: Applicable for timestamps that are `INT96` values. This converts the data read as `Int128` types to `DateTime` types.
 - `logical_string(v): Applicable for strings that are `BYTE_ARRAY` values. Without this, they are represented in a `Vector{UInt8}` type. With this they are converted to `String` types.
+- `logical_decimal(v, precision, scale; use_float=true)`: Applicable for reading decimals from fixed length byte array fields. This converts the data read as fixed length `Vector{UInt8}` types to `Integer`, `Float64` or `Decimal` of the given precision and scale, depending on the options provided.
 
 Variants of these methods or custom methods can also be applied by caller.
 

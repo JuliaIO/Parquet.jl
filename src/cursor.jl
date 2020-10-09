@@ -86,7 +86,7 @@ function setrow(cursor::ColCursor{T}, row::Int64) where {T}
     # advance row group if needed
     if (cursor.rgidx == 0) || (cursor.row_positions[cursor.rgidx+1] <= row)
         rgidx = findfirst(x->x>row, cursor.row_positions)
-        if rgidx == nothing
+        if rgidx === nothing
             cursor.rgidx = length(cursor.rowgroups) + 1
             return
         else
@@ -240,7 +240,7 @@ Cursor options:
 """
 function BatchedColumnsCursor(par::ParFile;
         rows::UnitRange=1:nrows(par),
-        batchsize::Signed=first(rowgroups(par)).num_rows,
+        batchsize::Signed=min(length(rows), first(rowgroups(par)).num_rows),
         reusebuffer::Bool=false,
         use_threads::Bool=(nthreads() > 1))
 
