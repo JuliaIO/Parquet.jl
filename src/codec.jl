@@ -162,7 +162,7 @@ function read_plain_values(inp::InputState, out::OutputState{Vector{UInt8}}, cou
     out.offset += count
     nothing
 end
-function read_plain_values(inp::InputState, out::OutputState{Decimal}, count::Int32, converter_fn::Function)
+function read_plain_values(inp::InputState, out::OutputState{T}, count::Int32, converter_fn::Function) where T <: Union{Decimal,Float64,Int16,Int32,Int64,Int128}
     arr = out.data
     offset = out.offset
     @assert (offset + count) <= length(arr)
