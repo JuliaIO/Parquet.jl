@@ -341,7 +341,7 @@ end
 open(par::ParFile, col::ColumnChunk) = open(par.handle, par.path, col)
 close(par::ParFile, col::ColumnChunk, io) = (par.handle == io) || close(io)
 function open(io, path::AbstractString, col::ColumnChunk)
-    if isfilled(col, :file_path)
+    if hasproperty(col, :file_path)
         @debug("opening file to read column metadata", file=col.file_path, offset=col.file_offset)
         open(col.file_path)
     else
@@ -366,20 +366,20 @@ end
 function page_offset(par::ParFile, col::ColumnChunk)
     colmeta = metadata(par, col)
     offset = colmeta.data_page_offset
-    Thrift.isfilled(colmeta, :index_page_offset) && (offset = min(offset, colmeta.index_page_offset))
-    Thrift.isfilled(colmeta, :dictionary_page_offset) && (offset = min(offset, colmeta.dictionary_page_offset))
+    hasproperty(colmeta, :index_page_offset) && (offset = min(offset, colmeta.index_page_offset))
+    hasproperty(colmeta, :dictionary_page_offset) && (offset = min(offset, colmeta.dictionary_page_offset))
     offset
 end
 end_offset(par::ParFile, col::ColumnChunk) = page_offset(par, col) + metadata(par,col).total_compressed_size
 
-page_size(page::PageHeader) = Thrift.isfilled(page, :compressed_page_size) ? page.compressed_page_size : page.uncompressed_page_size
+page_size(page::PageHeader) = hasproperty(page, :compressed_page_size) ? page.compressed_page_size : page.uncompressed_page_size
 
 const INVALID_ENC = Int32(-1)
 page_encodings(page::Page) = page_encodings(page.hdr)
 function page_encodings(page::PageHeader)
-    Thrift.isfilled(page, :data_page_header) ? page_encodings(page.data_page_header) :
-    Thrift.isfilled(page, :data_page_header_v2) ? page_encodings(page.data_page_header_v2) :
-    Thrift.isfilled(page, :dictionary_page_header) ? page_encodings(page.dictionary_page_header) :
+    hasproperty(page, :data_page_header) ? page_encodings(page.data_page_header) :
+    hasproperty(page, :data_page_header_v2) ? page_encodings(page.data_page_header_v2) :
+    hasproperty(page, :dictionary_page_header) ? page_encodings(page.dictionary_page_header) :
     (INVALID_ENC,INVALID_ENC,INVALID_ENC)
 end
 page_encodings(page::DictionaryPageHeader) = (page.encoding,INVALID_ENC,INVALID_ENC)
@@ -388,9 +388,9 @@ page_encodings(page::DataPageHeaderV2) = (page.encoding, Encoding.RLE, Encoding.
 
 page_num_values(page::Page) = page_num_values(page.hdr)
 function page_num_values(page::PageHeader)
-    Thrift.isfilled(page, :data_page_header) ? page_num_values(page.data_page_header) :
-    Thrift.isfilled(page, :data_page_header_v2) ? page_num_values(page.data_page_header_v2) :
-    Thrift.isfilled(page, :dictionary_page_header) ? page_num_values(page.dictionary_page_header) : Int32(0)
+    hasproperty(page, :data_page_header) ? page_num_values(page.data_page_header) :
+    hasproperty(page, :data_page_header_v2) ? page_num_values(page.data_page_header_v2) :
+    hasproperty(page, :dictionary_page_header) ? page_num_values(page.dictionary_page_header) : Int32(0)
 end
 page_num_values(page::Union{DataPageHeader,DataPageHeaderV2,DictionaryPageHeader}) = page.num_values
 
@@ -430,7 +430,7 @@ end
 =#
 
 function metadata(par::ParFile, col::ColumnChunk)
-    if !isfilled(col, :meta_data)
+    if !hasproperty(col, :meta_data)
         col.meta_data = metadata(par.handle, par.path, col)
     end
     col.meta_data
