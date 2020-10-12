@@ -148,15 +148,15 @@ end
 #     # construct dictionary metadata
 #     dict_page_header = PAR2.PageHeader()
 #
-#     Thrift.set_field!(dict_page_header, :_type, PAR2.PageType.DICTIONARY_PAGE)
-#     Thrift.set_field!(dict_page_header, :uncompressed_page_size , uncompressed_dict_size)
-#     Thrift.set_field!(dict_page_header, :compressed_page_size , compressed_dict_size)
-#     Thrift.set_field!(dict_page_header, :crc , crc)
+#     dict_page_header._type = PAR2.PageType.DICTIONARY_PAGE
+#     dict_page_header.uncompressed_page_size = uncompressed_dict_size
+#     dict_page_header.compressed_page_size = compressed_dict_size
+#     dict_page_header.crc = crc
 #
-#     Thrift.set_field!(dict_page_header, :dictionary_page_header, PAR2.DictionaryPageHeader())
-#     Thrift.set_field!(dict_page_header.dictionary_page_header, :num_values , Int32(length(uvals)))
-#     Thrift.set_field!(dict_page_header.dictionary_page_header, :encoding , PAR2.Encoding.PLAIN_DICTIONARY)
-#     Thrift.set_field!(dict_page_header.dictionary_page_header, :is_sorted , false)
+#     dict_page_header.dictionary_page_header = PAR2.DictionaryPageHeader()
+#     dict_page_header.dictionary_page_header.num_values = Int32(length(uvals))
+#     dict_page_header.dictionary_page_header.encoding = PAR2.Encoding.PLAIN_DICTIONARY
+#     dict_page_header.dictionary_page_header.is_sorted = false
 #
 #     before_write_page_header_pos = position(fileio)
 #
@@ -253,18 +253,18 @@ function write_col_page(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encodi
     uncompressed_page_size = length(data_to_compress)
     compressed_page_size = length(compressed_data)
 
-    Thrift.set_field!(data_page_header, :_type, PAR2.PageType.DATA_PAGE)
-    Thrift.set_field!(data_page_header, :uncompressed_page_size, uncompressed_page_size)
-    Thrift.set_field!(data_page_header, :compressed_page_size, compressed_page_size)
+    data_page_header._type = PAR2.PageType.DATA_PAGE
+    data_page_header.uncompressed_page_size = uncompressed_page_size
+    data_page_header.compressed_page_size = compressed_page_size
 
     # TODO proper CRC
-    Thrift.set_field!(data_page_header, :crc , 0)
+    data_page_header.crc = 0
 
-    Thrift.set_field!(data_page_header, :data_page_header, PAR2.DataPageHeader())
-    Thrift.set_field!(data_page_header.data_page_header, :num_values , Int32(length(colvals)))
-    Thrift.set_field!(data_page_header.data_page_header, :encoding , PAR2.Encoding.PLAIN)
-    Thrift.set_field!(data_page_header.data_page_header, :definition_level_encoding, PAR2.Encoding.RLE)
-    Thrift.set_field!(data_page_header.data_page_header, :repetition_level_encoding, PAR2.Encoding.RLE)
+    data_page_header.data_page_header = PAR2.DataPageHeader()
+    data_page_header.data_page_header.num_values = Int32(length(colvals))
+    data_page_header.data_page_header.encoding = PAR2.Encoding.PLAIN
+    data_page_header.data_page_header.definition_level_encoding = PAR2.Encoding.RLE
+    data_page_header.data_page_header.repetition_level_encoding = PAR2.Encoding.RLE
 
     position_before_page_header_write = position(fileio)
 
@@ -366,24 +366,24 @@ function write_col(fileio, colvals::AbstractArray{T}, colname, encoding, codec; 
     # can probably write the metadata right after the data chunks
     col_meta = PAR2.ColumnMetaData()
 
-    Thrift.set_field!(col_meta, :_type, COL_TYPE_CODE[eltype(colvals) |> nonmissingtype])
+    col_meta._type = COL_TYPE_CODE[eltype(colvals) |> nonmissingtype]
     # these are all the fields
     # TODO collect all the encodings used
     if eltype(colvals) == Bool
-        Thrift.set_field!(col_meta, :encodings, Int32[0, 3])
+        col_meta.encodings = Int32[0, 3]
     else
-        Thrift.set_field!(col_meta, :encodings, Int32[2, 0, 3])
+        col_meta.encodings = Int32[2, 0, 3]
     end
-    Thrift.set_field!(col_meta, :path_in_schema, [colname])
-    Thrift.set_field!(col_meta, :codec, codec)
-    Thrift.set_field!(col_meta, :num_values, length(colvals))
+    col_meta.path_in_schema = [colname]
+    col_meta.codec = codec
+    col_meta.num_values = length(colvals)
 
-    Thrift.set_field!(col_meta, :total_uncompressed_size, sizes.uncompressed_size)
-    Thrift.set_field!(col_meta, :total_compressed_size, sizes.compressed_size)
+    col_meta.total_uncompressed_size = sizes.uncompressed_size
+    col_meta.total_compressed_size = sizes.compressed_size
 
-    Thrift.set_field!(col_meta, :data_page_offset, chunk_info[1].offset)
+    col_meta.data_page_offset = chunk_info[1].offset
     if !ismissing(dict_info.offset)
-        Thrift.set_field!(col_meta, :dictionary_page_offset, dict_info.offset)
+        col_meta.dictionary_page_offset = dict_info.offset
     end
 
     # write the column meta data right after the data
@@ -396,12 +396,8 @@ function write_col(fileio, colvals::AbstractArray{T}, colname, encoding, codec; 
     ## column chunk metadata
     col_chunk_meta = PAR2.ColumnChunk()
 
-    Thrift.set_field!(col_chunk_meta, :file_offset, col_meta_offset)
-    Thrift.set_field!(col_chunk_meta, :meta_data, col_meta)
-    Thrift.clear(col_chunk_meta, :offset_index_offset)
-    Thrift.clear(col_chunk_meta, :offset_index_length)
-    Thrift.clear(col_chunk_meta, :column_index_offset)
-    Thrift.clear(col_chunk_meta, :column_index_length)
+    col_chunk_meta.file_offset = col_meta_offset
+    col_chunk_meta.meta_data = col_meta
 
     return (
         data_page_offset = chunk_info[1].offset,
@@ -414,8 +410,8 @@ end
 function create_schema_parent_node(ncols)
     """Create the parent node in the schema tree"""
     schmea_parent_node = PAR2.SchemaElement()
-    Thrift.set_field!(schmea_parent_node, :name, "schema")
-    Thrift.set_field!(schmea_parent_node, :num_children, ncols)
+    schmea_parent_node.name = "schema"
+    schmea_parent_node.num_children = ncols
     schmea_parent_node
 end
 
@@ -423,10 +419,10 @@ function create_col_schema(type, colname)
     """Create a column node in the schema tree for non-strings"""
     schema_node = PAR2.SchemaElement()
     # look up type code
-    Thrift.set_field!(schema_node, :_type, COL_TYPE_CODE[type |> nonmissingtype])
-    Thrift.set_field!(schema_node, :repetition_type, 1)
-    Thrift.set_field!(schema_node, :name, colname)
-    Thrift.set_field!(schema_node, :num_children, 0)
+    schema_node._type = COL_TYPE_CODE[type |> nonmissingtype]
+    schema_node.repetition_type = 1
+    schema_node.name = colname
+    schema_node.num_children = 0
 
     schema_node
 end
@@ -436,18 +432,18 @@ function create_col_schema(type::Type{String}, colname)
     """create col schema for string"""
     schema_node = PAR2.SchemaElement()
     # look up type code
-    Thrift.set_field!(schema_node, :_type, COL_TYPE_CODE[type])
-    Thrift.set_field!(schema_node, :repetition_type, 1)
-    Thrift.set_field!(schema_node, :name, colname)
-    Thrift.set_field!(schema_node, :num_children, 0)
+    schema_node._type = COL_TYPE_CODE[type]
+    schema_node.repetition_type = 1
+    schema_node.name = colname
+    schema_node.num_children = 0
 
     # for string set converted type to UTF8
-    Thrift.set_field!(schema_node, :converted_type, PAR2.ConvertedType.UTF8)
+    schema_node.converted_type = PAR2.ConvertedType.UTF8
 
     logicalType = PAR2.LogicalType()
-    Thrift.set_field!(logicalType, :STRING, PAR2.StringType())
+    logicalType.STRING = PAR2.StringType()
 
-    Thrift.set_field!(schema_node, :logicalType, logicalType)
+    schema_node.logicalType = logicalType
 
     schema_node
 end
@@ -569,26 +565,26 @@ function _write_parquet(itr_vectors, colnames, path, nchunks; ncols = length(itr
     # now all the data is written we write the filemetadata
     # finalise it by writing the filemetadata
     filemetadata = PAR2.FileMetaData()
-    Thrift.set_field!(filemetadata, :version, 1)
-    Thrift.set_field!(filemetadata, :schema, schemas)
-    Thrift.set_field!(filemetadata, :num_rows, nrows)
-    Thrift.set_field!(filemetadata, :created_by, "Parquet.jl $(Parquet.PARQUET_JL_VERSION)")
+    filemetadata.version = 1
+    filemetadata.schema = schemas
+    filemetadata.num_rows = nrows
+    filemetadata.created_by = "Parquet.jl $(Parquet.PARQUET_JL_VERSION)"
 
     # create row_groups
     # TODO do multiple row_groups
     row_group = PAR2.RowGroup()
 
-    Thrift.set_field!(row_group, :columns, col_chunk_metas)
-    Thrift.set_field!(row_group, :total_byte_size, Int64(sum(x->x.meta_data.total_compressed_size, col_chunk_metas)))
-    Thrift.set_field!(row_group, :num_rows, nrows)
+    row_group.columns = col_chunk_metas
+    row_group.total_byte_size = Int64(sum(x->x.meta_data.total_compressed_size, col_chunk_metas))
+    row_group.num_rows = nrows
     if ismissing(row_group_file_offset)
         error("row_group_file_offset is not set")
     else
-        Thrift.set_field!(row_group, :file_offset, row_group_file_offset)
+        row_group.file_offset = row_group_file_offset
     end
-    Thrift.set_field!(row_group, :total_compressed_size, Int64(sum(x->x.meta_data.total_compressed_size, col_chunk_metas)))
+    row_group.total_compressed_size = Int64(sum(x->x.meta_data.total_compressed_size, col_chunk_metas))
 
-    Thrift.set_field!(filemetadata, :row_groups, [row_group])
+    filemetadata.row_groups = [row_group]
 
     filemetadata_size = write_thrift(fileio, filemetadata)
 

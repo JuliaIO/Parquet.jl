@@ -29,16 +29,16 @@ function show(io::IO, schema::SchemaElement, indent::AbstractString="", nchildre
     print(io, indent)
     lchildren = length(nchildren)
     print_indent(io, lchildren)
-    if isfilled(schema, :repetition_type)
+    if hasproperty(schema, :repetition_type)
         r = schema.repetition_type
         print(io, (r == FieldRepetitionType.REQUIRED) ? "required" : (r == FieldRepetitionType.OPTIONAL) ? "optional" : "repeated", " ");
     end
-    isfilled(schema, :_type) && print(io, Thrift.enumstr(_Type, schema._type), " ")
+    hasproperty(schema, :_type) && print(io, Thrift.enumstr(_Type, schema._type), " ")
 
     print(io, schema.name)
-    isfilled(schema, :field_id) && print(io, " (", schema.field_id, ")")
+    hasproperty(schema, :field_id) && print(io, " (", schema.field_id, ")")
 
-    if isfilled(schema, :converted_type)
+    if hasproperty(schema, :converted_type)
         print(io, " # (from ", Thrift.enumstr(ConvertedType, schema.converted_type))
         if schema.converted_type == ConvertedType.DECIMAL
             print(io, "(", schema.precision, ",", schema.scale, ")")
@@ -46,7 +46,7 @@ function show(io::IO, schema::SchemaElement, indent::AbstractString="", nchildre
         print(io, ") ")
     end
 
-    if isfilled(schema, :num_children)
+    if hasproperty(schema, :num_children)
         push!(nchildren, schema.num_children)
         print(io, " {")
     elseif lchildren > 0
@@ -103,22 +103,22 @@ end
 function show(io::IO, hdr::DataPageHeader, indent::AbstractString="")
     println(io, indent, hdr.num_values, " values")
     println(io, indent, "encodings: values as ", Thrift.enumstr(Encoding, hdr.encoding), ", definitions as ", Thrift.enumstr(Encoding, hdr.definition_level_encoding), ", repetitions as ", Thrift.enumstr(Encoding, hdr.repetition_level_encoding))
-    Thrift.isfilled(hdr, :statistics) && show(io, hdr.statistics, indent)
+    hasproperty(hdr, :statistics) && show(io, hdr.statistics, indent)
 end
 
 function show(io::IO, hdr::DataPageHeaderV2, indent::AbstractString="")
-    compressed = Thrift.isfilled(hdr, :is_compressed) ? hdr.is_compressed : true
+    compressed = hasproperty(hdr, :is_compressed) ? hdr.is_compressed : true
     println(io, indent, hdr.num_values, " values, ", hdr.num_nulls, " nulls, ", hdr.num_rows, " rows, compressed:", compressed)
     println(io, indent, "encoding:", Thrift.enumstr(Encoding, hdr.encoding), ", definition:", Thrift.enumstr(Encoding, hdr.definition_level_encoding), ", repetition:", Thrift.enumstr(Encoding, hdr.repetition_level_encoding))
-    Thrift.isfilled(hdr, :statistics) && show(io, hdr.statistics, indent)
+    hasproperty(hdr, :statistics) && show(io, hdr.statistics, indent)
 end
 
 function show(io::IO, page::PageHeader, indent::AbstractString="")
     println(io, indent, Thrift.enumstr(PageType, page._type), " compressed bytes:", page.compressed_page_size, " (", page.uncompressed_page_size, " uncompressed)")
-    Thrift.isfilled(page, :data_page_header) && show(io, page.data_page_header, indent * "  ")
-    Thrift.isfilled(page, :data_page_header_v2) && show(io, page.data_page_header_v2, indent * "  ")
-    Thrift.isfilled(page, :index_page_header) && show(io, page.index_page_header, indent * "  ")
-    Thrift.isfilled(page, :dictionary_page_header) && show(io, page.dictionary_page_header, indent * "  ")
+    hasproperty(page, :data_page_header) && show(io, page.data_page_header, indent * "  ")
+    hasproperty(page, :data_page_header_v2) && show(io, page.data_page_header_v2, indent * "  ")
+    hasproperty(page, :index_page_header) && show(io, page.index_page_header, indent * "  ")
+    hasproperty(page, :dictionary_page_header) && show(io, page.dictionary_page_header, indent * "  ")
 end
 
 function show(io::IO, pages::Vector{PageHeader}, indent::AbstractString="")
@@ -133,15 +133,15 @@ show(io::IO, pages::Vector{Page}, indent::AbstractString="") = show(io, [page.hd
 
 function show(io::IO, stat::Statistics, indent::AbstractString="")
     println(io, indent, "Statistics:")
-    if Thrift.isfilled(stat, :min) && Thrift.isfilled(stat, :max)
+    if hasproperty(stat, :min) && hasproperty(stat, :max)
         println(io, indent, "  range:", stat.min, ":", stat.max)
-    elseif Thrift.isfilled(stat, :min)
+    elseif hasproperty(stat, :min)
         println(io, indent, "  min:", stat.min)
-    elseif Thrift.isfilled(stat, :max)
+    elseif hasproperty(stat, :max)
         println(io, indent, "  max:", stat.max)
     end
-    Thrift.isfilled(stat, :null_count) && println(io, indent, "  null count:", stat.null_count)
-    Thrift.isfilled(stat, :distinct_count) && println(io, indent, "  distinct count:", stat.distinct_count)
+    hasproperty(stat, :null_count) && println(io, indent, "  null count:", stat.null_count)
+    hasproperty(stat, :distinct_count) && println(io, indent, "  distinct count:", stat.distinct_count)
 end
 
 function show(io::IO, page_enc::PageEncodingStats, indent::AbstractString="")
@@ -166,17 +166,17 @@ function show(io::IO, colmeta::ColumnMetaData, indent::AbstractString="")
     end
 
     print(io, indent, "offsets: data:", colmeta.data_page_offset)
-    Thrift.isfilled(colmeta, :index_page_offset) && print(io, ", index:", colmeta.index_page_offset)
-    Thrift.isfilled(colmeta, :dictionary_page_offset) && print(io, ", dictionary:", colmeta.dictionary_page_offset)
+    hasproperty(colmeta, :index_page_offset) && print(io, ", index:", colmeta.index_page_offset)
+    hasproperty(colmeta, :dictionary_page_offset) && print(io, ", dictionary:", colmeta.dictionary_page_offset)
     println(io, "")
-    Thrift.isfilled(colmeta, :statistics) && show(io, colmeta.statistics, indent)
-    Thrift.isfilled(colmeta, :encoding_stats) && show(io, colmeta.encoding_stats, indent)
-    Thrift.isfilled(colmeta, :key_value_metadata) && show(io, colmeta.key_value_metadata, indent)
+    hasproperty(colmeta, :statistics) && show(io, colmeta.statistics, indent)
+    hasproperty(colmeta, :encoding_stats) && show(io, colmeta.encoding_stats, indent)
+    hasproperty(colmeta, :key_value_metadata) && show(io, colmeta.key_value_metadata, indent)
 end
 
 function show(io::IO, columns::Vector{ColumnChunk}, indent::AbstractString="")
     for col in columns
-        path = isfilled(col, :file_path) ? col.file_path : ""
+        path = hasproperty(col, :file_path) ? col.file_path : ""
         println(io, indent, "Column at offset: ", path, "#", col.file_offset)
         show(io, col.meta_data, indent * "  ")
     end
@@ -201,7 +201,7 @@ function show(io::IO, meta::FileMetaData, indent::AbstractString="")
 
     show(io, meta.schema, indent)
     show(io, meta.row_groups, indent)
-    Thrift.isfilled(meta, :key_value_metadata) && show(io, meta.key_value_metadata, indent)
+    hasproperty(meta, :key_value_metadata) && show(io, meta.key_value_metadata, indent)
 end
 
 function show(io::IO, par::ParFile)

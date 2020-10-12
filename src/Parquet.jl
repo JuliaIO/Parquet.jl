@@ -20,7 +20,7 @@ if VERSION < v"1.5"
     Base.signed(::Type{UInt128}) = Int128
 end    
 
-const PARQUET_JL_VERSION = v"0.6.0"
+const PARQUET_JL_VERSION = v"0.7.0"
 
 const _use_mmap = true
 
@@ -29,7 +29,6 @@ function use_mmap(b::Bool)
 end
 
 import Base: show, open, close, values, eltype, length
-import Thrift: isfilled
 
 export is_par_file, ParFile, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
 export schema

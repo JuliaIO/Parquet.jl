@@ -59,7 +59,7 @@ function elemindex(sch::Schema, schname::T) where {T <: AbstractVector{String}}
     findfirst(x->x===schema_element, sch.schema)
 end
 
-isrepetitiontype(schelem::SchemaElement, repetition_type) = Thrift.isfilled(schelem, :repetition_type) && (schelem.repetition_type == repetition_type)
+isrepetitiontype(schelem::SchemaElement, repetition_type) = hasproperty(schelem, :repetition_type) && (schelem.repetition_type == repetition_type)
 
 isrequired(sch::Schema, schname::T) where {T <: AbstractVector{String}} = isrequired(elem(sch, schname))
 isrequired(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.REQUIRED)
@@ -70,12 +70,12 @@ isoptional(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionTy
 isrepeated(sch::Schema, schname::T) where {T <: AbstractVector{String}} = isrepeated(elem(sch, schname))
 isrepeated(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.REPEATED)
 
-is_logical_string(sch::SchemaElement) = (sch._type === _Type.BYTE_ARRAY) && ((isfilled(sch, :converted_type) && (sch.converted_type === ConvertedType.UTF8)) || (isfilled(sch, :logicalType) && isfilled(sch.logicalType, :STRING)))
+is_logical_string(sch::SchemaElement) = hasproperty(sch, :_type) && (sch._type === _Type.BYTE_ARRAY) && ((hasproperty(sch, :converted_type) && (sch.converted_type === ConvertedType.UTF8)) || (hasproperty(sch, :logicalType) && hasproperty(sch.logicalType, :STRING)))
 
 # converted_type is usually not set for INT96 types, but they are used exclusively used for timestamps only
-is_logical_timestamp(sch::SchemaElement) = (sch._type === _Type.INT96)
+is_logical_timestamp(sch::SchemaElement) = hasproperty(sch, :_type) && (sch._type === _Type.INT96)
 
-is_logical_decimal(sch::SchemaElement) = (sch._type === _Type.FIXED_LEN_BYTE_ARRAY) && ((isfilled(sch, :converted_type) && (sch.converted_type === ConvertedType.DECIMAL)) || (isfilled(sch, :logicalType) && isfilled(sch.logicalType, :DECIMAL)))
+is_logical_decimal(sch::SchemaElement) = hasproperty(sch, :_type) && (sch._type === _Type.FIXED_LEN_BYTE_ARRAY) && ((hasproperty(sch, :converted_type) && (sch.converted_type === ConvertedType.DECIMAL)) || (hasproperty(sch, :logicalType) && hasproperty(sch.logicalType, :DECIMAL)))
 
 function path_in_schema(sch::Schema, schelem::SchemaElement)
     for (n,v) in sch.name_lookup
@@ -90,7 +90,7 @@ function logical_converter(sch::Schema, schname::T) where {T <: AbstractVector{S
     if schname in keys(sch.map_logical_types)
         _logical_type, converter = sch.map_logical_types[schname]
         return converter
-    elseif isfilled(elem, :_type) && (elem._type in keys(sch.map_logical_types))
+    elseif hasproperty(elem, :_type) && (elem._type in keys(sch.map_logical_types))
         _logical_type, converter = sch.map_logical_types[elem._type]
         return converter
     else
@@ -104,7 +104,7 @@ function logical_convert(sch::Schema, schname::T, val) where {T <: AbstractVecto
     if schname in keys(sch.map_logical_types)
         logical_type, converter = sch.map_logical_types[schname]
         converter(val)::logical_type
-    elseif isfilled(elem, :_type) && (elem._type in keys(sch.map_logical_types))
+    elseif hasproperty(elem, :_type) && (elem._type in keys(sch.map_logical_types))
         logical_type, converter = sch.map_logical_types[elem._type]
         converter(val)::logical_type
     else
@@ -118,7 +118,7 @@ elemtype(sch::Schema, schname::T) where {T <: AbstractVector{String}} = get!(sch
     if schname in keys(sch.map_logical_types)
         logical_type, _converter = sch.map_logical_types[schname]
         logical_type
-    elseif isfilled(elem, :_type) && (elem._type in keys(sch.map_logical_types))
+    elseif hasproperty(elem, :_type) && (elem._type in keys(sch.map_logical_types))
         logical_type, _converter = sch.map_logical_types[elem._type]
         logical_type
     else
@@ -128,14 +128,14 @@ end
 function elemtype(schelem::SchemaElement)
     jtype = Nothing
 
-    if isfilled(schelem, :_type)
+    if hasproperty(schelem, :_type)
         jtype = PLAIN_JTYPES[schelem._type+1]
     else
         jtype = Dict{Symbol,Any} # this is a nested type
     end
 
-    if (isfilled(schelem, :_type) && (schelem._type == _Type.BYTE_ARRAY || schelem._type == _Type.FIXED_LEN_BYTE_ARRAY)) ||
-       (isfilled(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REPEATED))  # array type
+    if (hasproperty(schelem, :_type) && (schelem._type == _Type.BYTE_ARRAY || schelem._type == _Type.FIXED_LEN_BYTE_ARRAY)) ||
+       (hasproperty(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REPEATED))  # array type
         jtype = Vector{jtype}
     end
 
@@ -163,7 +163,7 @@ function ntelemtype(sch::Schema, schelem::SchemaElement)
     @assert num_children(schelem) > 0
     idx = findfirst(x->x===schelem, sch.schema)
     children_range = (idx+1):(idx+schelem.num_children)
-    repeated = isfilled(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REPEATED)
+    repeated = hasproperty(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REPEATED)
     names = [Symbol(x.name) for x in sch.schema[children_range]]
     types = [(num_children(x) > 0) ? ntelemtype(sch, path_in_schema(sch, x)) : elemtype(sch, path_in_schema(sch, x)) for x in sch.schema[children_range]]
     optionals = [isoptional(x) for x in sch.schema[children_range]]
@@ -173,9 +173,9 @@ function ntelemtype(sch::Schema, schelem::SchemaElement)
 end
 
 bit_or_byte_length(sch::Schema, schname::Vector{String}) = bit_or_byte_length(elem(sch, schname))
-bit_or_byte_length(schelem::SchemaElement) = Thrift.isfilled(schelem, :type_length) ? schelem.type_length : 0
+bit_or_byte_length(schelem::SchemaElement) = hasproperty(schelem, :type_length) ? schelem.type_length : 0
 
-num_children(schelem::SchemaElement) = Thrift.isfilled(schelem, :num_children) ? schelem.num_children : 0
+num_children(schelem::SchemaElement) = hasproperty(schelem, :num_children) ? schelem.num_children : 0
 
 function max_repetition_level(sch::Schema, schname::T) where {T <: AbstractVector{String}}
     lev = isrepeated(sch, schname) ? 1 : 0

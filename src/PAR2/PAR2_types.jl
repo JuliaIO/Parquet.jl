@@ -89,353 +89,2013 @@ const BoundaryOrder = _enum_BoundaryOrder(Int32(0), Int32(1), Int32(2))
 
 
 mutable struct Statistics <: Thrift.TMsg
-  max::Vector{UInt8}
-  min::Vector{UInt8}
-  null_count::Int64
-  distinct_count::Int64
-  max_value::Vector{UInt8}
-  min_value::Vector{UInt8}
-  Statistics() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function Statistics(; kwargs...)
+    obj = new(__meta__Statistics, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct Statistics
-meta(t::Type{Statistics}) = meta(t, Symbol[:max,:min,:null_count,:distinct_count,:max_value,:min_value], Int[], Dict{Symbol,Any}())
+
+const __meta__Statistics = meta(Statistics,
+  Symbol[:max,:min,:null_count,:distinct_count,:max_value,:min_value],
+  Type[Vector{UInt8},Vector{UInt8},Int64,Int64,Vector{UInt8},Vector{UInt8}],
+  Symbol[:max,:min,:null_count,:distinct_count,:max_value,:min_value],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::Statistics, name::Symbol)
+  if name === :max
+    return (obj.values[name])::Vector{UInt8}
+  elseif name === :min
+    return (obj.values[name])::Vector{UInt8}
+  elseif name === :null_count
+    return (obj.values[name])::Int64
+  elseif name === :distinct_count
+    return (obj.values[name])::Int64
+  elseif name === :max_value
+    return (obj.values[name])::Vector{UInt8}
+  elseif name === :min_value
+    return (obj.values[name])::Vector{UInt8}
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{Statistics}) = __meta__Statistics
+
 
 mutable struct StringType <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function StringType(; kwargs...)
+    obj = new(__meta__StringType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct StringType
 
+const __meta__StringType = meta(StringType,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{StringType}) = __meta__StringType
+
+
 mutable struct UUIDType <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function UUIDType(; kwargs...)
+    obj = new(__meta__UUIDType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct UUIDType
 
+const __meta__UUIDType = meta(UUIDType,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{UUIDType}) = __meta__UUIDType
+
+
 mutable struct MapType <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function MapType(; kwargs...)
+    obj = new(__meta__MapType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct MapType
 
+const __meta__MapType = meta(MapType,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{MapType}) = __meta__MapType
+
+
 mutable struct ListType <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function ListType(; kwargs...)
+    obj = new(__meta__ListType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct ListType
 
+const __meta__ListType = meta(ListType,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{ListType}) = __meta__ListType
+
+
 mutable struct EnumType <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function EnumType(; kwargs...)
+    obj = new(__meta__EnumType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct EnumType
 
+const __meta__EnumType = meta(EnumType,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{EnumType}) = __meta__EnumType
+
+
 mutable struct DateType <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function DateType(; kwargs...)
+    obj = new(__meta__DateType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct DateType
 
+const __meta__DateType = meta(DateType,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{DateType}) = __meta__DateType
+
+
 mutable struct NullType <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function NullType(; kwargs...)
+    obj = new(__meta__NullType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct NullType
 
+const __meta__NullType = meta(NullType,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{NullType}) = __meta__NullType
+
+
 mutable struct DecimalType <: Thrift.TMsg
-  scale::Int32
-  precision::Int32
-  DecimalType() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function DecimalType(; kwargs...)
+    obj = new(__meta__DecimalType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct DecimalType
 
+const __meta__DecimalType = meta(DecimalType,
+  Symbol[:scale,:precision],
+  Type[Int32,Int32],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::DecimalType, name::Symbol)
+  if name === :scale
+    return (obj.values[name])::Int32
+  elseif name === :precision
+    return (obj.values[name])::Int32
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{DecimalType}) = __meta__DecimalType
+
+
 mutable struct MilliSeconds <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function MilliSeconds(; kwargs...)
+    obj = new(__meta__MilliSeconds, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct MilliSeconds
 
+const __meta__MilliSeconds = meta(MilliSeconds,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{MilliSeconds}) = __meta__MilliSeconds
+
+
 mutable struct MicroSeconds <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function MicroSeconds(; kwargs...)
+    obj = new(__meta__MicroSeconds, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct MicroSeconds
 
+const __meta__MicroSeconds = meta(MicroSeconds,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{MicroSeconds}) = __meta__MicroSeconds
+
+
 mutable struct NanoSeconds <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function NanoSeconds(; kwargs...)
+    obj = new(__meta__NanoSeconds, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct NanoSeconds
 
+const __meta__NanoSeconds = meta(NanoSeconds,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{NanoSeconds}) = __meta__NanoSeconds
+
+
 mutable struct TimeUnit <: Thrift.TMsg
-  MILLIS::MilliSeconds
-  MICROS::MicroSeconds
-  NANOS::NanoSeconds
-  TimeUnit() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function TimeUnit(; kwargs...)
+    obj = new(__meta__TimeUnit, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct TimeUnit
-meta(t::Type{TimeUnit}) = meta(t, Symbol[:MILLIS,:MICROS,:NANOS], Int[], Dict{Symbol,Any}())
+
+const __meta__TimeUnit = meta(TimeUnit,
+  Symbol[:MILLIS,:MICROS,:NANOS],
+  Type[MilliSeconds,MicroSeconds,NanoSeconds],
+  Symbol[:MILLIS,:MICROS,:NANOS],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::TimeUnit, name::Symbol)
+  if name === :MILLIS
+    return (obj.values[name])::MilliSeconds
+  elseif name === :MICROS
+    return (obj.values[name])::MicroSeconds
+  elseif name === :NANOS
+    return (obj.values[name])::NanoSeconds
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{TimeUnit}) = __meta__TimeUnit
+
 
 mutable struct TimestampType <: Thrift.TMsg
-  isAdjustedToUTC::Bool
-  unit::TimeUnit
-  TimestampType() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function TimestampType(; kwargs...)
+    obj = new(__meta__TimestampType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct TimestampType
 
+const __meta__TimestampType = meta(TimestampType,
+  Symbol[:isAdjustedToUTC,:unit],
+  Type[Bool,TimeUnit],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::TimestampType, name::Symbol)
+  if name === :isAdjustedToUTC
+    return (obj.values[name])::Bool
+  elseif name === :unit
+    return (obj.values[name])::TimeUnit
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{TimestampType}) = __meta__TimestampType
+
+
 mutable struct TimeType <: Thrift.TMsg
-  isAdjustedToUTC::Bool
-  unit::TimeUnit
-  TimeType() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function TimeType(; kwargs...)
+    obj = new(__meta__TimeType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct TimeType
 
+const __meta__TimeType = meta(TimeType,
+  Symbol[:isAdjustedToUTC,:unit],
+  Type[Bool,TimeUnit],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::TimeType, name::Symbol)
+  if name === :isAdjustedToUTC
+    return (obj.values[name])::Bool
+  elseif name === :unit
+    return (obj.values[name])::TimeUnit
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{TimeType}) = __meta__TimeType
+
+
 mutable struct IntType <: Thrift.TMsg
-  bitWidth::UInt8
-  isSigned::Bool
-  IntType() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function IntType(; kwargs...)
+    obj = new(__meta__IntType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct IntType
 
+const __meta__IntType = meta(IntType,
+  Symbol[:bitWidth,:isSigned],
+  Type[UInt8,Bool],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::IntType, name::Symbol)
+  if name === :bitWidth
+    return (obj.values[name])::UInt8
+  elseif name === :isSigned
+    return (obj.values[name])::Bool
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{IntType}) = __meta__IntType
+
+
 mutable struct JsonType <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function JsonType(; kwargs...)
+    obj = new(__meta__JsonType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct JsonType
 
+const __meta__JsonType = meta(JsonType,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{JsonType}) = __meta__JsonType
+
+
 mutable struct BsonType <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function BsonType(; kwargs...)
+    obj = new(__meta__BsonType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct BsonType
 
+const __meta__BsonType = meta(BsonType,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{BsonType}) = __meta__BsonType
+
+
 mutable struct LogicalType <: Thrift.TMsg
-  STRING::StringType
-  MAP::MapType
-  LIST::ListType
-  ENUM::EnumType
-  DECIMAL::DecimalType
-  DATE::DateType
-  TIME::TimeType
-  TIMESTAMP::TimestampType
-  INTEGER::IntType
-  UNKNOWN::NullType
-  JSON::JsonType
-  BSON::BsonType
-  UUID::UUIDType
-  LogicalType() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function LogicalType(; kwargs...)
+    obj = new(__meta__LogicalType, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct LogicalType
-meta(t::Type{LogicalType}) = meta(t, Symbol[:STRING,:MAP,:LIST,:ENUM,:DECIMAL,:DATE,:TIME,:TIMESTAMP,:INTEGER,:UNKNOWN,:JSON,:BSON,:UUID], Int[1,2,3,4,5,6,7,8,10,11,12,13,14], Dict{Symbol,Any}())
+
+const __meta__LogicalType = meta(LogicalType,
+  Symbol[:STRING,:MAP,:LIST,:ENUM,:DECIMAL,:DATE,:TIME,:TIMESTAMP,:INTEGER,:UNKNOWN,:JSON,:BSON,:UUID],
+  Type[StringType,MapType,ListType,EnumType,DecimalType,DateType,TimeType,TimestampType,IntType,NullType,JsonType,BsonType,UUIDType],
+  Symbol[:STRING,:MAP,:LIST,:ENUM,:DECIMAL,:DATE,:TIME,:TIMESTAMP,:INTEGER,:UNKNOWN,:JSON,:BSON,:UUID],
+  Int[1,2,3,4,5,6,7,8,10,11,12,13,14],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::LogicalType, name::Symbol)
+  if name === :STRING
+    return (obj.values[name])::StringType
+  elseif name === :MAP
+    return (obj.values[name])::MapType
+  elseif name === :LIST
+    return (obj.values[name])::ListType
+  elseif name === :ENUM
+    return (obj.values[name])::EnumType
+  elseif name === :DECIMAL
+    return (obj.values[name])::DecimalType
+  elseif name === :DATE
+    return (obj.values[name])::DateType
+  elseif name === :TIME
+    return (obj.values[name])::TimeType
+  elseif name === :TIMESTAMP
+    return (obj.values[name])::TimestampType
+  elseif name === :INTEGER
+    return (obj.values[name])::IntType
+  elseif name === :UNKNOWN
+    return (obj.values[name])::NullType
+  elseif name === :JSON
+    return (obj.values[name])::JsonType
+  elseif name === :BSON
+    return (obj.values[name])::BsonType
+  elseif name === :UUID
+    return (obj.values[name])::UUIDType
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{LogicalType}) = __meta__LogicalType
+
 
 mutable struct SchemaElement <: Thrift.TMsg
-  _type::Int32
-  type_length::Int32
-  repetition_type::Int32
-  name::String
-  num_children::Int32
-  converted_type::Int32
-  scale::Int32
-  precision::Int32
-  field_id::Int32
-  logicalType::LogicalType
-  SchemaElement() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function SchemaElement(; kwargs...)
+    obj = new(__meta__SchemaElement, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct SchemaElement
-meta(t::Type{SchemaElement}) = meta(t, Symbol[:_type,:type_length,:repetition_type,:num_children,:converted_type,:scale,:precision,:field_id,:logicalType], Int[], Dict{Symbol,Any}())
+
+const __meta__SchemaElement = meta(SchemaElement,
+  Symbol[:_type,:type_length,:repetition_type,:name,:num_children,:converted_type,:scale,:precision,:field_id,:logicalType],
+  Type[Int32,Int32,Int32,String,Int32,Int32,Int32,Int32,Int32,LogicalType],
+  Symbol[:_type,:type_length,:repetition_type,:num_children,:converted_type,:scale,:precision,:field_id,:logicalType],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::SchemaElement, name::Symbol)
+  if name === :_type
+    return (obj.values[name])::Int32
+  elseif name === :type_length
+    return (obj.values[name])::Int32
+  elseif name === :repetition_type
+    return (obj.values[name])::Int32
+  elseif name === :name
+    return (obj.values[name])::String
+  elseif name === :num_children
+    return (obj.values[name])::Int32
+  elseif name === :converted_type
+    return (obj.values[name])::Int32
+  elseif name === :scale
+    return (obj.values[name])::Int32
+  elseif name === :precision
+    return (obj.values[name])::Int32
+  elseif name === :field_id
+    return (obj.values[name])::Int32
+  elseif name === :logicalType
+    return (obj.values[name])::LogicalType
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{SchemaElement}) = __meta__SchemaElement
+
 
 mutable struct DataPageHeader <: Thrift.TMsg
-  num_values::Int32
-  encoding::Int32
-  definition_level_encoding::Int32
-  repetition_level_encoding::Int32
-  statistics::Statistics
-  DataPageHeader() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function DataPageHeader(; kwargs...)
+    obj = new(__meta__DataPageHeader, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct DataPageHeader
-meta(t::Type{DataPageHeader}) = meta(t, Symbol[:statistics], Int[], Dict{Symbol,Any}())
+
+const __meta__DataPageHeader = meta(DataPageHeader,
+  Symbol[:num_values,:encoding,:definition_level_encoding,:repetition_level_encoding,:statistics],
+  Type[Int32,Int32,Int32,Int32,Statistics],
+  Symbol[:statistics],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::DataPageHeader, name::Symbol)
+  if name === :num_values
+    return (obj.values[name])::Int32
+  elseif name === :encoding
+    return (obj.values[name])::Int32
+  elseif name === :definition_level_encoding
+    return (obj.values[name])::Int32
+  elseif name === :repetition_level_encoding
+    return (obj.values[name])::Int32
+  elseif name === :statistics
+    return (obj.values[name])::Statistics
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{DataPageHeader}) = __meta__DataPageHeader
+
 
 mutable struct IndexPageHeader <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function IndexPageHeader(; kwargs...)
+    obj = new(__meta__IndexPageHeader, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct IndexPageHeader
 
+const __meta__IndexPageHeader = meta(IndexPageHeader,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{IndexPageHeader}) = __meta__IndexPageHeader
+
+
 mutable struct DictionaryPageHeader <: Thrift.TMsg
-  num_values::Int32
-  encoding::Int32
-  is_sorted::Bool
-  DictionaryPageHeader() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function DictionaryPageHeader(; kwargs...)
+    obj = new(__meta__DictionaryPageHeader, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct DictionaryPageHeader
-meta(t::Type{DictionaryPageHeader}) = meta(t, Symbol[:is_sorted], Int[], Dict{Symbol,Any}())
+
+const __meta__DictionaryPageHeader = meta(DictionaryPageHeader,
+  Symbol[:num_values,:encoding,:is_sorted],
+  Type[Int32,Int32,Bool],
+  Symbol[:is_sorted],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::DictionaryPageHeader, name::Symbol)
+  if name === :num_values
+    return (obj.values[name])::Int32
+  elseif name === :encoding
+    return (obj.values[name])::Int32
+  elseif name === :is_sorted
+    return (obj.values[name])::Bool
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{DictionaryPageHeader}) = __meta__DictionaryPageHeader
+
 
 mutable struct DataPageHeaderV2 <: Thrift.TMsg
-  num_values::Int32
-  num_nulls::Int32
-  num_rows::Int32
-  encoding::Int32
-  definition_levels_byte_length::Int32
-  repetition_levels_byte_length::Int32
-  is_compressed::Bool
-  statistics::Statistics
-  DataPageHeaderV2() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function DataPageHeaderV2(; kwargs...)
+    obj = new(__meta__DataPageHeaderV2, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct DataPageHeaderV2
-meta(t::Type{DataPageHeaderV2}) = meta(t, Symbol[:is_compressed,:statistics], Int[], Dict{Symbol,Any}(:is_compressed => true))
+
+const __meta__DataPageHeaderV2 = meta(DataPageHeaderV2,
+  Symbol[:num_values,:num_nulls,:num_rows,:encoding,:definition_levels_byte_length,:repetition_levels_byte_length,:is_compressed,:statistics],
+  Type[Int32,Int32,Int32,Int32,Int32,Int32,Bool,Statistics],
+  Symbol[:is_compressed,:statistics],
+  Int[],
+  Dict{Symbol,Any}(:is_compressed => true)
+)
+
+function Base.getproperty(obj::DataPageHeaderV2, name::Symbol)
+  if name === :num_values
+    return (obj.values[name])::Int32
+  elseif name === :num_nulls
+    return (obj.values[name])::Int32
+  elseif name === :num_rows
+    return (obj.values[name])::Int32
+  elseif name === :encoding
+    return (obj.values[name])::Int32
+  elseif name === :definition_levels_byte_length
+    return (obj.values[name])::Int32
+  elseif name === :repetition_levels_byte_length
+    return (obj.values[name])::Int32
+  elseif name === :is_compressed
+    return (obj.values[name])::Bool
+  elseif name === :statistics
+    return (obj.values[name])::Statistics
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{DataPageHeaderV2}) = __meta__DataPageHeaderV2
+
 
 mutable struct SplitBlockAlgorithm <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function SplitBlockAlgorithm(; kwargs...)
+    obj = new(__meta__SplitBlockAlgorithm, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct SplitBlockAlgorithm
 
+const __meta__SplitBlockAlgorithm = meta(SplitBlockAlgorithm,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{SplitBlockAlgorithm}) = __meta__SplitBlockAlgorithm
+
+
 mutable struct BloomFilterAlgorithm <: Thrift.TMsg
-  BLOCK::SplitBlockAlgorithm
-  BloomFilterAlgorithm() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function BloomFilterAlgorithm(; kwargs...)
+    obj = new(__meta__BloomFilterAlgorithm, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct BloomFilterAlgorithm
-meta(t::Type{BloomFilterAlgorithm}) = meta(t, Symbol[:BLOCK], Int[], Dict{Symbol,Any}())
+
+const __meta__BloomFilterAlgorithm = meta(BloomFilterAlgorithm,
+  Symbol[:BLOCK],
+  Type[SplitBlockAlgorithm],
+  Symbol[:BLOCK],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::BloomFilterAlgorithm, name::Symbol)
+  if name === :BLOCK
+    return (obj.values[name])::SplitBlockAlgorithm
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{BloomFilterAlgorithm}) = __meta__BloomFilterAlgorithm
+
 
 mutable struct XxHash <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function XxHash(; kwargs...)
+    obj = new(__meta__XxHash, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct XxHash
 
+const __meta__XxHash = meta(XxHash,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{XxHash}) = __meta__XxHash
+
+
 mutable struct BloomFilterHash <: Thrift.TMsg
-  XXHASH::XxHash
-  BloomFilterHash() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function BloomFilterHash(; kwargs...)
+    obj = new(__meta__BloomFilterHash, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct BloomFilterHash
-meta(t::Type{BloomFilterHash}) = meta(t, Symbol[:XXHASH], Int[], Dict{Symbol,Any}())
+
+const __meta__BloomFilterHash = meta(BloomFilterHash,
+  Symbol[:XXHASH],
+  Type[XxHash],
+  Symbol[:XXHASH],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::BloomFilterHash, name::Symbol)
+  if name === :XXHASH
+    return (obj.values[name])::XxHash
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{BloomFilterHash}) = __meta__BloomFilterHash
+
 
 mutable struct Uncompressed <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function Uncompressed(; kwargs...)
+    obj = new(__meta__Uncompressed, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct Uncompressed
 
+const __meta__Uncompressed = meta(Uncompressed,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{Uncompressed}) = __meta__Uncompressed
+
+
 mutable struct BloomFilterCompression <: Thrift.TMsg
-  UNCOMPRESSED::Uncompressed
-  BloomFilterCompression() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function BloomFilterCompression(; kwargs...)
+    obj = new(__meta__BloomFilterCompression, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct BloomFilterCompression
-meta(t::Type{BloomFilterCompression}) = meta(t, Symbol[:UNCOMPRESSED], Int[], Dict{Symbol,Any}())
+
+const __meta__BloomFilterCompression = meta(BloomFilterCompression,
+  Symbol[:UNCOMPRESSED],
+  Type[Uncompressed],
+  Symbol[:UNCOMPRESSED],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::BloomFilterCompression, name::Symbol)
+  if name === :UNCOMPRESSED
+    return (obj.values[name])::Uncompressed
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{BloomFilterCompression}) = __meta__BloomFilterCompression
+
 
 mutable struct BloomFilterHeader <: Thrift.TMsg
-  numBytes::Int32
-  algorithm::BloomFilterAlgorithm
-  hash::BloomFilterHash
-  compression::BloomFilterCompression
-  BloomFilterHeader() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function BloomFilterHeader(; kwargs...)
+    obj = new(__meta__BloomFilterHeader, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct BloomFilterHeader
 
+const __meta__BloomFilterHeader = meta(BloomFilterHeader,
+  Symbol[:numBytes,:algorithm,:hash,:compression],
+  Type[Int32,BloomFilterAlgorithm,BloomFilterHash,BloomFilterCompression],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::BloomFilterHeader, name::Symbol)
+  if name === :numBytes
+    return (obj.values[name])::Int32
+  elseif name === :algorithm
+    return (obj.values[name])::BloomFilterAlgorithm
+  elseif name === :hash
+    return (obj.values[name])::BloomFilterHash
+  elseif name === :compression
+    return (obj.values[name])::BloomFilterCompression
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{BloomFilterHeader}) = __meta__BloomFilterHeader
+
+
 mutable struct PageHeader <: Thrift.TMsg
-  _type::Int32
-  uncompressed_page_size::Int32
-  compressed_page_size::Int32
-  crc::Int32
-  data_page_header::DataPageHeader
-  index_page_header::IndexPageHeader
-  dictionary_page_header::DictionaryPageHeader
-  data_page_header_v2::DataPageHeaderV2
-  PageHeader() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function PageHeader(; kwargs...)
+    obj = new(__meta__PageHeader, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct PageHeader
-meta(t::Type{PageHeader}) = meta(t, Symbol[:crc,:data_page_header,:index_page_header,:dictionary_page_header,:data_page_header_v2], Int[], Dict{Symbol,Any}())
+
+const __meta__PageHeader = meta(PageHeader,
+  Symbol[:_type,:uncompressed_page_size,:compressed_page_size,:crc,:data_page_header,:index_page_header,:dictionary_page_header,:data_page_header_v2],
+  Type[Int32,Int32,Int32,Int32,DataPageHeader,IndexPageHeader,DictionaryPageHeader,DataPageHeaderV2],
+  Symbol[:crc,:data_page_header,:index_page_header,:dictionary_page_header,:data_page_header_v2],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::PageHeader, name::Symbol)
+  if name === :_type
+    return (obj.values[name])::Int32
+  elseif name === :uncompressed_page_size
+    return (obj.values[name])::Int32
+  elseif name === :compressed_page_size
+    return (obj.values[name])::Int32
+  elseif name === :crc
+    return (obj.values[name])::Int32
+  elseif name === :data_page_header
+    return (obj.values[name])::DataPageHeader
+  elseif name === :index_page_header
+    return (obj.values[name])::IndexPageHeader
+  elseif name === :dictionary_page_header
+    return (obj.values[name])::DictionaryPageHeader
+  elseif name === :data_page_header_v2
+    return (obj.values[name])::DataPageHeaderV2
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{PageHeader}) = __meta__PageHeader
+
 
 mutable struct KeyValue <: Thrift.TMsg
-  key::String
-  value::String
-  KeyValue() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function KeyValue(; kwargs...)
+    obj = new(__meta__KeyValue, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct KeyValue
-meta(t::Type{KeyValue}) = meta(t, Symbol[:value], Int[], Dict{Symbol,Any}())
+
+const __meta__KeyValue = meta(KeyValue,
+  Symbol[:key,:value],
+  Type[String,String],
+  Symbol[:value],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::KeyValue, name::Symbol)
+  if name === :key
+    return (obj.values[name])::String
+  elseif name === :value
+    return (obj.values[name])::String
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{KeyValue}) = __meta__KeyValue
+
 
 mutable struct SortingColumn <: Thrift.TMsg
-  column_idx::Int32
-  descending::Bool
-  nulls_first::Bool
-  SortingColumn() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function SortingColumn(; kwargs...)
+    obj = new(__meta__SortingColumn, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct SortingColumn
 
+const __meta__SortingColumn = meta(SortingColumn,
+  Symbol[:column_idx,:descending,:nulls_first],
+  Type[Int32,Bool,Bool],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::SortingColumn, name::Symbol)
+  if name === :column_idx
+    return (obj.values[name])::Int32
+  elseif name === :descending
+    return (obj.values[name])::Bool
+  elseif name === :nulls_first
+    return (obj.values[name])::Bool
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{SortingColumn}) = __meta__SortingColumn
+
+
 mutable struct PageEncodingStats <: Thrift.TMsg
-  page_type::Int32
-  encoding::Int32
-  count::Int32
-  PageEncodingStats() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function PageEncodingStats(; kwargs...)
+    obj = new(__meta__PageEncodingStats, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct PageEncodingStats
 
+const __meta__PageEncodingStats = meta(PageEncodingStats,
+  Symbol[:page_type,:encoding,:count],
+  Type[Int32,Int32,Int32],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::PageEncodingStats, name::Symbol)
+  if name === :page_type
+    return (obj.values[name])::Int32
+  elseif name === :encoding
+    return (obj.values[name])::Int32
+  elseif name === :count
+    return (obj.values[name])::Int32
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{PageEncodingStats}) = __meta__PageEncodingStats
+
+
 mutable struct ColumnMetaData <: Thrift.TMsg
-  _type::Int32
-  encodings::Vector{Int32}
-  path_in_schema::Vector{String}
-  codec::Int32
-  num_values::Int64
-  total_uncompressed_size::Int64
-  total_compressed_size::Int64
-  key_value_metadata::Vector{KeyValue}
-  data_page_offset::Int64
-  index_page_offset::Int64
-  dictionary_page_offset::Int64
-  statistics::Statistics
-  encoding_stats::Vector{PageEncodingStats}
-  bloom_filter_offset::Int64
-  ColumnMetaData() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function ColumnMetaData(; kwargs...)
+    obj = new(__meta__ColumnMetaData, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct ColumnMetaData
-meta(t::Type{ColumnMetaData}) = meta(t, Symbol[:key_value_metadata,:index_page_offset,:dictionary_page_offset,:statistics,:encoding_stats,:bloom_filter_offset], Int[], Dict{Symbol,Any}())
+
+const __meta__ColumnMetaData = meta(ColumnMetaData,
+  Symbol[:_type,:encodings,:path_in_schema,:codec,:num_values,:total_uncompressed_size,:total_compressed_size,:key_value_metadata,:data_page_offset,:index_page_offset,:dictionary_page_offset,:statistics,:encoding_stats,:bloom_filter_offset],
+  Type[Int32,Vector{Int32},Vector{String},Int32,Int64,Int64,Int64,Vector{KeyValue},Int64,Int64,Int64,Statistics,Vector{PageEncodingStats},Int64],
+  Symbol[:key_value_metadata,:index_page_offset,:dictionary_page_offset,:statistics,:encoding_stats,:bloom_filter_offset],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::ColumnMetaData, name::Symbol)
+  if name === :_type
+    return (obj.values[name])::Int32
+  elseif name === :encodings
+    return (obj.values[name])::Vector{Int32}
+  elseif name === :path_in_schema
+    return (obj.values[name])::Vector{String}
+  elseif name === :codec
+    return (obj.values[name])::Int32
+  elseif name === :num_values
+    return (obj.values[name])::Int64
+  elseif name === :total_uncompressed_size
+    return (obj.values[name])::Int64
+  elseif name === :total_compressed_size
+    return (obj.values[name])::Int64
+  elseif name === :key_value_metadata
+    return (obj.values[name])::Vector{KeyValue}
+  elseif name === :data_page_offset
+    return (obj.values[name])::Int64
+  elseif name === :index_page_offset
+    return (obj.values[name])::Int64
+  elseif name === :dictionary_page_offset
+    return (obj.values[name])::Int64
+  elseif name === :statistics
+    return (obj.values[name])::Statistics
+  elseif name === :encoding_stats
+    return (obj.values[name])::Vector{PageEncodingStats}
+  elseif name === :bloom_filter_offset
+    return (obj.values[name])::Int64
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{ColumnMetaData}) = __meta__ColumnMetaData
+
 
 mutable struct EncryptionWithFooterKey <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function EncryptionWithFooterKey(; kwargs...)
+    obj = new(__meta__EncryptionWithFooterKey, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct EncryptionWithFooterKey
 
+const __meta__EncryptionWithFooterKey = meta(EncryptionWithFooterKey,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{EncryptionWithFooterKey}) = __meta__EncryptionWithFooterKey
+
+
 mutable struct EncryptionWithColumnKey <: Thrift.TMsg
-  path_in_schema::Vector{String}
-  key_metadata::Vector{UInt8}
-  EncryptionWithColumnKey() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function EncryptionWithColumnKey(; kwargs...)
+    obj = new(__meta__EncryptionWithColumnKey, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct EncryptionWithColumnKey
-meta(t::Type{EncryptionWithColumnKey}) = meta(t, Symbol[:key_metadata], Int[], Dict{Symbol,Any}())
+
+const __meta__EncryptionWithColumnKey = meta(EncryptionWithColumnKey,
+  Symbol[:path_in_schema,:key_metadata],
+  Type[Vector{String},Vector{UInt8}],
+  Symbol[:key_metadata],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::EncryptionWithColumnKey, name::Symbol)
+  if name === :path_in_schema
+    return (obj.values[name])::Vector{String}
+  elseif name === :key_metadata
+    return (obj.values[name])::Vector{UInt8}
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{EncryptionWithColumnKey}) = __meta__EncryptionWithColumnKey
+
 
 mutable struct ColumnCryptoMetaData <: Thrift.TMsg
-  ENCRYPTION_WITH_FOOTER_KEY::EncryptionWithFooterKey
-  ENCRYPTION_WITH_COLUMN_KEY::EncryptionWithColumnKey
-  ColumnCryptoMetaData() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function ColumnCryptoMetaData(; kwargs...)
+    obj = new(__meta__ColumnCryptoMetaData, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct ColumnCryptoMetaData
-meta(t::Type{ColumnCryptoMetaData}) = meta(t, Symbol[:ENCRYPTION_WITH_FOOTER_KEY,:ENCRYPTION_WITH_COLUMN_KEY], Int[], Dict{Symbol,Any}())
+
+const __meta__ColumnCryptoMetaData = meta(ColumnCryptoMetaData,
+  Symbol[:ENCRYPTION_WITH_FOOTER_KEY,:ENCRYPTION_WITH_COLUMN_KEY],
+  Type[EncryptionWithFooterKey,EncryptionWithColumnKey],
+  Symbol[:ENCRYPTION_WITH_FOOTER_KEY,:ENCRYPTION_WITH_COLUMN_KEY],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::ColumnCryptoMetaData, name::Symbol)
+  if name === :ENCRYPTION_WITH_FOOTER_KEY
+    return (obj.values[name])::EncryptionWithFooterKey
+  elseif name === :ENCRYPTION_WITH_COLUMN_KEY
+    return (obj.values[name])::EncryptionWithColumnKey
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{ColumnCryptoMetaData}) = __meta__ColumnCryptoMetaData
+
 
 mutable struct ColumnChunk <: Thrift.TMsg
-  file_path::String
-  file_offset::Int64
-  meta_data::ColumnMetaData
-  offset_index_offset::Int64
-  offset_index_length::Int32
-  column_index_offset::Int64
-  column_index_length::Int32
-  crypto_metadata::ColumnCryptoMetaData
-  encrypted_column_metadata::Vector{UInt8}
-  ColumnChunk() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function ColumnChunk(; kwargs...)
+    obj = new(__meta__ColumnChunk, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct ColumnChunk
-meta(t::Type{ColumnChunk}) = meta(t, Symbol[:file_path,:meta_data,:offset_index_offset,:offset_index_length,:column_index_offset,:column_index_length,:crypto_metadata,:encrypted_column_metadata], Int[], Dict{Symbol,Any}())
+
+const __meta__ColumnChunk = meta(ColumnChunk,
+  Symbol[:file_path,:file_offset,:meta_data,:offset_index_offset,:offset_index_length,:column_index_offset,:column_index_length,:crypto_metadata,:encrypted_column_metadata],
+  Type[String,Int64,ColumnMetaData,Int64,Int32,Int64,Int32,ColumnCryptoMetaData,Vector{UInt8}],
+  Symbol[:file_path,:meta_data,:offset_index_offset,:offset_index_length,:column_index_offset,:column_index_length,:crypto_metadata,:encrypted_column_metadata],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::ColumnChunk, name::Symbol)
+  if name === :file_path
+    return (obj.values[name])::String
+  elseif name === :file_offset
+    return (obj.values[name])::Int64
+  elseif name === :meta_data
+    return (obj.values[name])::ColumnMetaData
+  elseif name === :offset_index_offset
+    return (obj.values[name])::Int64
+  elseif name === :offset_index_length
+    return (obj.values[name])::Int32
+  elseif name === :column_index_offset
+    return (obj.values[name])::Int64
+  elseif name === :column_index_length
+    return (obj.values[name])::Int32
+  elseif name === :crypto_metadata
+    return (obj.values[name])::ColumnCryptoMetaData
+  elseif name === :encrypted_column_metadata
+    return (obj.values[name])::Vector{UInt8}
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{ColumnChunk}) = __meta__ColumnChunk
+
 
 mutable struct RowGroup <: Thrift.TMsg
-  columns::Vector{ColumnChunk}
-  total_byte_size::Int64
-  num_rows::Int64
-  sorting_columns::Vector{SortingColumn}
-  file_offset::Int64
-  total_compressed_size::Int64
-  ordinal::Int16
-  RowGroup() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function RowGroup(; kwargs...)
+    obj = new(__meta__RowGroup, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct RowGroup
-meta(t::Type{RowGroup}) = meta(t, Symbol[:sorting_columns,:file_offset,:total_compressed_size,:ordinal], Int[], Dict{Symbol,Any}())
+
+const __meta__RowGroup = meta(RowGroup,
+  Symbol[:columns,:total_byte_size,:num_rows,:sorting_columns,:file_offset,:total_compressed_size,:ordinal],
+  Type[Vector{ColumnChunk},Int64,Int64,Vector{SortingColumn},Int64,Int64,Int16],
+  Symbol[:sorting_columns,:file_offset,:total_compressed_size,:ordinal],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::RowGroup, name::Symbol)
+  if name === :columns
+    return (obj.values[name])::Vector{ColumnChunk}
+  elseif name === :total_byte_size
+    return (obj.values[name])::Int64
+  elseif name === :num_rows
+    return (obj.values[name])::Int64
+  elseif name === :sorting_columns
+    return (obj.values[name])::Vector{SortingColumn}
+  elseif name === :file_offset
+    return (obj.values[name])::Int64
+  elseif name === :total_compressed_size
+    return (obj.values[name])::Int64
+  elseif name === :ordinal
+    return (obj.values[name])::Int16
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{RowGroup}) = __meta__RowGroup
+
 
 mutable struct TypeDefinedOrder <: Thrift.TMsg
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function TypeDefinedOrder(; kwargs...)
+    obj = new(__meta__TypeDefinedOrder, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct TypeDefinedOrder
 
+const __meta__TypeDefinedOrder = meta(TypeDefinedOrder,
+  Symbol[],
+  Type[],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+meta(::Type{TypeDefinedOrder}) = __meta__TypeDefinedOrder
+
+
 mutable struct ColumnOrder <: Thrift.TMsg
-  TYPE_ORDER::TypeDefinedOrder
-  ColumnOrder() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function ColumnOrder(; kwargs...)
+    obj = new(__meta__ColumnOrder, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct ColumnOrder
-meta(t::Type{ColumnOrder}) = meta(t, Symbol[:TYPE_ORDER], Int[], Dict{Symbol,Any}())
+
+const __meta__ColumnOrder = meta(ColumnOrder,
+  Symbol[:TYPE_ORDER],
+  Type[TypeDefinedOrder],
+  Symbol[:TYPE_ORDER],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::ColumnOrder, name::Symbol)
+  if name === :TYPE_ORDER
+    return (obj.values[name])::TypeDefinedOrder
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{ColumnOrder}) = __meta__ColumnOrder
+
 
 mutable struct PageLocation <: Thrift.TMsg
-  offset::Int64
-  compressed_page_size::Int32
-  first_row_index::Int64
-  PageLocation() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function PageLocation(; kwargs...)
+    obj = new(__meta__PageLocation, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct PageLocation
 
+const __meta__PageLocation = meta(PageLocation,
+  Symbol[:offset,:compressed_page_size,:first_row_index],
+  Type[Int64,Int32,Int64],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::PageLocation, name::Symbol)
+  if name === :offset
+    return (obj.values[name])::Int64
+  elseif name === :compressed_page_size
+    return (obj.values[name])::Int32
+  elseif name === :first_row_index
+    return (obj.values[name])::Int64
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{PageLocation}) = __meta__PageLocation
+
+
 mutable struct OffsetIndex <: Thrift.TMsg
-  page_locations::Vector{PageLocation}
-  OffsetIndex() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function OffsetIndex(; kwargs...)
+    obj = new(__meta__OffsetIndex, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct OffsetIndex
 
+const __meta__OffsetIndex = meta(OffsetIndex,
+  Symbol[:page_locations],
+  Type[Vector{PageLocation}],
+  Symbol[],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::OffsetIndex, name::Symbol)
+  if name === :page_locations
+    return (obj.values[name])::Vector{PageLocation}
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{OffsetIndex}) = __meta__OffsetIndex
+
+
 mutable struct ColumnIndex <: Thrift.TMsg
-  null_pages::Vector{Bool}
-  min_values::Vector{Vector{UInt8}}
-  max_values::Vector{Vector{UInt8}}
-  boundary_order::Int32
-  null_counts::Vector{Int64}
-  ColumnIndex() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function ColumnIndex(; kwargs...)
+    obj = new(__meta__ColumnIndex, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct ColumnIndex
-meta(t::Type{ColumnIndex}) = meta(t, Symbol[:null_counts], Int[], Dict{Symbol,Any}())
+
+const __meta__ColumnIndex = meta(ColumnIndex,
+  Symbol[:null_pages,:min_values,:max_values,:boundary_order,:null_counts],
+  Type[Vector{Bool},Vector{Vector{UInt8}},Vector{Vector{UInt8}},Int32,Vector{Int64}],
+  Symbol[:null_counts],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::ColumnIndex, name::Symbol)
+  if name === :null_pages
+    return (obj.values[name])::Vector{Bool}
+  elseif name === :min_values
+    return (obj.values[name])::Vector{Vector{UInt8}}
+  elseif name === :max_values
+    return (obj.values[name])::Vector{Vector{UInt8}}
+  elseif name === :boundary_order
+    return (obj.values[name])::Int32
+  elseif name === :null_counts
+    return (obj.values[name])::Vector{Int64}
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{ColumnIndex}) = __meta__ColumnIndex
+
 
 mutable struct AesGcmV1 <: Thrift.TMsg
-  aad_prefix::Vector{UInt8}
-  aad_file_unique::Vector{UInt8}
-  supply_aad_prefix::Bool
-  AesGcmV1() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function AesGcmV1(; kwargs...)
+    obj = new(__meta__AesGcmV1, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct AesGcmV1
-meta(t::Type{AesGcmV1}) = meta(t, Symbol[:aad_prefix,:aad_file_unique,:supply_aad_prefix], Int[], Dict{Symbol,Any}())
+
+const __meta__AesGcmV1 = meta(AesGcmV1,
+  Symbol[:aad_prefix,:aad_file_unique,:supply_aad_prefix],
+  Type[Vector{UInt8},Vector{UInt8},Bool],
+  Symbol[:aad_prefix,:aad_file_unique,:supply_aad_prefix],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::AesGcmV1, name::Symbol)
+  if name === :aad_prefix
+    return (obj.values[name])::Vector{UInt8}
+  elseif name === :aad_file_unique
+    return (obj.values[name])::Vector{UInt8}
+  elseif name === :supply_aad_prefix
+    return (obj.values[name])::Bool
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{AesGcmV1}) = __meta__AesGcmV1
+
 
 mutable struct AesGcmCtrV1 <: Thrift.TMsg
-  aad_prefix::Vector{UInt8}
-  aad_file_unique::Vector{UInt8}
-  supply_aad_prefix::Bool
-  AesGcmCtrV1() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function AesGcmCtrV1(; kwargs...)
+    obj = new(__meta__AesGcmCtrV1, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct AesGcmCtrV1
-meta(t::Type{AesGcmCtrV1}) = meta(t, Symbol[:aad_prefix,:aad_file_unique,:supply_aad_prefix], Int[], Dict{Symbol,Any}())
+
+const __meta__AesGcmCtrV1 = meta(AesGcmCtrV1,
+  Symbol[:aad_prefix,:aad_file_unique,:supply_aad_prefix],
+  Type[Vector{UInt8},Vector{UInt8},Bool],
+  Symbol[:aad_prefix,:aad_file_unique,:supply_aad_prefix],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::AesGcmCtrV1, name::Symbol)
+  if name === :aad_prefix
+    return (obj.values[name])::Vector{UInt8}
+  elseif name === :aad_file_unique
+    return (obj.values[name])::Vector{UInt8}
+  elseif name === :supply_aad_prefix
+    return (obj.values[name])::Bool
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{AesGcmCtrV1}) = __meta__AesGcmCtrV1
+
 
 mutable struct EncryptionAlgorithm <: Thrift.TMsg
-  AES_GCM_V1::AesGcmV1
-  AES_GCM_CTR_V1::AesGcmCtrV1
-  EncryptionAlgorithm() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function EncryptionAlgorithm(; kwargs...)
+    obj = new(__meta__EncryptionAlgorithm, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct EncryptionAlgorithm
-meta(t::Type{EncryptionAlgorithm}) = meta(t, Symbol[:AES_GCM_V1,:AES_GCM_CTR_V1], Int[], Dict{Symbol,Any}())
+
+const __meta__EncryptionAlgorithm = meta(EncryptionAlgorithm,
+  Symbol[:AES_GCM_V1,:AES_GCM_CTR_V1],
+  Type[AesGcmV1,AesGcmCtrV1],
+  Symbol[:AES_GCM_V1,:AES_GCM_CTR_V1],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::EncryptionAlgorithm, name::Symbol)
+  if name === :AES_GCM_V1
+    return (obj.values[name])::AesGcmV1
+  elseif name === :AES_GCM_CTR_V1
+    return (obj.values[name])::AesGcmCtrV1
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{EncryptionAlgorithm}) = __meta__EncryptionAlgorithm
+
 
 mutable struct FileMetaData <: Thrift.TMsg
-  version::Int32
-  schema::Vector{SchemaElement}
-  num_rows::Int64
-  row_groups::Vector{RowGroup}
-  key_value_metadata::Vector{KeyValue}
-  created_by::String
-  column_orders::Vector{ColumnOrder}
-  encryption_algorithm::EncryptionAlgorithm
-  footer_signing_key_metadata::Vector{UInt8}
-  FileMetaData() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function FileMetaData(; kwargs...)
+    obj = new(__meta__FileMetaData, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct FileMetaData
-meta(t::Type{FileMetaData}) = meta(t, Symbol[:key_value_metadata,:created_by,:column_orders,:encryption_algorithm,:footer_signing_key_metadata], Int[], Dict{Symbol,Any}())
+
+const __meta__FileMetaData = meta(FileMetaData,
+  Symbol[:version,:schema,:num_rows,:row_groups,:key_value_metadata,:created_by,:column_orders,:encryption_algorithm,:footer_signing_key_metadata],
+  Type[Int32,Vector{SchemaElement},Int64,Vector{RowGroup},Vector{KeyValue},String,Vector{ColumnOrder},EncryptionAlgorithm,Vector{UInt8}],
+  Symbol[:key_value_metadata,:created_by,:column_orders,:encryption_algorithm,:footer_signing_key_metadata],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::FileMetaData, name::Symbol)
+  if name === :version
+    return (obj.values[name])::Int32
+  elseif name === :schema
+    return (obj.values[name])::Vector{SchemaElement}
+  elseif name === :num_rows
+    return (obj.values[name])::Int64
+  elseif name === :row_groups
+    return (obj.values[name])::Vector{RowGroup}
+  elseif name === :key_value_metadata
+    return (obj.values[name])::Vector{KeyValue}
+  elseif name === :created_by
+    return (obj.values[name])::String
+  elseif name === :column_orders
+    return (obj.values[name])::Vector{ColumnOrder}
+  elseif name === :encryption_algorithm
+    return (obj.values[name])::EncryptionAlgorithm
+  elseif name === :footer_signing_key_metadata
+    return (obj.values[name])::Vector{UInt8}
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{FileMetaData}) = __meta__FileMetaData
+
 
 mutable struct FileCryptoMetaData <: Thrift.TMsg
-  encryption_algorithm::EncryptionAlgorithm
-  key_metadata::Vector{UInt8}
-  FileCryptoMetaData() = (o=new(); fillunset(o); o)
+  meta::ThriftMeta
+  values::Dict{Symbol,Any}
+  
+  function FileCryptoMetaData(; kwargs...)
+    obj = new(__meta__FileCryptoMetaData, Dict{Symbol,Any}())
+    values = obj.values
+    symdict = obj.meta.symdict
+    for nv in kwargs
+      fldname, fldval = nv
+      fldtype = symdict[fldname].jtype
+      (fldname in keys(symdict)) || error(string(typeof(obj), " has no field with name ", fldname))
+      values[fldname] = isa(fldval, fldtype) ? fldval : convert(fldtype, fldval)
+    end
+    Thrift.setdefaultproperties!(obj)
+    obj
+  end
 end # mutable struct FileCryptoMetaData
-meta(t::Type{FileCryptoMetaData}) = meta(t, Symbol[:key_metadata], Int[], Dict{Symbol,Any}())
+
+const __meta__FileCryptoMetaData = meta(FileCryptoMetaData,
+  Symbol[:encryption_algorithm,:key_metadata],
+  Type[EncryptionAlgorithm,Vector{UInt8}],
+  Symbol[:key_metadata],
+  Int[],
+  Dict{Symbol,Any}()
+)
+
+function Base.getproperty(obj::FileCryptoMetaData, name::Symbol)
+  if name === :encryption_algorithm
+    return (obj.values[name])::EncryptionAlgorithm
+  elseif name === :key_metadata
+    return (obj.values[name])::Vector{UInt8}
+  else
+    getfield(obj, name)
+  end
+end
+
+meta(::Type{FileCryptoMetaData}) = __meta__FileCryptoMetaData
+
