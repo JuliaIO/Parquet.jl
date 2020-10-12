@@ -71,4 +71,6 @@ function test_write()
     close(pf)
 end
 
-test_write()
+@testset "writer" begin
+    test_write()
+end

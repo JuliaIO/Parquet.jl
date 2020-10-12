@@ -83,7 +83,7 @@ const decimal_encoding_testdata = [
 ]
 
 function test_codec()
-    println("testing reading bitpacked run (old scheme)...")
+    @debug("testing reading bitpacked run (old scheme)")
     let data = UInt8[0x05, 0x39, 0x77]
         byte_width = Parquet.@bit2bytewidth(UInt8(3))
         typ = Parquet.@byt2itype(byte_width)
@@ -93,9 +93,8 @@ function test_codec()
         Parquet.read_bitpacked_run_old(inp, out, Int32(8), UInt8(3))
         @test out.data == Int32[0:7;]
     end
-    println("passed.")
 
-    println("testing reading bitpacked run...")
+    @debug("testing reading bitpacked run")
     let data = UInt8[0x88, 0xc6, 0xfa]
         byte_width = Parquet.@bit2bytewidth(UInt8(3))
         typ = Parquet.@byt2itype(byte_width)
@@ -105,9 +104,8 @@ function test_codec()
         Parquet.read_bitpacked_run(inp, out, 8, UInt8(3), byte_width)
         @test out.data == Int32[0:7;]
     end
-    println("passed.")
 
-    println("testing decimal decoding...")    
+    @debug("testing decimal decoding")
     for data in decimal_encoding_testdata
         (d, f1) = Parquet.map_logical_decimal(Int32(data.precision), Int32(data.scale))
         f2 = (bytes)->Parquet.logical_decimal(bytes, data.precision, data.scale)
@@ -123,8 +121,8 @@ function test_codec()
             @test all(map(f3, data.byte_data) .== convert(Vector{Float64}, data.converted_data))
         end
     end
-
-    println("passed.")
 end
 
-test_codec()
+@testset "codec" begin
+    test_codec()
+end
