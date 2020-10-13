@@ -280,7 +280,7 @@ function Base.iterate(ccpv::ColumnChunkPageValues{T}, startpos::Int64) where {T}
                 if ccpv.converter_fn === identity
                     read_plain_values(inp, ccpv.vals_out, nnonmissing)
                 else
-                    read_plain_values(inp, ccpv.vals_out, nnonmissing, ccpv.converter_fn)
+                    read_plain_values(inp, ccpv.vals_out, nnonmissing, ccpv.converter_fn, ccpv.ccp.col.meta_data._type)
                 end
             end
         elseif pagetype === PageType.DICTIONARY_PAGE
@@ -288,7 +288,7 @@ function Base.iterate(ccpv::ColumnChunkPageValues{T}, startpos::Int64) where {T}
             if ccpv.converter_fn === identity
                 read_plain_values(inp, ccpv.valdict_out, num_values)
             else
-                read_plain_values(inp, ccpv.valdict_out, num_values, ccpv.converter_fn)
+                read_plain_values(inp, ccpv.valdict_out, num_values, ccpv.converter_fn, ccpv.ccp.col.meta_data._type)
             end
         else
             error("unsupported page type $typ")

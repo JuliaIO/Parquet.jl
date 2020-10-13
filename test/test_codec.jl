@@ -80,6 +80,26 @@ const decimal_encoding_testdata = [
         ],
         converted_data=[Decimal(0, 1, 2), Decimal(0, 257, 2)]
     ),
+    (
+        precision=Int32(4),
+        scale=Int32(2),
+        datatype=Decimal,
+        byte_data=Int64[
+            200,
+            1234,
+        ],
+        converted_data=Decimal[Decimal(0, 200, -2), Decimal(0, 1234, -2)]
+    ),
+    (
+        precision=Int32(4),
+        scale=Int32(2),
+        datatype=Decimal,
+        byte_data=Int32[
+            200,
+            1234,
+        ],
+        converted_data=Decimal[Decimal(0, 200, -2), Decimal(0, 1234, -2)]
+    ),
 ]
 
 function test_codec()
@@ -121,6 +141,28 @@ function test_codec()
             @test all(map(f3, data.byte_data) .== convert(Vector{Float64}, data.converted_data))
         end
     end
+
+    iob = IOBuffer()
+    write(iob, Int64(1000))
+    write(iob, Int64(1234))
+    is = Parquet.InputState(take!(iob), 0)
+    os = Parquet.OutputState(Decimals.Decimal, 2)
+    Parquet.read_plain_values(is, os, Int32(2), (v)->Parquet.logical_decimal(v, 4, 2), Parquet.PAR2._Type.INT64)
+    @test os.data == Decimal[Decimal(0, 1000, -2), Decimal(0, 1234, -2)]
+
+    iob = IOBuffer()
+    write(iob, Int32(1000))
+    write(iob, Int32(1234))
+    is = Parquet.InputState(take!(iob), 0)
+    os = Parquet.OutputState(Decimals.Decimal, 2)
+    Parquet.read_plain_values(is, os, Int32(2), (v)->Parquet.logical_decimal(v, 4, 2), Parquet.PAR2._Type.INT32)
+    @test os.data == Decimal[Decimal(0, 1000, -2), Decimal(0, 1234, -2)]
+
+    iob = IOBuffer(UInt8[0,0,0,0,1,0,0,0,1,1])
+    is = Parquet.InputState(take!(iob), 0)
+    os = Parquet.OutputState(Decimals.Decimal, 2)
+    Parquet.read_plain_values(is, os, Int32(2), (v)->Parquet.logical_decimal(v, 4, 2), Parquet.PAR2._Type.FIXED_LEN_BYTE_ARRAY)
+    @test os.data == Decimal[Decimal(0, 1, -2), Decimal(0, 257, -2)]
 end
 
 @testset "codec" begin

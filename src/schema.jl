@@ -75,7 +75,16 @@ is_logical_string(sch::SchemaElement) = hasproperty(sch, :_type) && (sch._type =
 # converted_type is usually not set for INT96 types, but they are used exclusively used for timestamps only
 is_logical_timestamp(sch::SchemaElement) = hasproperty(sch, :_type) && (sch._type === _Type.INT96)
 
-is_logical_decimal(sch::SchemaElement) = hasproperty(sch, :_type) && (sch._type === _Type.FIXED_LEN_BYTE_ARRAY) && ((hasproperty(sch, :converted_type) && (sch.converted_type === ConvertedType.DECIMAL)) || (hasproperty(sch, :logicalType) && hasproperty(sch.logicalType, :DECIMAL)))
+function is_logical_decimal(sch::SchemaElement)
+    if hasproperty(sch, :_type)
+        if (sch._type === _Type.FIXED_LEN_BYTE_ARRAY) || (sch._type === _Type.INT64)
+            if (hasproperty(sch, :converted_type) && (sch.converted_type === ConvertedType.DECIMAL)) || (hasproperty(sch, :logicalType) && hasproperty(sch.logicalType, :DECIMAL))
+                return true
+            end
+        end
+    end
+    false
+end
 
 function path_in_schema(sch::Schema, schelem::SchemaElement)
     for (n,v) in sch.name_lookup

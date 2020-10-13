@@ -162,26 +162,46 @@ function read_plain_values(inp::InputState, out::OutputState{Vector{UInt8}}, cou
     out.offset += count
     nothing
 end
-function read_plain_values(inp::InputState, out::OutputState{T}, count::Int32, converter_fn::Function) where T <: Union{Decimal,Float64,Int16,Int32,Int64,Int128}
+function read_plain_values(inp::InputState, out::OutputState{T}, count::Int32, converter_fn::Function, storage_type::Int32) where T <: Union{Decimal,Float64,Int16,Int32,Int64,Int128}
     arr = out.data
     offset = out.offset
     @assert (offset + count) <= length(arr)
-    elem_bytes_len = Int32((length(inp.data) - inp.offset) / length(arr))
-    #@debug("reading decimal plain values", offset, count, length(arr), length(inp.data), inp.offset, elem_bytes_len)
-    @inbounds for i in 1:count
-        arr[i+offset] = converter_fn(read_plain_byte_array(inp, elem_bytes_len))
+    if storage_type === _Type.FIXED_LEN_BYTE_ARRAY
+        elem_bytes_len = Int32((length(inp.data) - inp.offset) / length(arr))
+        #@debug("reading decimal plain values", offset, count, length(arr), length(inp.data), inp.offset, elem_bytes_len)
+        @inbounds for i in 1:count
+            arr[i+offset] = converter_fn(read_plain_byte_array(inp, elem_bytes_len))
+        end
+    elseif storage_type === _Type.INT64
+        @inbounds for i in 1:count
+            arr[i+offset] = converter_fn(read_fixed(inp, Int64))
+        end
+    elseif storage_type === _Type.INT32
+        @inbounds for i in 1:count
+            arr[i+offset] = converter_fn(read_fixed(inp, Int32))
+        end
+    else
+        error("unsupported storage type $(storage_type) for $T")
     end
     out.offset += count
     nothing
 end
-function read_plain_values(inp::InputState, out::OutputState{String}, count::Int32, converter_fn::Function)
-    # _Type.FIXED_LEN_BYTE_ARRAY is most likely same as byte array
+function read_plain_values(inp::InputState, out::OutputState{String}, count::Int32, converter_fn::Function, storage_type::Int32)
     #@debug("reading plain values", type=Vector{UInt8}, count=count)
     arr = out.data
     offset = out.offset
     @assert (offset + count) <= length(arr)
-    @inbounds for i in 1:count
-        arr[i+offset] = converter_fn(read_plain_byte_array(inp))
+    if storage_type === _Type.BYTE_ARRAY
+        @inbounds for i in 1:count
+            arr[i+offset] = converter_fn(read_plain_byte_array(inp))
+        end
+    elseif storage_type === _Type.FIXED_LEN_BYTE_ARRAY
+        elem_bytes_len = Int32((length(inp.data) - inp.offset) / length(arr))
+        @inbounds for i in 1:count
+            arr[i+offset] = converter_fn(read_plain_byte_array(inp, elem_bytes_len))
+        end
+    else
+        error("unsupported storage type $(storage_type) for String")
     end
     out.offset += count
     nothing
@@ -199,13 +219,17 @@ function read_plain_values(inp::InputState, out::OutputState{T}, count::Int32) w
     out.offset += count
     nothing
 end
-function read_plain_values(inp::InputState, out::OutputState{DateTime}, count::Int32, converter_fn::Function)
+function read_plain_values(inp::InputState, out::OutputState{DateTime}, count::Int32, converter_fn::Function, storage_type::Int32)
     #@debug("reading plain values", type=T, count=count)
     arr = out.data
     offset = out.offset
     @assert (offset + count) <= length(arr)
-    @inbounds for i in 1:count
-        arr[i+offset] = converter_fn(read_fixed(inp, Int128))
+    if storage_type === _Type.INT96
+        @inbounds for i in 1:count
+            arr[i+offset] = converter_fn(read_fixed(inp, Int128))
+        end
+    else
+        error("unsupported storage type $(storage_type) for DateTime")
     end
     #@debug("read $(length(arr)) plain values")
     out.offset += count
@@ -414,15 +438,19 @@ end
 
 logical_string(bytes::Vector{UInt8}) = String(bytes)
 
-function logical_decimal(bytes::Vector{UInt8}, precision::Integer, scale::Integer; use_float::Bool=false)
+function logical_decimal(bytes::Union{Int64,Int32,Vector{UInt8}}, precision::Integer, scale::Integer; use_float::Bool=false)
     T = logical_decimal_unscaled_type(Int32(precision))
     if scale == 0
         logical_decimal_integer(bytes, T)
     elseif use_float
-        logical_decimal_float64(bytes, T, scale)
+        logical_decimal_float64(bytes, T, Int32(scale))
     else
-        logical_decimal_scaled(bytes, T, scale)
+        logical_decimal_scaled(bytes, T, Int32(scale))
     end
+end
+
+function logical_decimal_integer(intval::Union{Int64,Int32}, ::Type{T}) where T <: Union{UInt16,UInt32,UInt64,UInt128}
+    signed(T)(intval)
 end
 
 function logical_decimal_integer(bytes::Vector{UInt8}, ::Type{T}) where T <: Union{UInt16,UInt32,UInt64,UInt128}
@@ -434,7 +462,7 @@ function logical_decimal_integer(bytes::Vector{UInt8}, ::Type{T}) where T <: Uni
     reinterpret(signed(T), uintval)
 end
 
-function logical_decimal_float64(bytes::Vector{UInt8}, ::Type{T}, scale::Int32) where T <: Union{UInt16,UInt32,UInt64,UInt128}
+function logical_decimal_float64(bytes::Union{Int64,Int32,Vector{UInt8}}, ::Type{T}, scale::Int32) where T <: Union{UInt16,UInt32,UInt64,UInt128}
     if scale > 0
         logical_decimal_integer(bytes, T) / 10^scale
     else
@@ -442,7 +470,7 @@ function logical_decimal_float64(bytes::Vector{UInt8}, ::Type{T}, scale::Int32) 
     end
 end
 
-function logical_decimal_scaled(bytes::Vector{UInt8}, ::Type{T}, scale::Int32) where T <: Union{UInt16,UInt32,UInt64,UInt128}
+function logical_decimal_scaled(bytes::Union{Int64,Int32,Vector{UInt8}}, ::Type{T}, scale::Int32) where T <: Union{UInt16,UInt32,UInt64,UInt128}
     intval = logical_decimal_integer(bytes, T)
     sign = (intval < 0) ? 1 : 0
     intval = abs(intval)
