@@ -1,28 +1,6 @@
 using Parquet
 using Test
 
-function test_col_cursor(file::String)
-    p = ParFile(file)
-    println("loaded ", file)
-
-    nr = nrows(p)
-    cnames = colnames(p)
-    for cname in cnames
-        rr = 1:nr
-        println("\tcolumn ", cname, " rows:", rr)
-        println("\tvalue, defn, repn, next idx")
-        t1 = time()
-        cc = Parquet.ColCursor(p, rr, cname)
-        num_read = 0
-        for (v,i) in enumerate(cc)
-            val,defn,repn = v
-            num_read += 1
-        end
-        println("\t\t", isnull(val) ? nothing : get(val), ", ", defn, ", ", repn, ", ", i)
-        println("\t\tread $num_read values in $(time()-t1) time")
-    end
-end
-
 function test_row_cursor(file::String)
     p = ParFile(file)
 
@@ -31,10 +9,19 @@ function test_row_cursor(file::String)
     cnames = colnames(p)
     rc = RecordCursor(p)
     rec = nothing
+    nread = 0
     for i in rc
         rec = i
+        nread += 1
     end
-    @info("loaded", file, count=nr, last_record=rec, time_to_read=time()-t1)
+    @test nr == nread
+    @debug("loaded", file, count=nr, last_record=rec, time_to_read=time()-t1)
+
+    iob = IOBuffer()
+    show(iob, rc)
+    sb = take!(iob)
+    @test !isempty(sb)
+    @debug("row cursor show", file, showbuffer=String(sb))
 end
 
 function test_batchedcols_cursor(file::String)
@@ -45,18 +32,19 @@ function test_batchedcols_cursor(file::String)
     cnames = colnames(p)
     cc = BatchedColumnsCursor(p)
     batch = nothing
+    nread = 0
     for i in cc
         batch = i
+        nread += length(first(batch))
     end
-    @info("loaded", file, count=nr, ncols=length(propertynames(batch)), time_to_read=time()-t1)
-end
+    @test nr == nread
+    @debug("loaded", file, count=nr, ncols=length(propertynames(batch)), time_to_read=time()-t1)
 
-function test_col_cursor_all_files()
-    for encformat in ("SNAPPY", "GZIP", "NONE")
-        for fname in ("nation", "customer")
-            test_col_cursor(joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"))
-        end
-    end
+    iob = IOBuffer()
+    show(iob, cc)
+    sb = take!(iob)
+    @test !isempty(sb)
+    @debug("batched column cursor show", file, showbuffer=String(sb))
 end
 
 function test_row_cursor_all_files()
@@ -75,6 +63,7 @@ function test_batchedcols_cursor_all_files()
     end
 end
 
-#test_col_cursor_all_files()
-test_row_cursor_all_files()
-test_batchedcols_cursor_all_files()
+@testset "cursors" begin
+    test_row_cursor_all_files()
+    test_batchedcols_cursor_all_files()
+end
