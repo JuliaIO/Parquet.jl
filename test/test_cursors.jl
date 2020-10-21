@@ -2,7 +2,7 @@ using Parquet
 using Test
 
 function test_row_cursor(file::String)
-    p = ParFile(file)
+    p = Parquet.File(file)
 
     t1 = time()
     nr = nrows(p)
@@ -25,7 +25,7 @@ function test_row_cursor(file::String)
 end
 
 function test_batchedcols_cursor(file::String)
-    p = ParFile(file)
+    p = Parquet.File(file)
 
     t1 = time()
     nr = nrows(p)

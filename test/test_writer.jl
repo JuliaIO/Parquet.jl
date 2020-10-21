@@ -30,7 +30,7 @@ function test_write()
 
     write_parquet(tmpfile, tbl)
 
-    pf = ParFile(tmpfile)
+    pf = Parquet.File(tmpfile)
 
     # the file is very small so only one rowgroup
     col_chunks = columns(pf, 1)

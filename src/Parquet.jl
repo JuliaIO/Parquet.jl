@@ -30,7 +30,7 @@ end
 
 import Base: show, open, close, values, eltype, length
 
-export is_par_file, ParFile, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
+export is_par_file, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
 export schema
 export logical_timestamp, logical_string
 export RecordCursor, BatchedColumnsCursor

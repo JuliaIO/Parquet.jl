@@ -38,7 +38,7 @@ function cacheget(fetcher, lru::PageLRU, chunk::ColumnChunk, startpos::Int64)
 end
 
 """
-    ParFile(path; map_logical_types) => ParFile
+    Parquet.File(path; map_logical_types) => Parquet.File
 
 Represents a Parquet file at `path` open for reading. Options to map logical types can be provided via `map_logical_types`.
 
@@ -48,9 +48,9 @@ Represents a Parquet file at `path` open for reading. Options to map logical typ
 - `true`: default mappings are attempted on all columns (bytearray => String, int96 => DateTime)
 - A user supplied dict mapping column names to a tuple of type and a converter function
 
-Returns a `ParFile` type that keeps a handle to the open file and the file metadata and also holds a LRU cache of raw bytes of the pages read.
+Returns a `Parquet.File` type that keeps a handle to the open file and the file metadata and also holds a LRU cache of raw bytes of the pages read.
 """
-mutable struct ParFile
+mutable struct File
     path::String
     handle::IOStream
     meta::FileMetaData
@@ -58,34 +58,34 @@ mutable struct ParFile
     page_cache::PageLRU
 end
 
-function ParFile(path::AbstractString; map_logical_types::Dict=TLogicalTypeMap())
+function File(path::AbstractString; map_logical_types::Dict=TLogicalTypeMap())
     f = open(path)
     try
-        return ParFile(path, f; map_logical_types=map_logical_types)
+        return File(path, f; map_logical_types=map_logical_types)
     catch ex
         close(f)
         rethrow(ex)
     end
 end
 
-function ParFile(path::AbstractString, handle::IOStream; map_logical_types::Dict=TLogicalTypeMap())
+function File(path::AbstractString, handle::IOStream; map_logical_types::Dict=TLogicalTypeMap())
     is_par_file(handle) || error("Not a parquet format file: $path")
     meta_len = metadata_length(handle)
     meta = metadata(handle, path, meta_len)
     typemap = merge!(TLogicalTypeMap(), map_logical_types)
-    ParFile(String(path), handle, meta, Schema(meta.schema, typemap), PageLRU())
+    File(String(path), handle, meta, Schema(meta.schema, typemap), PageLRU())
 end
 
-function close(par::ParFile)
+function close(par::Parquet.File)
     empty!(par.page_cache.refs)
     close(par.handle)
 end
 
-schema(par::ParFile) = par.schema
+schema(par::Parquet.File) = par.schema
 
-colname(par::ParFile, col::ColumnChunk) = colname(metadata(par,col))
+colname(par::Parquet.File, col::ColumnChunk) = colname(metadata(par,col))
 colname(col::ColumnMetaData) = col.path_in_schema
-function colnames(par::ParFile)
+function colnames(par::Parquet.File)
     names = Vector{Vector{String}}()
     cs = Int[]
     ns = String[]
@@ -109,16 +109,16 @@ function colnames(par::ParFile)
     names
 end
 
-ncols(par::ParFile) = length(colnames(par))
-nrows(par::ParFile) = par.meta.num_rows
+ncols(par::Parquet.File) = length(colnames(par))
+nrows(par::Parquet.File) = par.meta.num_rows
 
-coltype(par::ParFile, col::ColumnChunk) = coltype(metadata(par,col))
+coltype(par::Parquet.File, col::ColumnChunk) = coltype(metadata(par,col))
 coltype(col::ColumnMetaData) = col._type
 
 # return all rowgroups in the par file
-rowgroups(par::ParFile) = par.meta.row_groups
+rowgroups(par::Parquet.File) = par.meta.row_groups
 
-function rowgroup_row_positions(par::ParFile)
+function rowgroup_row_positions(par::Parquet.File)
     rgs = rowgroups(par)
     positions = Array{Int64}(undef, length(rgs)+1)
     idx = 1
@@ -129,10 +129,10 @@ function rowgroup_row_positions(par::ParFile)
     cumsum!(positions, positions)
 end
 
-columns(par::ParFile, rowgroupidx) = columns(par, rowgroups(par)[rowgroupidx])
-columns(par::ParFile, rowgroup::RowGroup) = rowgroup.columns
-columns(par::ParFile, rowgroup::RowGroup, colname::Vector{String}) = columns(par, rowgroup, [colname])
-function columns(par::ParFile, rowgroup::RowGroup, cnames::Vector{Vector{String}})
+columns(par::Parquet.File, rowgroupidx) = columns(par, rowgroups(par)[rowgroupidx])
+columns(par::Parquet.File, rowgroup::RowGroup) = rowgroup.columns
+columns(par::Parquet.File, rowgroup::RowGroup, colname::Vector{String}) = columns(par, rowgroup, [colname])
+function columns(par::Parquet.File, rowgroup::RowGroup, cnames::Vector{Vector{String}})
     R = ColumnChunk[]
     for col in columns(par, rowgroup)
         (colname(par,col) in cnames) && push!(R, col)
@@ -143,12 +143,12 @@ end
 ##
 # Iterator for pages in a column chunk
 mutable struct ColumnChunkPages
-    par::ParFile
+    par::Parquet.File
     col::ColumnChunk
     startpos::Int64
     endpos::Int64
 
-    function ColumnChunkPages(par::ParFile, col::ColumnChunk)
+    function ColumnChunkPages(par::Parquet.File, col::ColumnChunk)
         startpos = page_offset(par, col)
         endpos = end_offset(par, col)
         new(par, col, startpos, endpos)
@@ -212,7 +212,7 @@ mutable struct ColumnChunkPageValues{T}
     converter_fn::Function
 end
 
-function ColumnChunkPageValues(par::ParFile, col::ColumnChunk, ::Type{T}, converter_fn::Function=identity) where {T}
+function ColumnChunkPageValues(par::Parquet.File, col::ColumnChunk, ::Type{T}, converter_fn::Function=identity) where {T}
     cname = colname(par, col)
 
     max_repn = max_repetition_level(par.schema, cname)
@@ -338,8 +338,8 @@ end
 
 
 # column and page metadata
-open(par::ParFile, col::ColumnChunk) = open(par.handle, par.path, col)
-close(par::ParFile, col::ColumnChunk, io) = (par.handle == io) || close(io)
+open(par::Parquet.File, col::ColumnChunk) = open(par.handle, par.path, col)
+close(par::Parquet.File, col::ColumnChunk, io) = (par.handle == io) || close(io)
 function open(io, path::AbstractString, col::ColumnChunk)
     if hasproperty(col, :file_path)
         @debug("opening file to read column metadata", file=col.file_path, offset=col.file_offset)
@@ -363,14 +363,14 @@ function metadata(io, path::AbstractString, col::ColumnChunk)
     meta
 end
 
-function page_offset(par::ParFile, col::ColumnChunk)
+function page_offset(par::Parquet.File, col::ColumnChunk)
     colmeta = metadata(par, col)
     offset = colmeta.data_page_offset
     hasproperty(colmeta, :index_page_offset) && (offset = min(offset, colmeta.index_page_offset))
     hasproperty(colmeta, :dictionary_page_offset) && (offset = min(offset, colmeta.dictionary_page_offset))
     offset
 end
-end_offset(par::ParFile, col::ColumnChunk) = page_offset(par, col) + metadata(par,col).total_compressed_size
+end_offset(par::Parquet.File, col::ColumnChunk) = page_offset(par, col) + metadata(par,col).total_compressed_size
 
 page_size(page::PageHeader) = hasproperty(page, :compressed_page_size) ? page.compressed_page_size : page.uncompressed_page_size
 
@@ -415,10 +415,10 @@ function metadata(io, path::AbstractString, len::Integer=metadata_length(io))
     meta
 end
 
-metadata(par::ParFile) = par.meta
+metadata(par::Parquet.File) = par.meta
 
 #=
-function fill_column_metadata(par::ParFile)
+function fill_column_metadata(par::Parquet.File)
     meta = par.meta
     # go through all column chunks and read metadata from file offsets if required
     for grp in meta.row_groups
@@ -429,7 +429,7 @@ function fill_column_metadata(par::ParFile)
 end
 =#
 
-function metadata(par::ParFile, col::ColumnChunk)
+function metadata(par::Parquet.File, col::ColumnChunk)
     if !hasproperty(col, :meta_data)
         col.meta_data = metadata(par.handle, par.path, col)
     end
