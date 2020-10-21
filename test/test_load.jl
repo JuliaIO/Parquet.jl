@@ -3,7 +3,7 @@ using Test
 using Dates
 
 function test_load(file::String)
-    p = ParFile(file)
+    p = Parquet.File(file)
     @debug("load file", file)
     @test isa(p.meta, Parquet.FileMetaData)
 
@@ -62,7 +62,7 @@ function test_load(file::String)
 end
 
 function test_decode(file)
-    p = ParFile(file)
+    p = Parquet.File(file)
     @debug("load file", file)
     @test isa(p.meta, Parquet.FileMetaData)
 
@@ -145,7 +145,7 @@ end
 function test_load_boolean_and_ts()
     @testset "load booleans and timestamps" begin
         @debug("load booleans and timestamps")
-        p = ParFile(joinpath(@__DIR__, "booltest", "alltypes_plain.snappy.parquet"))
+        p = Parquet.File(joinpath(@__DIR__, "booltest", "alltypes_plain.snappy.parquet"))
 
         rg = rowgroups(p)
         @test length(rg) == 1
@@ -167,7 +167,7 @@ function test_load_boolean_and_ts()
         values, _state = iterate(cc)
         @test values.timestamp_col == [DateTime("2009-04-01T12:00:00"), DateTime("2009-04-01T12:01:00")]
 
-        p = ParFile(joinpath(@__DIR__, "booltest", "alltypes_plain.snappy.parquet"); map_logical_types=Dict(["date_string_col"]=>(String,logical_string)))
+        p = Parquet.File(joinpath(@__DIR__, "booltest", "alltypes_plain.snappy.parquet"); map_logical_types=Dict(["date_string_col"]=>(String,logical_string)))
         rc = RecordCursor(p; rows=1:2, colnames=colnames(p))
         values = collect(rc)
         @test [v.date_string_col for v in values] == ["04/01/09", "04/01/09"]
@@ -176,7 +176,7 @@ function test_load_boolean_and_ts()
         values, _state = iterate(cc)
         @test values.date_string_col == ["04/01/09", "04/01/09"]
 
-        p = ParFile(joinpath(@__DIR__, "booltest", "alltypes_plain.snappy.parquet"); map_logical_types=Dict(["timestamp_col"]=>(DateTime,(v)->logical_timestamp(v; offset=Dates.Second(30)))))
+        p = Parquet.File(joinpath(@__DIR__, "booltest", "alltypes_plain.snappy.parquet"); map_logical_types=Dict(["timestamp_col"]=>(DateTime,(v)->logical_timestamp(v; offset=Dates.Second(30)))))
         rc = RecordCursor(p; rows=1:2, colnames=colnames(p))
         values = collect(rc)
         @test [v.timestamp_col for v in values] == [DateTime("2009-04-01T12:00:30"), DateTime("2009-04-01T12:01:30")]
@@ -192,7 +192,7 @@ end
 function test_load_nested()
     @testset "load nested columns" begin
         @debug("load nested columns")
-        p = ParFile(joinpath(@__DIR__, "nested", "nested1.parquet"))
+        p = Parquet.File(joinpath(@__DIR__, "nested", "nested1.parquet"))
 
         @test nrows(p) == 100
         @test ncols(p) == 5
@@ -220,7 +220,7 @@ function test_load_nested()
         @test v.reduced_max_len == 64
         @test v.vocab == "12400277_a"
 
-        p = ParFile(joinpath(@__DIR__, "nested", "nested.parq"))
+        p = Parquet.File(joinpath(@__DIR__, "nested", "nested.parq"))
 
         @test nrows(p) == 10
         @test ncols(p) == 1
@@ -242,7 +242,7 @@ end
 function test_load_multiple_rowgroups()
     @testset "testing multiple rowgroups..." begin
         @debug("load multiple rowgroups")
-        p = ParFile(joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet"))
+        p = Parquet.File(joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet"))
 
         @test nrows(p) == 100
         @test ncols(p) == 12

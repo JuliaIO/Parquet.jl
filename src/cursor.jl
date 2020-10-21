@@ -7,7 +7,7 @@
 # Each iteration returns the value (as a Union{T,Nothing}), definition level, and repetition level for each value.
 # Row can be deduced from repetition level.
 mutable struct ColCursor{T}
-    par::ParFile
+    par::Parquet.File
     colname::Vector{String}                                 # column name (full path in schema)
     colnamesym::Vector{Symbol}                              # column name converted to symbols
     required_at::Vector{Bool}                               # at what level in the schema the column is required
@@ -34,7 +34,7 @@ mutable struct ColCursor{T}
     levelpos::Int64                                         # current position within levels of the current page
     levelend::Int64
 
-    function ColCursor{T}(par::ParFile, row_positions::Vector{Int64}, colname::Vector{String}, rows::UnitRange) where T
+    function ColCursor{T}(par::Parquet.File, row_positions::Vector{Int64}, colname::Vector{String}, rows::UnitRange) where T
         colnamesym = [Symbol(name) for name in colname]
         sch = schema(par)
 
@@ -53,7 +53,7 @@ mutable struct ColCursor{T}
     end
 end
 
-function ColCursor(par::ParFile, colname::Vector{String}; rows::UnitRange=1:nrows(par), row::Signed=first(rows))
+function ColCursor(par::Parquet.File, colname::Vector{String}; rows::UnitRange=1:nrows(par), row::Signed=first(rows))
     row_positions = rowgroup_row_positions(par)
     @assert last(rows) <= nrows(par)
     @assert first(rows) >= 1
@@ -211,7 +211,7 @@ end
 ##
 
 mutable struct BatchedColumnsCursor{T}
-    par::ParFile
+    par::Parquet.File
     colnames::Vector{Vector{String}}
     colcursors::Vector{ColCursor}
     colstates::Vector{Tuple{Int64,Int64}}
@@ -229,7 +229,7 @@ end
 Create cursor to iterate over batches of column values. Each iteration returns a named tuple of column names with batch of column values. Files with nested schemas can not be read with this cursor.
 
 ```julia
-BatchedColumnsCursor(par::ParFile; kwargs...)
+BatchedColumnsCursor(par::Parquet.File; kwargs...)
 ```
 
 Cursor options:
@@ -238,7 +238,7 @@ Cursor options:
 - `reusebuffer`: boolean to indicate whether to reuse the buffers with every iteration; if each iteration processes the batch and does not need to refer to the same data buffer again, then setting this to `true` reduces GC pressure and can help significantly while processing large files.
 - `use_threads`: whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
 """
-function BatchedColumnsCursor(par::ParFile;
+function BatchedColumnsCursor(par::Parquet.File;
         rows::UnitRange=1:nrows(par),
         batchsize::Signed=min(length(rows), first(rowgroups(par)).num_rows),
         reusebuffer::Bool=false,
@@ -354,7 +354,7 @@ end
 ##
 
 mutable struct RecordCursor{T}
-    par::ParFile
+    par::Parquet.File
     colnames::Vector{Vector{String}}
     colcursors::Vector{ColCursor}
     colstates::Vector{Tuple{Int64,Int64}}
@@ -366,14 +366,14 @@ end
 Create cursor to iterate over records. In parallel mode, multiple remote cursors can be created and iterated on in parallel.
 
 ```julia
-RecordCursor(par::ParFile; kwargs...)
+RecordCursor(par::Parquet.File; kwargs...)
 ```
 
 Cursor options:
 - `rows`: the row range to iterate through, all rows by default.
 - `colnames`: the column names to retrieve; all by default
 """
-function RecordCursor(par::ParFile; rows::UnitRange=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par))
+function RecordCursor(par::Parquet.File; rows::UnitRange=1:nrows(par), colnames::Vector{Vector{String}}=colnames(par))
     colcursors = [ColCursor(par, colname; rows=rows, row=first(rows)) for colname in colnames]
     sch = schema(par)
     rectype = ntelemtype(sch, sch.schema[1])
@@ -430,7 +430,7 @@ default_init(::Type{Vector{T}}) where {T} = Vector{T}()
 default_init(::Type{Dict{Symbol,Any}}) = Dict{Symbol,Any}()
 default_init(::Type{T}) where {T} = ccall(:jl_new_struct_uninit, Any, (Any,), T)::T
 
-function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor, colcursor_state::Tuple{Int64,Int64}, col_repeat_state::Dict{Tuple{Int,Int},Int})
+function update_record(par::Parquet.File, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor, colcursor_state::Tuple{Int64,Int64}, col_repeat_state::Dict{Tuple{Int,Int},Int})
     colpos = colcursor.row
     # iterate all repeated values from the column cursor (until it advances to the next row)
     while !_done(colcursor, colcursor_state)
@@ -441,7 +441,7 @@ function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcurso
     colcursor_state # return new colcursor state
 end
 
-function update_record(par::ParFile, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor, val, defn_level::Int64, repn_level::Int64, col_repeat_state::Dict{Tuple{Int,Int},Int})
+function update_record(par::Parquet.File, row::Dict{Symbol,Any}, colid::Int, colcursor::ColCursor, val, defn_level::Int64, repn_level::Int64, col_repeat_state::Dict{Tuple{Int,Int},Int})
     nameparts = colcursor.colname
     symnameparts = colcursor.colnamesym
     required_at = colcursor.required_at

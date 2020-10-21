@@ -204,7 +204,7 @@ function show(io::IO, meta::FileMetaData, indent::AbstractString="")
     hasproperty(meta, :key_value_metadata) && show(io, meta.key_value_metadata, indent)
 end
 
-function show(io::IO, par::ParFile)
+function show(io::IO, par::Parquet.File)
     println(io, "Parquet file: $(par.path)")
     meta = par.meta
     println(io, "    version: $(meta.version)")

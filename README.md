@@ -8,22 +8,22 @@
 
 Load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet). Only metadata is read initially, data is loaded in chunks on demand. (Note: [ParquetFiles.jl](https://github.com/queryverse/ParquetFiles.jl) also provides load support for Parquet files under the FileIO.jl package.)
 
-`ParFile` represents a Parquet file at `path` open for reading.
+`Parquet.File` represents a Parquet file at `path` open for reading.
 
 ```
-ParFile(path) => ParFile
+Parquet.File(path) => Parquet.File
 ```
 
-`ParFile` keeps a handle to the open file and the file metadata and also holds a weakly referenced cache of page data read. If the parquet file references other files in its metadata, they will be opened as and when required for reading and closed when they are not needed anymore.
+`Parquet.File` keeps a handle to the open file and the file metadata and also holds a weakly referenced cache of page data read. If the parquet file references other files in its metadata, they will be opened as and when required for reading and closed when they are not needed anymore.
 
-The `close` method closes the reader, releases open files and makes cached internal data structures available for GC. A `ParFile` instance must not be used once closed.
+The `close` method closes the reader, releases open files and makes cached internal data structures available for GC. A `Parquet.File` instance must not be used once closed.
 
 ```julia
 julia> using Parquet
 
-julia> parfile = "customer.impala.parquet";
+julia> filename = "customer.impala.parquet";
 
-julia> p = ParFile(parfile)
+julia> parquetfile = Parquet.File(filename)
 Parquet file: customer.impala.parquet
     version: 1
     nrows: 150000
@@ -34,13 +34,13 @@ Parquet file: customer.impala.parquet
 Examine the schema.
 
 ```julia
-julia> nrows(p)
+julia> nrows(parquetfile)
 150000
 
-julia> ncols(p)
+julia> ncols(parquetfile)
 8
 
-julia> colnames(p)
+julia> colnames(parquetfile)
 8-element Array{Array{String,1},1}:
  ["c_custkey"]
  ["c_name"]
@@ -51,7 +51,7 @@ julia> colnames(p)
  ["c_mktsegment"]
  ["c_comment"]
 
-julia> schema(p)
+julia> schema(parquetfile)
 Schema:
     schema {
       optional INT64 c_custkey
@@ -70,7 +70,7 @@ The reader performs logical type conversions automatically for String (from byte
 ```julia
 julia> mapping = Dict(["column_name"] => (String, Parquet.logical_string));
 
-julia> par = ParFile("filename"; map_logical_types=mapping);
+julia> parquetfile = Parquet.File("filename"; map_logical_types=mapping);
 ```
 
 The reader will interpret logical types based on the `map_logical_types` provided. The following logical type mapping methods are available in the Parquet package.
@@ -86,7 +86,7 @@ Variants of these methods or custom methods can also be applied by caller.
 Create cursor to iterate over batches of column values. Each iteration returns a named tuple of column names with batch of column values. Files with nested schemas can not be read with this cursor.
 
 ```julia
-BatchedColumnsCursor(par::ParFile; kwargs...)
+BatchedColumnsCursor(parquetfile::Parquet.File; kwargs...)
 ```
 
 Cursor options:
@@ -100,9 +100,9 @@ Example:
 ```julia
 julia> typemap = Dict(["c_name"]=>(String,Parquet.logical_string), ["c_address"]=>(String,Parquet.logical_string));
 
-julia> par = ParFile("customer.impala.parquet"; map_logical_types=typemap);
+julia> parquetfile = Parquet.File("customer.impala.parquet"; map_logical_types=typemap);
 
-julia> cc = BatchedColumnsCursor(par)
+julia> cc = BatchedColumnsCursor(parquetfile)
 Batched Columns Cursor on customer.impala.parquet
     rows: 1:150000
     batches: 1
@@ -130,7 +130,7 @@ julia> batchvals.c_name[1:5]
 Create cursor to iterate over records. In parallel mode, multiple remote cursors can be created and iterated on in parallel.
 
 ```julia
-RecordCursor(par::ParFile; kwargs...)
+RecordCursor(parquetfile::Parquet.File; kwargs...)
 ```
 
 Cursor options:
@@ -142,9 +142,9 @@ Example:
 ```julia
 julia> typemap = Dict(["c_name"]=>(String,Parquet.logical_string), ["c_address"]=>(String,Parquet.logical_string));
 
-julia> p = ParFile("customer.impala.parquet"; map_logical_types=typemap);
+julia> parquetfile = Parquet.File("customer.impala.parquet"; map_logical_types=typemap);
 
-julia> rc = RecordCursor(p)
+julia> rc = RecordCursor(parquetfile)
 Record Cursor on customer.impala.parquet
     rows: 1:150000
     cols: c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment
