@@ -64,7 +64,7 @@ function ColCursor(par::Parquet.File, colname::Vector{String}; rows::UnitRange=1
 end
 
 eltype(cursor::ColCursor{T}) where {T} = NamedTuple{(:value, :defn_level, :repn_level),Tuple{Union{Nothing,T},Int64,Int64}}
-length(cursor::ColCursor) = length(cursor.row.rows)
+length(cursor::ColCursor) = length(cursor.rows)
 
 function setrow(cursor::ColCursor{T}, row::Int64) where {T}
     # check if cursor is done
