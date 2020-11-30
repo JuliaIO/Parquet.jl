@@ -267,7 +267,7 @@ function test_load_file()
         df = read_parquet(joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet"))
 
         #all columns must be 100 rows long
-        @test all([length(col)==100 for col in df])
+        @test all([length(val)==100 for (_, val) in df])
 
         # 12 columns
         @test length(df) == 12

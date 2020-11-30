@@ -17,15 +17,15 @@ function read_parquet(path)
     # read all the chunks
     chunks = [chunk for chunk in BatchedColumnsCursor(parquetfile)]
 
-    tmp_result_arr = Any[]
+    result_dict = Dict()
 
     column_names = keys(chunks[1])
 
     for key in column_names
         # combine all chunks' key into one column
         one_column = reduce(vcat, chunk[key] for chunk in chunks)
-        push!(tmp_result_arr, one_column)
+        result_dict[key] = one_column
     end
 
-    NamedTuple{column_names}(tmp_result_arr)
+    result_dict
 end
