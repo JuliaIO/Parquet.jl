@@ -262,10 +262,23 @@ function test_load_multiple_rowgroups()
     end
 end
 
+function test_load_file()
+    @testset "load a file" begin
+        df = read_parquet(joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet"))
+
+        #all columns must be 100 rows long
+        @test all([length(col)==100 for col in df])
+
+        # 12 columns
+        @test length(df) == 12
+    end
+end
+
 @testset "load files" begin
     test_load_all_pages()
     test_decode_all_pages()
     test_load_boolean_and_ts()
     test_load_nested()
     test_load_multiple_rowgroups()
+    test_load_file()
 end
