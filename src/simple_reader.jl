@@ -8,7 +8,7 @@ DataFrames.DataFrame via
 
 ```
 using DataFrames
-df = DataFrame(Parquet.read(path))
+df = DataFrame(read_parquet(path; copycols=false))
 ```
 """
 function read_parquet(path)
