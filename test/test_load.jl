@@ -262,10 +262,28 @@ function test_load_multiple_rowgroups()
     end
 end
 
+function test_load_at_offset()
+    @testset "load file at offset" begin
+        testfolder = joinpath(@__DIR__, "parquet-compatibility")
+        testfile = joinpath(testfolder, "parquet-testdata", "impala", "1.1.1-NONE", "customer.impala.parquet")
+        parquet_file = Parquet.File(testfile)
+
+        vals_20000_40000 = first(collect(Parquet.BatchedColumnsCursor(parquet_file; rows=20000:40000))).c_custkey
+        vals_1_40000 = first(collect(Parquet.BatchedColumnsCursor(parquet_file; rows=1:40000))).c_custkey
+        vals_2_40001 = first(collect(Parquet.BatchedColumnsCursor(parquet_file; rows=2:40001))).c_custkey
+
+        @test vals_20000_40000 == vals_1_40000[20000:40000]
+        @test vals_20000_40000 != vals_1_40000[1:20000]
+        @test vals_2_40001[1:10000] == vals_1_40000[2:10001]
+        @test vals_2_40001[1:10000] != vals_1_40000[1:10000]
+    end
+end
+
 @testset "load files" begin
     test_load_all_pages()
     test_decode_all_pages()
     test_load_boolean_and_ts()
     test_load_nested()
     test_load_multiple_rowgroups()
+    test_load_at_offset()
 end

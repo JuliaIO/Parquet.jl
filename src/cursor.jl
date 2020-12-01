@@ -251,7 +251,7 @@ function BatchedColumnsCursor(par::Parquet.File;
         error("nested schemas are not supported with BatchedColumnsCursor yet")
     end
 
-    colcursors = [ColCursor(par, colname) for colname in colnames(par)]
+    colcursors = [ColCursor(par, colname; rows=rows) for colname in colnames(par)]
     rectype = ntcolstype(sch, sch.schema[1])
     nbatches = ceil(Int, length(rows)/batchsize)
     colbuffs = Union{Nothing,Vector}[nothing for idx in 1:length(colcursors)]
