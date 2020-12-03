@@ -18,7 +18,7 @@ if VERSION < v"1.5"
     Base.signed(::Type{UInt32}) = Int32
     Base.signed(::Type{UInt64}) = Int64
     Base.signed(::Type{UInt128}) = Int128
-end    
+end
 
 const PARQUET_JL_VERSION = v"0.7.0"
 
@@ -34,7 +34,7 @@ export is_par_file, show, nrows, ncols, rowgroups, columns, pages, bytes, values
 export schema
 export logical_timestamp, logical_string
 export RecordCursor, BatchedColumnsCursor
-export write_parquet
+export write_parquet, read_parquet
 
 # package code goes here
 include("PAR2/PAR2.jl")
@@ -45,5 +45,6 @@ include("reader.jl")
 include("cursor.jl")
 include("show.jl")
 include("writer.jl")
+include("simple_reader.jl")
 
 end # module

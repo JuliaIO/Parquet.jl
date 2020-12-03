@@ -262,6 +262,18 @@ function test_load_multiple_rowgroups()
     end
 end
 
+function test_load_file()
+    @testset "load a file" begin
+        df = read_parquet(joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet"))
+
+        #all columns must be 100 rows long
+        @test all([length(val)==100 for (_, val) in df])
+
+        # 12 columns
+        @test length(df) == 12
+    end
+end
+  
 function test_load_at_offset()
     @testset "load file at offset" begin
         testfolder = joinpath(@__DIR__, "parquet-compatibility")
@@ -285,5 +297,6 @@ end
     test_load_boolean_and_ts()
     test_load_nested()
     test_load_multiple_rowgroups()
+    test_load_file()
     test_load_at_offset()
 end
