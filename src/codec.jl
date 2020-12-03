@@ -294,11 +294,17 @@ function read_hybrid(inp::InputState, out::OutputState{T}, count::Int32, bits::U
         runhdr = _read_varint(inp, Int)
         isbitpack = ((runhdr & 0x1) == 0x1)
         runhdr >>= 1
-        nitems = min(isbitpack ? runhdr*8 : runhdr, count - arrpos + 1)
+        nrunhdrbits = runhdr * 8
+        nitems = min(isbitpack ? nrunhdrbits : runhdr, count - arrpos + 1)
 
         if isbitpack
-            runcount = min(runhdr * 8, length(arr)-offset-arrpos)
+            runcount = min(nrunhdrbits, length(arr)-offset-arrpos)
             read_bitpacked_run(inp, out, runcount, bits, byt, mask)
+            if nrunhdrbits > runcount
+                nbytes_to_skip = div(nrunhdrbits - runcount, 8)
+                @debug("skipping trailing bytes in bitpacked run", nbytes_to_skip)
+                inp.offset += nbytes_to_skip
+            end
             #out.offset += runcount
         else # rle
             read_type = @byt2uitype(byt)
