@@ -63,7 +63,16 @@ function test_batchedcols_cursor_all_files()
     end
 end
 
+function test_col_cursor_length()
+    path = joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-SNAPPY/nation.impala.parquet")
+    pq_file = Parquet.File(path)
+    col_name = pq_file |> colnames |> first
+    col_cursor = Parquet.ColCursor(pq_file, col_name)
+    @test length(col_cursor) == 25
+end
+
 @testset "cursors" begin
     test_row_cursor_all_files()
     test_batchedcols_cursor_all_files()
+    test_col_cursor_length()
 end

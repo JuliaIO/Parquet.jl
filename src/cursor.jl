@@ -63,8 +63,8 @@ function ColCursor(par::Parquet.File, colname::Vector{String}; rows::UnitRange=1
     cursor
 end
 
-eltype(cursor::ColCursor{T}) where {T} = NamedTuple{(:value, :defn_level, :repn_level),Tuple{Union{Nothing,T},Int64,Int64}}
-length(cursor::ColCursor) = length(cursor.row.rows)
+eltype(::Type{ColCursor{T}}) where {T} = NamedTuple{(:value, :defn_level, :repn_level),Tuple{Union{Nothing,T},Int64,Int64}}
+length(cursor::ColCursor) = length(cursor.rows)
 
 function setrow(cursor::ColCursor{T}, row::Int64) where {T}
     # check if cursor is done
@@ -251,7 +251,7 @@ function BatchedColumnsCursor(par::Parquet.File;
         error("nested schemas are not supported with BatchedColumnsCursor yet")
     end
 
-    colcursors = [ColCursor(par, colname) for colname in colnames(par)]
+    colcursors = [ColCursor(par, colname; rows=rows) for colname in colnames(par)]
     rectype = ntcolstype(sch, sch.schema[1])
     nbatches = ceil(Int, length(rows)/batchsize)
     colbuffs = Union{Nothing,Vector}[nothing for idx in 1:length(colcursors)]
@@ -259,7 +259,7 @@ function BatchedColumnsCursor(par::Parquet.File;
     BatchedColumnsCursor{rectype}(par, colnames(par), colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), colbuffs, 1, rows, first(rows), batchsize, nbatches, reusebuffer, (VERSION < v"1.3") ? false : use_threads)
 end
 
-eltype(cursor::BatchedColumnsCursor{T}) where {T} = T
+eltype(::Type{BatchedColumnsCursor{T}}) where {T} = T
 length(cursor::BatchedColumnsCursor) = cursor.nbatches
 
 function colcursor_advance(colcursor::ColCursor, rows_by::Int64, vals_by::Int64=rows_by)
@@ -380,7 +380,7 @@ function RecordCursor(par::Parquet.File; rows::UnitRange=1:nrows(par), colnames:
     RecordCursor{rectype}(par, colnames, colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), rows, first(rows))
 end
 
-eltype(cursor::RecordCursor{T}) where {T} = T
+eltype(::Type{RecordCursor{T}}) where {T} = T
 length(cursor::RecordCursor) = length(cursor.rows)
 
 function Base.iterate(cursor::RecordCursor{T}, row) where {T}

@@ -154,7 +154,7 @@ mutable struct ColumnChunkPages
         new(par, col, startpos, endpos)
     end
 end
-eltype(ccp::ColumnChunkPages) = Page
+eltype(::Type{ColumnChunkPages}) = Page
 Base.iterate(ccp::ColumnChunkPages) = iterate(ccp, ccp.startpos)
 function Base.iterate(ccp::ColumnChunkPages, startpos::Int64)
     if startpos >= ccp.endpos
@@ -229,7 +229,7 @@ function ColumnChunkPageValues(par::Parquet.File, col::ColumnChunk, ::Type{T}, c
     ColumnChunkPageValues{T}(ccp, max_repn, max_defn, has_repn_levels, has_defn_levels, repn_out, defn_out, valdict_out, vals_out, converter_fn)
 end
 
-function eltype(ccpv::ColumnChunkPageValues{T}) where {T}
+function eltype(::Type{ColumnChunkPageValues{T}}) where {T}
    NamedTuple{(:value,:repn_level,:defn_level),Tuple{OutputState{T},OutputState{Int32},OutputState{Int32}}}
 end
 
