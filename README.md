@@ -8,18 +8,18 @@
 
 ### Simple Reader
 
-You can load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet) by using the `read_parquet` function
+You can load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet) by using the `read_parquet` function.
 
 ```
 # `tbl` is a Tables.jl compatible table
 tbl = read_parquet(path_to_parquet_file)
 
-# example for how to convertconvert to DataFrame
+# example for how to convert to DataFrame
 using DataFrames
 df = DataFrame(tbl, copycols=true)
 ```
 
-### Lower Level Reader Details
+### Lower Level Reader
 
 Load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet). Only metadata is read initially, data is loaded in chunks on demand. (Note: [ParquetFiles.jl](https://github.com/queryverse/ParquetFiles.jl) also provides load support for Parquet files under the FileIO.jl package.)
 
