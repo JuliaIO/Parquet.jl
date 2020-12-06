@@ -1,3 +1,5 @@
+using Base.Threads
+
 """
     read_parquet(path)
 
@@ -21,7 +23,7 @@ function read_parquet(path)
 
     column_names = keys(chunks[1])
 
-    for key in column_names
+    @threads for key in column_names
         # combine all chunks' key into one column
         one_column = reduce(vcat, chunk[key] for chunk in chunks)
         result_dict[key] = one_column

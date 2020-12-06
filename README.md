@@ -16,7 +16,7 @@ tbl = read_parquet(path_to_parquet_file)
 
 # example for how to convert to DataFrame
 using DataFrames
-df = DataFrame(tbl, copycols=true)
+df = DataFrame(tbl, copycols=false)
 ```
 
 ### Lower Level Reader
