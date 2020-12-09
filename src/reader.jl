@@ -273,14 +273,16 @@ function Base.iterate(ccpv::ColumnChunkPageValues{T}, startpos::Int64) where {T}
             nnonmissing = num_values - nmissing
             reset_to_size(ccpv.vals_out, nnonmissing)
 
-            if enc === Encoding.PLAIN_DICTIONARY || enc === Encoding.RLE_DICTIONARY
-                map_vals = read_data_dict(inp, nnonmissing)
-                map_dict_vals(ccpv.valdict_out, ccpv.vals_out, map_vals)
-            else
-                if ccpv.converter_fn === identity
-                    read_plain_values(inp, ccpv.vals_out, nnonmissing)
+            if nnonmissing > 0
+                if enc === Encoding.PLAIN_DICTIONARY || enc === Encoding.RLE_DICTIONARY
+                    map_vals = read_data_dict(inp, nnonmissing)
+                    map_dict_vals(ccpv.valdict_out, ccpv.vals_out, map_vals)
                 else
-                    read_plain_values(inp, ccpv.vals_out, nnonmissing, ccpv.converter_fn, ccpv.ccp.col.meta_data._type)
+                    if ccpv.converter_fn === identity
+                        read_plain_values(inp, ccpv.vals_out, nnonmissing)
+                    else
+                        read_plain_values(inp, ccpv.vals_out, nnonmissing, ccpv.converter_fn, ccpv.ccp.col.meta_data._type)
+                    end
                 end
             end
         elseif pagetype === PageType.DICTIONARY_PAGE
