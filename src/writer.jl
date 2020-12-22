@@ -448,15 +448,16 @@ function create_col_schema(type::Type{String}, colname)
     schema_node
 end
 
+
 """
     Write a parquet file from a Tables.jl compatible table e.g DataFrame
 
-path                -   The file path
+io                  -   A writable IO stream
 tbl                 -   A Tables.jl columnaccessible table e.g. a DataFrame
 compression_code    -   Default "SNAPPY". The compression codec. The supported
                         values are "UNCOMPRESSED", "SNAPPY", "ZSTD", "GZIP"
 """
-function write_parquet(path, x; compression_codec = "SNAPPY")
+function write_parquet(io::IO, x; compression_codec = "SNAPPY")
     tbl = Tables.columns(x)
 
     # check that all types are supported
@@ -501,16 +502,31 @@ function write_parquet(path, x; compression_codec = "SNAPPY")
 
     colnames = String.(Tables.columnnames(tbl))
     _write_parquet(
+        io,
         Tables.Columns(tbl),
         Tables.columnnames(tbl),
-        path,
         recommended_chunks;
         encoding    =   Dict(col => encoding for col in colnames),
         codec       =   Dict(col => codec for col in colnames)
     )
 end
 
-function _write_parquet(itr_vectors, colnames, path, nchunks; ncols = length(itr_vectors), encoding::Dict{String, Int32}, codec::Dict{String, Int32})
+"""
+    Write a parquet file from a Tables.jl compatible table e.g DataFrame
+
+path                -   The file path
+tbl                 -   A Tables.jl columnaccessible table e.g. a DataFrame
+compression_code    -   Default "SNAPPY". The compression codec. The supported
+                        values are "UNCOMPRESSED", "SNAPPY", "ZSTD", "GZIP"
+"""
+function write_parquet(path, x; compression_codec = "SNAPPY")
+    open(path, "w") do io
+        write_parquet(io, x; compression_codec=compression_codec)
+    end
+end
+
+function _write_parquet(io::IO, itr_vectors, colnames, nchunks; ncols = length(itr_vectors), encoding::Dict{String, Int32}, codec::Dict{String, Int32})
+
     """Internal method for writing parquet
 
     itr_vectors -   An iterable of `AbstractVector`s containing the values to be
@@ -524,8 +540,7 @@ function _write_parquet(itr_vectors, colnames, path, nchunks; ncols = length(itr
     encoding    -   A dictionary mapping from column names to encoding
     codec       -   A dictionary mapping from column names to compression codec
     """
-    fileio = open(path, "w")
-    write(fileio, "PAR1")
+    write(io, "PAR1")
 
     # the + 1 comes from the fact that schema is a tree and there is an extra
     # parent node
@@ -543,7 +558,7 @@ function _write_parquet(itr_vectors, colnames, path, nchunks; ncols = length(itr
         col_encoding = encoding[colname]
         col_codec = codec[colname]
         # write the data including metadata
-        col_info = write_col(fileio, colvals, colname, col_encoding, col_codec; nchunks = nchunks)
+        col_info = write_col(io, colvals, colname, col_encoding, col_codec; nchunks = nchunks)
 
         # the `row_group_file_offset` keeps track of where the data starts, so
         # keep it at the dictonary of the first data
@@ -586,9 +601,8 @@ function _write_parquet(itr_vectors, colnames, path, nchunks; ncols = length(itr
 
     filemetadata.row_groups = [row_group]
 
-    filemetadata_size = write_thrift(fileio, filemetadata)
+    filemetadata_size = write_thrift(io, filemetadata)
 
-    write(fileio, UInt32(filemetadata_size) |> htol)
-    write(fileio, "PAR1")
-    close(fileio)
+    write(io, UInt32(filemetadata_size) |> htol)
+    write(io, "PAR1")
 end

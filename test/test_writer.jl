@@ -8,29 +8,9 @@ end
 
 Random.seed!(1234567)
 
-function test_write()
-    N = 1000
-
-    tbl = (
-        int32 = rand(Int32, N),
-        int64 = rand(Int64, N),
-        float32 = rand(Float32, N),
-        float64 = rand(Float64, N),
-        bool = rand(Bool, N),
-        string = [randstring(8) for i in 1:N],
-        int32m = rand([missing, rand(Int32, 10)...], N),
-        int64m = rand([missing, rand(Int64, 10)...], N),
-        float32m = rand([missing, rand(Float32, 10)...], N),
-        float64m = rand([missing, rand(Float64, 10)...], N),
-        boolm = rand([missing, true, false], N),
-        stringm = rand([missing, "abc", "def", "ghi"], N)
-    )
-
-    tmpfile = tempname()*".parquet"
-
-    write_parquet(tmpfile, tbl)
-
+function test_written(tbl, tmpfile)
     pf = Parquet.File(tmpfile)
+    N = length(tbl.int32)
 
     # the file is very small so only one rowgroup
     col_chunks = columns(pf, 1)
@@ -71,6 +51,48 @@ function test_write()
     close(pf)
 end
 
+function make_table(N::Int=1000)
+    tbl = (
+        int32 = rand(Int32, N),
+        int64 = rand(Int64, N),
+        float32 = rand(Float32, N),
+        float64 = rand(Float64, N),
+        bool = rand(Bool, N),
+        string = [randstring(8) for i in 1:N],
+        int32m = rand([missing, rand(Int32, 10)...], N),
+        int64m = rand([missing, rand(Int64, 10)...], N),
+        float32m = rand([missing, rand(Float32, 10)...], N),
+        float64m = rand([missing, rand(Float64, 10)...], N),
+        boolm = rand([missing, true, false], N),
+        stringm = rand([missing, "abc", "def", "ghi"], N)
+    )
+end
+
+function test_write()
+    tbl = make_table()
+    tmpfile = tempname()*".parquet"
+    write_parquet(tmpfile, tbl)
+    test_written(tbl, tmpfile)
+end
+
+function test_write_via_buffer()
+    tbl = make_table()
+    tmpfile = tempname()*".parquet"
+
+    # write to io buffer first
+    io = IOBuffer()
+    write_parquet(io, tbl)
+
+    # then dump io buffer to disk
+    open(tmpfile, "w") do f
+        write(f, take!(io))
+    end
+
+    #and now test round-trip via file
+    test_written(tbl, tmpfile)
+end
+
 @testset "writer" begin
     test_write()
+    test_write_via_buffer()
 end
