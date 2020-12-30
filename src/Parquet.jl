@@ -8,6 +8,7 @@ using Dates
 using Decimals
 using Mmap
 using Base.Threads
+using SentinelArrays
 
 if VERSION < v"1.3"
     using Missings: nonmissingtype
