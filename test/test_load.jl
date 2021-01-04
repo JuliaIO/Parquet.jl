@@ -1,6 +1,7 @@
 using Parquet
 using Test
 using Dates
+using Tables
 
 function test_load(file::String)
     p = Parquet.File(file)
@@ -264,13 +265,14 @@ end
 
 function test_load_file()
     @testset "load a file" begin
-        df = read_parquet(joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet"))
+        table = read_parquet(joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet"))
+        cols = Tables.columns(table)
 
         #all columns must be 100 rows long
-        @test all([length(val)==100 for (_, val) in df])
+        @test all([length(col)==100 for col in cols])
 
         # 12 columns
-        @test length(df) == 12
+        @test length(cols) == 12
     end
 end
   
