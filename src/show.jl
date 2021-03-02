@@ -46,7 +46,7 @@ function show(io::IO, schema::SchemaElement, indent::AbstractString="", nchildre
         print(io, ") ")
     end
 
-    if hasproperty(schema, :num_children)
+    if hasproperty(schema, :num_children) && (getproperty(schema, :num_children) > 0)
         push!(nchildren, schema.num_children)
         print(io, " {")
     elseif lchildren > 0
