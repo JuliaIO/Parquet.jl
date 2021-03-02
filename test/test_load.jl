@@ -265,14 +265,28 @@ end
 
 function test_load_file()
     @testset "load a file" begin
-        table = read_parquet(joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet"))
+        filename = joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet")
+
+        table = read_parquet(filename)
         cols = Tables.columns(table)
+        @test all([length(col)==100 for col in cols])   # all columns must be 100 rows long
+        @test length(getfield(table, :chunks)) == 2
+        @test 50 == length(getfield(table, :chunks)[1][1])
+        @test 50 == length(getfield(table, :chunks)[2][1])
+        @test length(cols) == 12                        # 12 columns
 
-        #all columns must be 100 rows long
-        @test all([length(col)==100 for col in cols])
+        table = read_parquet(filename; rows=1:10)
+        cols = Tables.columns(table)
+        @test all([length(col)==10 for col in cols])    # all columns must be 100 rows long
+        @test length(getfield(table, :chunks)) == 1
+        @test length(cols) == 12                        # 12 columns
 
-        # 12 columns
-        @test length(cols) == 12
+        table = read_parquet(filename; rows=1:100, batchsize=10)
+        cols = Tables.columns(table)
+        @test all([length(col)==100 for col in cols])    # all columns must be 100 rows long
+        @test 10 == length(getfield(table, :chunks)[1][1])
+        @test length(getfield(table, :chunks)) == 10
+        @test length(cols) == 12                        # 12 columns
     end
 end
   
