@@ -10,13 +10,28 @@
 
 You can load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet) by using the `read_parquet` function.
 
-```
-# `tbl` is a Tables.jl compatible table
-tbl = read_parquet(path_to_parquet_file)
+`read_parquet(path; kwargs...)` returns a `Parquet.Table` instance, which is the table contained in the parquet file in an Tables.jl compatible format.
 
-# example for how to convert to DataFrame
-using DataFrames
-df = DataFrame(tbl, copycols=true)
+Options:
+- `rows`: the row range to iterate through, all rows by default.
+- `batchsize`: maximum number of rows to read in each batch (default: row count of first row group), useful to read file as partitions using `Tables.paritions`.
+- `use_threads`: whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
+
+The returned object is a Tables.jl compatible Table and can be converted to other forms, e.g. a `DataFrames.DataFrame` via
+
+```julia
+using Parquet, DataFrames
+df = DataFrame(read_parquet(path))
+```
+
+Partitions in a parquet file can also be iterated over using an iterator returned by the `Tables.partitions(::Parquet.Table)` method.
+
+```julia
+using Parquet, DataFrames
+for partition in Tables.partitions(read_parquet(path))
+    df = DataFrame(partition)
+    ...
+end
 ```
 
 ### Lower Level Reader

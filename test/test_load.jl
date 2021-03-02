@@ -268,25 +268,38 @@ function test_load_file()
         filename = joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet")
 
         table = read_parquet(filename)
+        @test Tables.istable(table)
+        @test Tables.columnaccess(table)
+        @test Tables.schema(table).names == (:int32, :int64, :float32, :float64, :bool, :string, :int32m, :int64m, :float32m, :float64m, :boolm, :stringm)
         cols = Tables.columns(table)
         @test all([length(col)==100 for col in cols])   # all columns must be 100 rows long
-        @test length(getfield(table, :chunks)) == 2
-        @test 50 == length(getfield(table, :chunks)[1][1])
-        @test 50 == length(getfield(table, :chunks)[2][1])
         @test length(cols) == 12                        # 12 columns
+        partitions = Tables.partitions(table)
+        @test length(partitions) == 2
+        partition_tables = collect(partitions)
+        @test length(partition_tables) == 2
+        @test Tables.istable(partition_tables[1])
+        @test Tables.columnaccess(partition_tables[1])
 
         table = read_parquet(filename; rows=1:10)
         cols = Tables.columns(table)
         @test all([length(col)==10 for col in cols])    # all columns must be 100 rows long
-        @test length(getfield(table, :chunks)) == 1
         @test length(cols) == 12                        # 12 columns
+        partitions = Tables.partitions(table)
+        @test length(partitions) == 1
+        @test length(collect(partitions)) == 1
 
         table = read_parquet(filename; rows=1:100, batchsize=10)
         cols = Tables.columns(table)
-        @test all([length(col)==100 for col in cols])    # all columns must be 100 rows long
-        @test 10 == length(getfield(table, :chunks)[1][1])
-        @test length(getfield(table, :chunks)) == 10
+        @test all([length(col)==100 for col in cols])   # all columns must be 100 rows long
         @test length(cols) == 12                        # 12 columns
+        partitions = Tables.partitions(table)
+        @test length(partitions) == 10
+        @test length(collect(partitions)) == 10
+
+        iob = IOBuffer()
+        show(iob, table)
+        @test startswith(String(take!(iob)), "Parquet.Table(")
     end
 end
   

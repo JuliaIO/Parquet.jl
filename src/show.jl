@@ -212,3 +212,7 @@ function show(io::IO, par::Parquet.File)
     println(io, "    created by: $(meta.created_by)")
     println(io, "    cached: $(length(par.page_cache.refs)) column chunks")
 end
+
+function show(io::IO, table::Parquet.Table)
+    print(io, "Parquet.Table(\"$(getfield(table, :path))\")")
+end
