@@ -169,12 +169,12 @@ function Base.iterate(ccp::ColumnChunkPages, startpos::Int64)
 
         page_data_pos = position(io)
         pagesz = page_size(pagehdr)
-        data = _use_mmap ? Mmap.mmap(io, Vector{UInt8}, (pagesz,), page_data_pos; grow=false, shared=false) : read!(io, Array{UInt8}(undef, pagesz))
+        data = _use_mmap[] ? Mmap.mmap(io, Vector{UInt8}, (pagesz,), page_data_pos; grow=false, shared=false) : read!(io, Array{UInt8}(undef, pagesz))
         codec = metadata(ccp.par, ccp.col).codec
 
         if (codec != CompressionCodec.UNCOMPRESSED)
             uncompressed_sz = pagehdr.uncompressed_page_size
-            #uncompressed_data = _use_mmap ? Mmap.mmap(Mmap.Anonymous(), Vector{UInt8}, (uncompressed_sz,), 0) : Array{UInt8}(undef, uncompressed_sz)
+            #uncompressed_data = _use_mmap[] ? Mmap.mmap(Mmap.Anonymous(), Vector{UInt8}, (uncompressed_sz,), 0) : Array{UInt8}(undef, uncompressed_sz)
             uncompressed_data = Array{UInt8}(undef, uncompressed_sz)
             if codec == CompressionCodec.SNAPPY
                 Snappy.snappy_uncompress(data, uncompressed_data)

@@ -320,6 +320,21 @@ function test_load_at_offset()
     end
 end
 
+function test_mmap_mode()
+    @testset "memory map modes" begin
+        default_mode = Parquet._use_mmap[]
+        for mode in (true, false)
+            (mode === default_mode) && continue
+            Parquet.use_mmap(mode)
+            table = read_parquet(joinpath(@__DIR__, "rowgroups", "multiple_rowgroups.parquet"))
+            cols = Tables.columns(table)
+            @test all([length(col)==100 for col in cols])
+            @test length(cols) == 12
+        end
+        Parquet.use_mmap(default_mode)
+    end
+end
+
 @testset "load files" begin
     test_load_all_pages()
     test_decode_all_pages()
@@ -328,4 +343,5 @@ end
     test_load_multiple_rowgroups()
     test_load_file()
     test_load_at_offset()
+    test_mmap_mode()
 end
