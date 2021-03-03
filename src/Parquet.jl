@@ -23,10 +23,10 @@ end
 
 const PARQUET_JL_VERSION = v"0.7.0"
 
-const _use_mmap = true
+const _use_mmap = Ref(true)
 
 function use_mmap(b::Bool)
-    global _use_mmap = b
+    _use_mmap[] = b
 end
 
 import Base: show, open, close, values, eltype, length
@@ -44,8 +44,8 @@ include("codec.jl")
 include("schema.jl")
 include("reader.jl")
 include("cursor.jl")
-include("show.jl")
 include("writer.jl")
 include("simple_reader.jl")
+include("show.jl")
 
 end # module
