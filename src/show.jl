@@ -46,7 +46,7 @@ function show(io::IO, schema::SchemaElement, indent::AbstractString="", nchildre
         print(io, ") ")
     end
 
-    if hasproperty(schema, :num_children)
+    if hasproperty(schema, :num_children) && (getproperty(schema, :num_children) > 0)
         push!(nchildren, schema.num_children)
         print(io, " {")
     elseif lchildren > 0
@@ -211,4 +211,8 @@ function show(io::IO, par::Parquet.File)
     println(io, "    nrows: $(meta.num_rows)")
     println(io, "    created by: $(meta.created_by)")
     println(io, "    cached: $(length(par.page_cache.refs)) column chunks")
+end
+
+function show(io::IO, table::Parquet.Table)
+    print(io, "Parquet.Table(\"$(getfield(table, :path))\")")
 end

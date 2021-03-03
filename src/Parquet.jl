@@ -44,8 +44,8 @@ include("codec.jl")
 include("schema.jl")
 include("reader.jl")
 include("cursor.jl")
-include("show.jl")
 include("writer.jl")
 include("simple_reader.jl")
+include("show.jl")
 
 end # module

@@ -194,7 +194,15 @@ end
 function max_definition_level(sch::Schema, schname::T) where {T <: AbstractVector{String}}
     lev = isrequired(sch, schname) ? 0 : 1
     istoplevel(schname) ? lev : (lev + max_definition_level(sch, parentname(schname)))
-end 
+end
+
+tables_schema(parfile) = tables_schema(schema(parfile))
+function tables_schema(sch::Schema)
+    cols = Parquet.ntcolstype(sch, sch.schema[1])
+    colnames = fieldnames(cols)
+    coltypes = eltype.(fieldtypes(cols))
+    Tables.Schema(colnames, coltypes)
+end
 
 logical_decimal_unscaled_type(precision::Int32) = (precision < 5) ? UInt16 :
     (precision < 10) ? UInt32 :
