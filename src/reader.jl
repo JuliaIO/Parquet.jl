@@ -28,6 +28,7 @@ end
 function cacheget(fetcher, lru::PageLRU, chunk::ColumnChunk, startpos::Int64)
     key = (chunk,startpos)
     lock(lru.lck) do
+        filter!(kv->(kv[2].value !== nothing), lru.refs)
         page = haskey(lru.refs, key) ? lru.refs[key].value : nothing
         if page === nothing
             page = fetcher()::Page
@@ -64,7 +65,7 @@ function File(path::AbstractString; map_logical_types::Dict=TLogicalTypeMap())
         return File(path, f; map_logical_types=map_logical_types)
     catch ex
         close(f)
-        rethrow(ex)
+        rethrow()
     end
 end
 
@@ -73,7 +74,9 @@ function File(path::AbstractString, handle::IOStream; map_logical_types::Dict=TL
     meta_len = metadata_length(handle)
     meta = metadata(handle, path, meta_len)
     typemap = merge!(TLogicalTypeMap(), map_logical_types)
-    File(String(path), handle, meta, Schema(meta.schema, typemap), PageLRU())
+    file = File(String(path), handle, meta, Schema(meta.schema, typemap), PageLRU())
+    finalizer(close, file)
+    file
 end
 
 function close(par::Parquet.File)

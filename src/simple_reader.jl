@@ -40,6 +40,11 @@ struct Table <: Tables.AbstractColumns
     end
 end
 
+function close(table::Table)
+    empty!(getfield(table, :columns))
+    close(getfield(table, :parfile))
+end
+
 const read_parquet = Table
 
 struct TablePartition <: Tables.AbstractColumns
