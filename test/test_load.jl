@@ -335,6 +335,20 @@ function test_mmap_mode()
     end
 end
 
+function test_zero_rows()
+    @testset "load file with no rows" begin
+        table = read_parquet(joinpath(@__DIR__, "empty", "empty.parquet"))
+        cols = Tables.columns(table)
+        @test all([length(col)==0 for col in cols])
+        @test length(cols) == 31
+        partitions = Tables.partitions(table)
+        @test length(partitions) == 0
+        schema = Tables.schema(table)
+        @test first(schema.types) == Union{Missing, Int64}
+        @test last(schema.types) == Union{Missing, String}
+    end
+end
+
 @testset "load files" begin
     test_load_all_pages()
     test_decode_all_pages()
@@ -344,4 +358,5 @@ end
     test_load_file()
     test_load_at_offset()
     test_mmap_mode()
+    test_zero_rows()
 end

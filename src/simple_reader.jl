@@ -85,9 +85,15 @@ function load(table::Table, chunks::BatchedColumnsCursor)
         for colidx in 1:ncols
             push!(columns, chunks[1][colidx])
         end
-    else
+    elseif nchunks > 1
         for colidx in 1:ncols
             push!(columns, ChainedVector([chunks[chunkidx][colidx] for chunkidx = 1:nchunks]))
+        end
+    else
+        schema = getfield(table, :schema)
+        coltypes = schema.types
+        for colidx in 1:ncols
+            push!(columns, (coltypes[colidx])[])
         end
     end
     nothing

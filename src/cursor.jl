@@ -68,7 +68,7 @@ length(cursor::ColCursor) = length(cursor.rows)
 
 function setrow(cursor::ColCursor{T}, row::Int64) where {T}
     # check if cursor is done
-    if (cursor.row > 0) && !(cursor.row in cursor.rows)
+    if ((cursor.row > 0) && !(cursor.row in cursor.rows)) || isempty(cursor.rowgroups)
         cursor.colchunks = nothing
         cursor.ccidx = 0
         cursor.valpos = cursor.levelpos = 0
@@ -240,7 +240,7 @@ Cursor options:
 """
 function BatchedColumnsCursor(par::Parquet.File;
         rows::UnitRange=1:nrows(par),
-        batchsize::Signed=min(length(rows), first(rowgroups(par)).num_rows),
+        batchsize::Signed=length(rows) > 0 ? min(length(rows), first(rowgroups(par)).num_rows) : 0,
         reusebuffer::Bool=false,
         use_threads::Bool=(nthreads() > 1))
 
@@ -253,7 +253,7 @@ function BatchedColumnsCursor(par::Parquet.File;
 
     colcursors = [ColCursor(par, colname; rows=rows) for colname in colnames(par)]
     rectype = ntcolstype(sch, sch.schema[1])
-    nbatches = ceil(Int, length(rows)/batchsize)
+    nbatches = batchsize > 0 ? ceil(Int, length(rows)/batchsize) : 0
     colbuffs = Union{Nothing,Vector}[nothing for idx in 1:length(colcursors)]
 
     BatchedColumnsCursor{rectype}(par, colnames(par), colcursors, Array{Tuple{Int64,Int64}}(undef, length(colcursors)), colbuffs, 1, rows, first(rows), batchsize, nbatches, reusebuffer, (VERSION < v"1.3") ? false : use_threads)
