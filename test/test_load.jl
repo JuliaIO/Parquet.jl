@@ -280,6 +280,7 @@ function test_load_file()
         @test length(partition_tables) == 2
         @test Tables.istable(partition_tables[1])
         @test Tables.columnaccess(partition_tables[1])
+        close(table)
 
         table = read_parquet(filename; rows=1:10)
         cols = Tables.columns(table)
@@ -288,6 +289,7 @@ function test_load_file()
         partitions = Tables.partitions(table)
         @test length(partitions) == 1
         @test length(collect(partitions)) == 1
+        close(table)
 
         table = read_parquet(filename; rows=1:100, batchsize=10)
         cols = Tables.columns(table)
@@ -300,6 +302,7 @@ function test_load_file()
         iob = IOBuffer()
         show(iob, table)
         @test startswith(String(take!(iob)), "Parquet.Table(")
+        close(table)
     end
 end
   
@@ -330,6 +333,7 @@ function test_mmap_mode()
             cols = Tables.columns(table)
             @test all([length(col)==100 for col in cols])
             @test length(cols) == 12
+            close(table)
         end
         Parquet.use_mmap(default_mode)
     end
