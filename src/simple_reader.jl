@@ -1,20 +1,47 @@
 """
     read_parquet(path; kwargs...)
-    Parquet.Table(path; kwargs...)
 
-Returns the table contained in the parquet file in an Tables.jl compatible format.
+Returns the table contained in the parquet file or dataset (partitioned parquet files in a folder)
+in a Tables.jl compatible format.
 
 Options:
-- `rows`: the row range to iterate through, all rows by default.
-- `batchsize`: maximum number of rows to read in each batch (default: row count of first row group).
-- `use_threads`: whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
+- `rows`: The row range to iterate through, all rows by default. Applicable only when reading a single file.
+- `filter`: Filter function to apply while loading only a subset of partitions from a dataset.
+- `batchsize`: Maximum number of rows to read in each batch (default: row count of first row group). Applied only when reading a single file, and to each file when reading a dataset.
+- `use_threads`: Whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
 
-One can easily convert the returned object to any Tables.jl compatible table e.g.
-DataFrames.DataFrame via
+One can easily convert the returned object to any Tables.jl compatible table e.g. DataFrames.DataFrame via
 
 ```
 using DataFrames
-df = DataFrame(read_parquet(path; copycols=false))
+df = DataFrame(read_parquet(path))
+```
+"""
+function read_parquet(path; kwargs...)
+    if isdir(path)
+        Parquet.Dataset(path; kwargs...)
+    elseif isfile(path)
+        Parquet.Table(path; kwargs...)
+    else
+        error("Invalid path to parquet file or dataset - $path")
+    end
+end
+
+"""
+    Parquet.Table(path; kwargs...)
+
+Returns the table contained in the parquet file in a Tables.jl compatible format.
+
+Options:
+- `rows`: The row range to iterate through, all rows by default.
+- `batchsize`: Maximum number of rows to read in each batch (default: row count of first row group).
+- `use_threads`: Whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
+
+One can easily convert the returned object to any Tables.jl compatible table e.g. DataFrames.DataFrame via
+
+```
+using DataFrames
+df = DataFrame(read_parquet(path))
 ```
 """
 struct Table <: Tables.AbstractColumns
@@ -28,12 +55,11 @@ struct Table <: Tables.AbstractColumns
     lookup::Dict{Symbol, Int} # map column name => index
     columns::Vector{AbstractVector}
 
-    function Table(path;
+    Table(path, sch::Tables.Schema; kwargs...) = Table(path, Parquet.File(path), sch; kwargs...)
+    function Table(path, parfile::Parquet.File=Parquet.File(path), sch::Tables.Schema=tables_schema(parfile);
             rows::Union{Nothing,UnitRange}=nothing,
             batchsize::Union{Nothing,Signed}=nothing,
             use_threads::Bool=(nthreads() > 1))
-        parfile = Parquet.File(path)
-        sch = tables_schema(parfile)
         ncols = length(sch.names)
         lookup = Dict{Symbol, Int}(nm => i for (i, nm) in enumerate(sch.names))
         new(path, ncols, rows, batchsize, use_threads, parfile, sch, lookup, AbstractVector[])
@@ -45,27 +71,44 @@ function close(table::Table)
     close(getfield(table, :parfile))
 end
 
-const read_parquet = Table
-
+"""
+Represents one partition of the parquet file.
+Typically a row group, but could be any other unit as mentioned while opening the table.
+"""
 struct TablePartition <: Tables.AbstractColumns
     table::Table
     columns::Vector{AbstractVector}
 end
 
+"""
+Iterator to iterate over partitions of a parquet file, returned by the `Tables.partitions(table)` method.
+Each partition is typically a row group, but could be any other unit as mentioned while opening the table.
+"""
 struct TablePartitions
     table::Table
     ncols::Int
+    schema::Tables.Schema
     cursor::BatchedColumnsCursor
 
     function TablePartitions(table::Table)
-        new(table, getfield(table, :ncols), cursor(table))
+        new(table, getfield(table, :ncols), getfield(table, :schema), cursor(table))
     end
 end
 length(tp::TablePartitions) = length(tp.cursor)
 function iterated_partition(partitions::TablePartitions, iterresult)
     (iterresult === nothing) && (return nothing)
     chunk, batchid = iterresult
-    TablePartition(partitions.table, AbstractVector[chunk[colidx] for colidx in 1:partitions.ncols]), batchid
+    columns = AbstractVector[]
+    for colidx in 1:partitions.ncols
+        colname = partitions.schema.names[colidx]
+        if hasproperty(chunk, colname)
+            push!(columns, getproperty(chunk, colname))
+        else
+            push!(columns, Array{partitions.schema.types[colidx]}(undef, length(first(chunk))))
+        end
+    end
+    TablePartition(partitions.table, columns), batchid
+    #TablePartition(partitions.table, AbstractVector[chunk[colidx] for colidx in 1:partitions.ncols]), batchid
 end
 Base.iterate(partitions::TablePartitions, batchid) = iterated_partition(partitions, iterate(partitions.cursor, batchid))
 Base.iterate(partitions::TablePartitions) = iterated_partition(partitions, iterate(partitions.cursor))
@@ -79,20 +122,40 @@ end
 
 loaded(table::Table) = !isempty(getfield(table, :columns))
 load(table::Table) = load(table, cursor(table))
-function load(table::Table, chunks::BatchedColumnsCursor)
-    chunks = [chunk for chunk in chunks]
+function load(table::Table, colcursor::BatchedColumnsCursor)
+    chunks = [chunk for chunk in colcursor]
     ncols = getfield(table, :ncols)
     columns = getfield(table, :columns)
+    schema = getfield(table, :schema)
 
     empty!(columns)
     nchunks = length(chunks)
     if nchunks == 1
+        chunk = chunks[1]
         for colidx in 1:ncols
-            push!(columns, chunks[1][colidx])
+            colname = schema.names[colidx]
+            if hasproperty(chunk, colname)
+                push!(columns, getproperty(chunk, colname))
+            else
+                coltype = schema.types[colidx]
+                missingval = nonmissingtype(coltype) === coltype ? undef : missing
+                push!(columns, Array{coltype}(missingval, length(first(chunk))))
+            end
         end
     elseif nchunks > 1
         for colidx in 1:ncols
-            push!(columns, ChainedVector([chunks[chunkidx][colidx] for chunkidx = 1:nchunks]))
+            colname = schema.names[colidx]
+            coltype = schema.types[colidx]
+            vecs = Vector{coltype}[]
+            for chunkidx in 1:nchunks
+                chunk = chunks[chunkidx]
+                if hasproperty(chunk, colname)
+                    push!(vecs, getproperty(chunk, colname))
+                else
+                    push!(vecs, Array{coltype}(undef, length(first(chunk))))
+                end
+            end
+            push!(columns, ChainedVector(vecs))
         end
     else
         schema = getfield(table, :schema)

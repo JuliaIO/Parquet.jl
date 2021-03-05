@@ -353,6 +353,46 @@ function test_zero_rows()
     end
 end
 
+function test_dataset()
+    @testset "load dataset" begin
+        dataset_path = joinpath(@__DIR__, "dataset")
+
+        dataset = read_parquet(dataset_path)
+        @test Tables.istable(dataset)
+        @test Tables.columnaccess(dataset)
+        @test Tables.schema(dataset).names == (:int32, :int64, :float32, :float64, :bool, :string, :int32m, :int64m, :float32m, :float64m, :boolm, :stringm)
+        cols = Tables.columns(dataset)
+        @test all([length(col)==100 for col in cols])   # all columns must be 100 rows long
+        @test length(cols) == 12                        # 12 columns
+
+        partitions = []
+        for partition in Tables.partitions(dataset)
+            push!(partitions, partition)
+        end
+        @test length(partitions) == 2
+
+        iob = IOBuffer()
+        show(iob, dataset)
+        @test startswith(String(take!(iob)), "Parquet.Dataset(")
+        close(dataset)
+
+        dataset = read_parquet(dataset_path; filter=(path)->occursin("bool=false", lowercase(path)))
+        @test Tables.istable(dataset)
+        @test Tables.columnaccess(dataset)
+        @test Tables.schema(dataset).names == (:int32, :int64, :float32, :float64, :bool, :string, :int32m, :int64m, :float32m, :float64m, :boolm, :stringm)
+        cols = Tables.columns(dataset)
+        @test all([length(col)==42 for col in cols])    # all bool=false columns must be 42 rows long
+        @test length(cols) == 12                        # 12 columns
+
+        partitions = []
+        for partition in Tables.partitions(dataset)
+            push!(partitions, partition)
+        end
+        @test length(partitions) == 1
+        close(dataset)
+    end
+end
+
 @testset "load files" begin
     test_load_all_pages()
     test_decode_all_pages()
@@ -363,4 +403,5 @@ end
     test_load_at_offset()
     test_mmap_mode()
     test_zero_rows()
+    test_dataset()
 end

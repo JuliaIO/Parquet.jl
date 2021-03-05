@@ -46,6 +46,7 @@ include("reader.jl")
 include("cursor.jl")
 include("writer.jl")
 include("simple_reader.jl")
+include("dataset.jl")
 include("show.jl")
 
 end # module
