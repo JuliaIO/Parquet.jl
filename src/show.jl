@@ -216,3 +216,7 @@ end
 function show(io::IO, table::Parquet.Table)
     print(io, "Parquet.Table(\"$(getfield(table, :path))\")")
 end
+
+function show(io::IO, dataset::Parquet.Dataset)
+    print(io, "Parquet.Dataset(\"$(getfield(dataset, :path))\")")
+end

@@ -6,16 +6,15 @@
 
 ## Reader
 
-### Simple Reader
+A [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet) or dataset can be loaded using the `read_parquet` function. A parquet dataset is a directory with multiple parquet files, each of which is a partition belonging to the dataset.
 
-You can load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet) by using the `read_parquet` function.
-
-`read_parquet(path; kwargs...)` returns a `Parquet.Table` instance, which is the table contained in the parquet file in an Tables.jl compatible format.
+`read_parquet(path; kwargs...)` returns a `Parquet.Table` or `Parquet.Dataset`, which is the table contained in the parquet file or dataset in an Tables.jl compatible format.
 
 Options:
-- `rows`: the row range to iterate through, all rows by default.
-- `batchsize`: maximum number of rows to read in each batch (default: row count of first row group), useful to read file as partitions using `Tables.paritions`.
-- `use_threads`: whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
+- `rows`: The row range to iterate through, all rows by default. Applicable only when reading a single file.
+- `filter`: Filter function to apply while loading only a subset of partitions from a dataset. The path to the partition is provided as a parameter.
+- `batchsize`: Maximum number of rows to read in each batch (default: row count of first row group). Applied only when reading a single file, and to each file when reading a dataset.
+- `use_threads`: Whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
 
 The returned object is a Tables.jl compatible Table and can be converted to other forms, e.g. a `DataFrames.DataFrame` via
 
@@ -24,7 +23,7 @@ using Parquet, DataFrames
 df = DataFrame(read_parquet(path))
 ```
 
-Partitions in a parquet file can also be iterated over using an iterator returned by the `Tables.partitions(::Parquet.Table)` method.
+Partitions in a parquet file or dataset can also be iterated over using an iterator returned by the `Tables.partitions` method.
 
 ```julia
 using Parquet, DataFrames
