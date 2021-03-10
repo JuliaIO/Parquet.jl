@@ -376,6 +376,7 @@ function test_dataset()
         @test startswith(String(take!(iob)), "Parquet.Dataset(")
         close(dataset)
 
+        # load dataset with a filter
         dataset = read_parquet(dataset_path; filter=(path)->occursin("bool=false", lowercase(path)))
         @test Tables.istable(dataset)
         @test Tables.columnaccess(dataset)
@@ -390,6 +391,17 @@ function test_dataset()
         end
         @test length(partitions) == 1
         close(dataset)
+
+        # load dataset without metadata file
+        mktempdir() do path
+            new_dataset = joinpath(path, "dataset")
+            cp(dataset_path, new_dataset)
+            metafile = joinpath(new_dataset, "_common_metadata")
+            rm(metafile)
+            dataset = read_parquet(new_dataset)
+            @test Tables.istable(dataset)
+            @test Tables.columnaccess(dataset)
+        end
     end
 end
 

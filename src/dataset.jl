@@ -69,7 +69,7 @@ function dataset_schema(path::String)
             for file in files
                 full_filename = joinpath(root, file)
                 if is_par_file(full_filename)
-                    schema = tables_schema(Parquet.File(meta_file))
+                    schema = tables_schema(Parquet.File(full_filename))
                     break
                 end
             end
