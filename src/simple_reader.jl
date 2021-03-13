@@ -9,6 +9,7 @@ Options:
 - `filter`: Filter function to apply while loading only a subset of partitions from a dataset.
 - `batchsize`: Maximum number of rows to read in each batch (default: row count of first row group). Applied only when reading a single file, and to each file when reading a dataset.
 - `use_threads`: Whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
+- `column_generator`: Function to generate a partitioned column when not found in the partitioned table. Parameters provided to the function: table, column index, length of column to generate. Default implementation determines column values from the table path.
 
 One can easily convert the returned object to any Tables.jl compatible table e.g. DataFrames.DataFrame via
 
@@ -54,21 +55,30 @@ struct Table <: Tables.AbstractColumns
     schema::Tables.Schema
     lookup::Dict{Symbol, Int} # map column name => index
     columns::Vector{AbstractVector}
+    column_generator::Function
 
     Table(path, sch::Tables.Schema; kwargs...) = Table(path, Parquet.File(path), sch; kwargs...)
     function Table(path, parfile::Parquet.File=Parquet.File(path), sch::Tables.Schema=tables_schema(parfile);
             rows::Union{Nothing,UnitRange}=nothing,
             batchsize::Union{Nothing,Signed}=nothing,
+            column_generator::Function=column_generator,
             use_threads::Bool=(nthreads() > 1))
         ncols = length(sch.names)
         lookup = Dict{Symbol, Int}(nm => i for (i, nm) in enumerate(sch.names))
-        new(path, ncols, rows, batchsize, use_threads, parfile, sch, lookup, AbstractVector[])
+        new(path, ncols, rows, batchsize, use_threads, parfile, sch, lookup, AbstractVector[], column_generator)
     end
 end
 
 function close(table::Table)
     empty!(getfield(table, :columns))
     close(getfield(table, :parfile))
+end
+
+function column_generator(table::Table, colidx::Int, len::Int)
+    schema = getfield(table, :schema)
+    coltype = schema.types[colidx]
+    missingval = nonmissingtype(coltype) === coltype ? undef : missing
+    Array{coltype}(missingval, len)
 end
 
 """
@@ -104,11 +114,11 @@ function iterated_partition(partitions::TablePartitions, iterresult)
         if hasproperty(chunk, colname)
             push!(columns, getproperty(chunk, colname))
         else
-            push!(columns, Array{partitions.schema.types[colidx]}(undef, length(first(chunk))))
+            generator = getfield(partitions.table, :column_generator)
+            push!(columns, generator(partitions.table, colidx, length(first(chunk))))
         end
     end
     TablePartition(partitions.table, columns), batchid
-    #TablePartition(partitions.table, AbstractVector[chunk[colidx] for colidx in 1:partitions.ncols]), batchid
 end
 Base.iterate(partitions::TablePartitions, batchid) = iterated_partition(partitions, iterate(partitions.cursor, batchid))
 Base.iterate(partitions::TablePartitions) = iterated_partition(partitions, iterate(partitions.cursor))
@@ -127,6 +137,7 @@ function load(table::Table, colcursor::BatchedColumnsCursor)
     ncols = getfield(table, :ncols)
     columns = getfield(table, :columns)
     schema = getfield(table, :schema)
+    generator = getfield(table, :column_generator)
 
     empty!(columns)
     nchunks = length(chunks)
@@ -137,9 +148,7 @@ function load(table::Table, colcursor::BatchedColumnsCursor)
             if hasproperty(chunk, colname)
                 push!(columns, getproperty(chunk, colname))
             else
-                coltype = schema.types[colidx]
-                missingval = nonmissingtype(coltype) === coltype ? undef : missing
-                push!(columns, Array{coltype}(missingval, length(first(chunk))))
+                push!(columns, generator(table, colidx, length(first(chunk))))
             end
         end
     elseif nchunks > 1
@@ -152,7 +161,7 @@ function load(table::Table, colcursor::BatchedColumnsCursor)
                 if hasproperty(chunk, colname)
                     push!(vecs, getproperty(chunk, colname))
                 else
-                    push!(vecs, Array{coltype}(undef, length(first(chunk))))
+                    push!(vecs, generator(table, colidx, length(first(chunk))))
                 end
             end
             push!(columns, ChainedVector(vecs))
