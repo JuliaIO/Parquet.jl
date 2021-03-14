@@ -303,6 +303,21 @@ function test_load_file()
         show(iob, table)
         @test startswith(String(take!(iob)), "Parquet.Table(")
         close(table)
+
+        # test loading table with separately specified schema
+        parfile = joinpath(@__DIR__, "datasets", "bool_partition", "bool=False", "560bea059bf94bae9f785f9b4a455317.parquet")
+        schemafile = joinpath(@__DIR__, "datasets", "bool_partition", "_common_metadata")
+        schema = Tables.schema(read_parquet(schemafile))
+        table = Parquet.Table(parfile, schema)
+        cols = Tables.columns(table)
+        @test length(cols) == 12
+        @test all(ismissing.(cols.bool))
+        close(table)
+
+        # test loading table with custom missing partition column generator
+        table = Parquet.Table(parfile, schema; column_generator=(t,c,l)->trues(l))
+        cols = Tables.columns(table)
+        @test sum(cols.bool) == 42
     end
 end
   
@@ -355,7 +370,8 @@ end
 
 function test_dataset()
     @testset "load dataset" begin
-        dataset_path = joinpath(@__DIR__, "dataset")
+        # load dataset partitioned by boolean column
+        dataset_path = joinpath(@__DIR__, "datasets", "bool_partition")
 
         dataset = read_parquet(dataset_path)
         @test Tables.istable(dataset)
@@ -364,6 +380,7 @@ function test_dataset()
         cols = Tables.columns(dataset)
         @test all([length(col)==100 for col in cols])   # all columns must be 100 rows long
         @test length(cols) == 12                        # 12 columns
+        @test sum(cols.bool) == 58                      # 58 rows in `bool=true` partition
 
         partitions = []
         for partition in Tables.partitions(dataset)
@@ -392,9 +409,37 @@ function test_dataset()
         @test length(partitions) == 1
         close(dataset)
 
+        # load dataset partitioned by string column
+        dataset_path = joinpath(@__DIR__, "datasets", "string_partition")
+        dataset = read_parquet(dataset_path)
+        @test Tables.istable(dataset)
+        @test Tables.columnaccess(dataset)
+        @test Tables.schema(dataset).names == (:col2, :col9)
+        cols = Tables.columns(dataset)
+        @test all([length(col)==4 for col in cols]) # all columns must be 4 rows long
+        @test length(cols) == 2                     # 2 columns
+        @test cols.col2 == ["2002-02-01", "2002-02-01", "2002-02-02", "2002-02-02"]
+        @test all(cols.col9 .== "02/2030")
+
+        # load dataset partitioned by date column
+        @test Parquet.parse_date("2002-02-01") == Date("2002-02-01")
+        @test Parquet.parse_datetime("2002-02-01") == DateTime("2002-02-01")
+        @test_throws Exception Parquet.parse_date("not date")
+        @test_throws Exception Parquet.parse_datetime("not date")
+        dataset_path = joinpath(@__DIR__, "datasets", "date_partition")
+        dataset = read_parquet(dataset_path)
+        @test Tables.istable(dataset)
+        @test Tables.columnaccess(dataset)
+        @test Tables.schema(dataset).names == (:col2, :col9)
+        cols = Tables.columns(dataset)
+        @test all([length(col)==4 for col in cols]) # all columns must be 4 rows long
+        @test length(cols) == 2                     # 2 columns
+        @test cols.col2 == [DateTime("2002-02-01"), DateTime("2002-02-01"), DateTime("2002-02-02"), DateTime("2002-02-02")]
+        @test all(cols.col9 .== "02/2030")
+
         # load dataset without metadata file
         mktempdir() do path
-            new_dataset = joinpath(path, "dataset")
+            new_dataset = joinpath(path, "datasets")
             cp(dataset_path, new_dataset)
             metafile = joinpath(new_dataset, "_common_metadata")
             rm(metafile)

@@ -15,6 +15,7 @@ Options:
 - `filter`: Filter function to apply while loading only a subset of partitions from a dataset. The path to the partition is provided as a parameter.
 - `batchsize`: Maximum number of rows to read in each batch (default: row count of first row group). Applied only when reading a single file, and to each file when reading a dataset.
 - `use_threads`: Whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
+- `column_generator`: Function to generate a partitioned column when not found in the partitioned table. Parameters provided to the function: table, column index, length of column to generate. Default implementation determines column values from the table path.
 
 The returned object is a Tables.jl compatible Table and can be converted to other forms, e.g. a `DataFrames.DataFrame` via
 
