@@ -487,13 +487,15 @@ function write_parquet(io::IO, x; compression_codec = "SNAPPY")
 
     # figure out the right number of chunks
     # TODO test that it works for all supported table
-    table_size_bytes = Base.summarysize(tbl)
+    nrows = Tables.rowcount(tbl)
+    sample_size = min(100, nrows)
+    rs = collect(Iterators.take(Tables.namedtupleiterator(tbl), sample_size))
+    table_size_bytes = Base.summarysize(rs) / sample_size * nrows
 
     approx_raw_to_parquet_compression_ratio = 6
     approx_post_compression_size = (table_size_bytes / 2^30) / approx_raw_to_parquet_compression_ratio
 
     # if size is larger than 64mb and has more than 6 rows
-    nrows = length(Tables.rows(tbl))
     if (approx_post_compression_size > 0.064) & (nrows > 6)
         recommended_chunks = ceil(Int, approx_post_compression_size / 6) * 6
     else
