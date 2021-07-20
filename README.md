@@ -4,6 +4,8 @@
 [![Build status](https://ci.appveyor.com/api/projects/status/gx8pvdiiery74r9l/branch/master?svg=true)](https://ci.appveyor.com/project/tanmaykm/parquet-jl-cufdj/branch/master)
 [![Coverage Status](https://coveralls.io/repos/github/JuliaIO/Parquet.jl/badge.svg?branch=master)](https://coveralls.io/github/JuliaIO/Parquet.jl?branch=master)
 
+**DOCUMENTATION:** [![][https://img.shields.io/badge/docs-latest-blue.svg]][http://dataframes.juliadata.org/latest/]
+
 ## Reader
 
 A [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet) or dataset can be loaded using the `read_parquet` function. A parquet dataset is a directory with multiple parquet files, each of which is a partition belonging to the dataset.
