@@ -458,7 +458,7 @@ compression_code    -   Default "SNAPPY". The compression codec. The supported
                         values are "UNCOMPRESSED", "SNAPPY", "ZSTD", "GZIP"
 """
 function write_parquet(io::IO, x; compression_codec = "SNAPPY")
-    tbl = Tables.columns(x)
+    tbl = Tables.Columns(x)
 
     # check that all types are supported
     sch = Tables.schema(tbl)
@@ -505,7 +505,7 @@ function write_parquet(io::IO, x; compression_codec = "SNAPPY")
     colnames = String.(Tables.columnnames(tbl))
     _write_parquet(
         io,
-        Tables.Columns(tbl),
+        tbl,
         Tables.columnnames(tbl),
         recommended_chunks;
         encoding    =   Dict(col => encoding for col in colnames),

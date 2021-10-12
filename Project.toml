@@ -30,7 +30,7 @@ LittleEndianBase128 = "0.3"
 Missings = "0.3,0.4,1"
 SentinelArrays = "1"
 Snappy = "0.3"
-Tables = "1"
+Tables = "1.6"
 Thrift = "0.8"
 julia = "1"
 
