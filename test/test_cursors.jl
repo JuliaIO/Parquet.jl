@@ -50,7 +50,7 @@ end
 function test_row_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
-            test_row_cursor(joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"))
+            test_row_cursor(joinpath(parcompat, "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"))
         end
     end
 end
@@ -58,13 +58,13 @@ end
 function test_batchedcols_cursor_all_files()
     for encformat in ("SNAPPY", "GZIP", "NONE")
         for fname in ("nation", "customer")
-            test_batchedcols_cursor(joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"))
+            test_batchedcols_cursor(joinpath(parcompat, "parquet-testdata", "impala", "1.1.1-$encformat/$fname.impala.parquet"))
         end
     end
 end
 
 function test_col_cursor_length()
-    path = joinpath(@__DIR__, "parquet-compatibility", "parquet-testdata", "impala", "1.1.1-SNAPPY/nation.impala.parquet")
+    path = joinpath(parcompat, "parquet-testdata", "impala", "1.1.1-SNAPPY/nation.impala.parquet")
     pq_file = Parquet.File(path)
     col_name = pq_file |> colnames |> first
     col_cursor = Parquet.ColCursor(pq_file, col_name)
