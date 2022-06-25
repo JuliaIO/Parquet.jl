@@ -1,0 +1,15 @@
+[julia_parcompat]
+git-tree-sha1 = "066eb71b5392a8edb036e6a66a92d9b94a9e7eed"
+lazy = true
+
+    [[julia_parcompat.download]]
+    sha256 = "943ac718383a9bb1144e0edc88ec1c42f071e00d40728af7b18a213fd4da5d1c"
+    url = "https://github.com/JuliaIO/parquet-compatibility/archive/3f7586f1b7f2a0c6b048791fb5f97c0b3df52e39.tar.gz"
+
+[parcompat]
+git-tree-sha1 = "1e993c153d3df6b2039ea5df61aeea2cb5213753"
+lazy = true
+
+    [[parcompat.download]]
+    sha256 = "895f382e65e4684335d6cbd2d682172d0923660f5525e0682112361305f05b64"
+    url = "https://github.com/Parquet/parquet-compatibility/archive/2b47eac447c7a4a88247651a4065984db7b247ff.tar.gz"

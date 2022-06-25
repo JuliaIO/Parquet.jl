@@ -97,7 +97,7 @@ end
 
 function test_decode_all_pages()
     @testset "decode parquet-compatibility test files" begin
-        testfolder = joinpath(@__DIR__, "parquet-compatibility")
+        testfolder = parcompat
         for encformat in ("SNAPPY", "GZIP", "NONE")
             for fname in ("nation", "customer")
                 testfile = joinpath(testfolder, "parquet-testdata", "impala", "1.1.1-$encformat", "$fname.impala.parquet")
@@ -107,7 +107,7 @@ function test_decode_all_pages()
     end
 
     @testset "decode julia-parquet-compatibility test files" begin
-        testfolder = joinpath(@__DIR__, "julia-parquet-compatibility")
+        testfolder = julia_parcompat
         for encformat in ("ZSTD", "SNAPPY", "GZIP", "NONE")
             for fname in ("nation", "customer")
                 testfile = joinpath(testfolder, "Parquet_Files", "$(encformat)_pandas_pyarrow_$(fname).parquet")
@@ -123,7 +123,7 @@ end
 
 function test_load_all_pages()
     @testset "load parquet-compatibility test files" begin
-        testfolder = joinpath(@__DIR__, "parquet-compatibility")
+        testfolder = parcompat
         for encformat in ("SNAPPY", "GZIP", "NONE")
             for fname in ("nation", "customer")
                 testfile = joinpath(testfolder, "parquet-testdata", "impala", "1.1.1-$encformat", "$fname.impala.parquet")
@@ -133,7 +133,7 @@ function test_load_all_pages()
     end
 
     @testset "load julia-parquet-compatibility test files" begin
-        testfolder = joinpath(@__DIR__, "julia-parquet-compatibility")
+        testfolder = julia_parcompat
         for encformat in ("ZSTD", "SNAPPY", "GZIP", "NONE")
             for fname in ("nation", "customer")
                 testfile = joinpath(testfolder, "Parquet_Files", "$(encformat)_pandas_pyarrow_$(fname).parquet")
@@ -323,7 +323,7 @@ end
   
 function test_load_at_offset()
     @testset "load file at offset" begin
-        testfolder = joinpath(@__DIR__, "parquet-compatibility")
+        testfolder = parcompat
         testfile = joinpath(testfolder, "parquet-testdata", "impala", "1.1.1-NONE", "customer.impala.parquet")
         parquet_file = Parquet.File(testfile)
 
