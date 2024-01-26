@@ -184,8 +184,12 @@ function write_encoded_data(data_to_compress_io, colvals::Union{AbstractVector{S
     end
 end
 
+"""
+    write_encoded_data(data_to_compress_io, colvals::AbstractVector{Bool})
+
+Write encoded data for Bool type.
+"""
 function write_encoded_data(data_to_compress_io, colvals::Union{AbstractVector{Bool}, SkipMissing{S}}) where S <: AbstractVector{Union{Missing, Bool}}
-    """ Write encoded data for Bool type """
     # write the bitacpked bits
     # write a bitarray seems to write 8 bytes at a time
     # so write to a tmpio first
@@ -198,36 +202,48 @@ function write_encoded_data(data_to_compress_io, colvals::Union{AbstractVector{B
     write(data_to_compress_io, packed_bits)
 end
 
+"""
+    write_encoded_data(data_to_compress_io, colvals::AbstractArray)
+
+Efficient write of encoded data for `isbits` types.
+"""
 function write_encoded_data(data_to_compress_io, colvals::AbstractArray)
-    """ Efficient write of encoded data for `isbits` types"""
     @assert isbitstype(eltype(colvals))
     write(data_to_compress_io, colvals |> htol)
 end
 
+"""
+    write_encoded_data(data_to_compress_io, colvals::SkipMissing)
+
+Write of encoded data for skipped missing types.
+"""
 function write_encoded_data(data_to_compress_io, colvals::SkipMissing)
-    """ Write of encoded data for skipped missing types"""
     for val in colvals
         write(data_to_compress_io, val |> htol)
     end
 end
 
+"""
+    write_encoded_data(data_to_compress_io, colvals)
+
+Write of encoded data for the most general types, for any iterable `colvals`.
+"""
 function write_encoded_data(data_to_compress_io, colvals)
-    """ Write of encoded data for the most general type.
-    The only requirement is that colvals has to be iterable
-    """
     for val in skipmissing(colvals)
         write(data_to_compress_io, val |> htol)
     end
 end
 
 # TODO set the encoding code into a dictionary
+"""
+    write_col_page(fileio, colvals::AbstractArray, codec, ::Val{Par2.Encoding.Plain})
+
+Write a chunk of data into a data page using `PLAIN` encoding where the values
+are written back-to-back in memory and then compressed with the codec.  For
+`String`s, the values are written with length (`UInt32`), followed by content; it
+is NOT null terminated.
+"""
 function write_col_page(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encoding.PLAIN})
-    """
-    Write a chunk of data into a data page using PLAIN encoding where the values
-    are written back-to-back in memory and then compressed with the codec.
-    For `String`s, the values are written with length (UInt32), followed by
-    content; it is NOT null terminated.
-    """
 
     # generate the data page header
     data_page_header = PAR2.PageHeader()
@@ -280,8 +296,12 @@ function write_col_page(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encodi
     )
 end
 
+"""
+    write_col_page(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encoding.PLAIN_DICTIONARY})
+
+Write dictionary encoding data page.
+"""
 function write_col_page(fileio, colvals::AbstractArray, codec, ::Val{PAR2.Encoding.PLAIN_DICTIONARY})
-    """write Dictionary encoding data page"""
     error("PLAIN_DICTIONARY encoding not implemented yet")
 
     # TODO finish the implementation
@@ -341,8 +361,12 @@ write_col(fileio, colvals::CategoricalArray, args...; kwars...) = begin
     throw("Currently CategoricalArrays are not supported.")
 end
 
+"""
+    write_col(fileio, colvals, colname, encoding, codec; nchunks=1)
+
+Write a column to a file.
+"""
 function write_col(fileio, colvals::AbstractArray{T}, colname, encoding, codec; nchunks = 1) where T
-    """Write a column to a file"""
     # TODO turn writing dictionary on
     # Currently, writing the dictionary page is not turned on for any type.
     # Normally, for Boolean data, dictionary is not supported. However for other
@@ -407,6 +431,11 @@ function write_col(fileio, colvals::AbstractArray{T}, colname, encoding, codec; 
     )
 end
 
+"""
+    create_schema_parent_node(ncols)
+
+Create the parent node in the schema tree.
+"""
 function create_schema_parent_node(ncols)
     """Create the parent node in the schema tree"""
     schmea_parent_node = PAR2.SchemaElement()
@@ -415,8 +444,12 @@ function create_schema_parent_node(ncols)
     schmea_parent_node
 end
 
+"""
+    create_col_schema(type, colname)
+
+Create a column node in the schema tree for non-strings.
+"""
 function create_col_schema(type, colname)
-    """Create a column node in the schema tree for non-strings"""
     schema_node = PAR2.SchemaElement()
     # look up type code
     schema_node._type = COL_TYPE_CODE[type |> nonmissingtype]
@@ -427,9 +460,12 @@ function create_col_schema(type, colname)
     schema_node
 end
 
+"""
+    create_col_schema(::Type{String}, colname)
 
+Create column schema for a string.
+"""
 function create_col_schema(type::Type{String}, colname)
-    """create col schema for string"""
     schema_node = PAR2.SchemaElement()
     # look up type code
     schema_node._type = COL_TYPE_CODE[type]
@@ -450,12 +486,15 @@ end
 
 
 """
-    Write a parquet file from a Tables.jl compatible table e.g DataFrame
+    write_parquet(io, tbl; compression_codec="SNAPPY")
 
-io                  -   A writable IO stream
-tbl                 -   A Tables.jl columnaccessible table e.g. a DataFrame
-compression_code    -   Default "SNAPPY". The compression codec. The supported
-                        values are "UNCOMPRESSED", "SNAPPY", "ZSTD", "GZIP"
+Write a parquet file from a Tables.jl compatible table e.g DataFrame Write
+table (Table.jl compatible object) as a parquet to `io`.  `io` can either be an
+`IO` stream object or a string, in which case it will be written to the file
+name given.
+
+Available compression codecs are: `"SNAPPY"`, `"UNCOMPRESSED"`, `"ZSTD"`,
+`"GZIP"`.
 """
 function write_parquet(io::IO, x; compression_codec = "SNAPPY")
     tbl = Tables.Columns(x)
@@ -513,35 +552,30 @@ function write_parquet(io::IO, x; compression_codec = "SNAPPY")
     )
 end
 
-"""
-    Write a parquet file from a Tables.jl compatible table e.g DataFrame
-
-path                -   The file path
-tbl                 -   A Tables.jl columnaccessible table e.g. a DataFrame
-compression_code    -   Default "SNAPPY". The compression codec. The supported
-                        values are "UNCOMPRESSED", "SNAPPY", "ZSTD", "GZIP"
-"""
 function write_parquet(path, x; compression_codec = "SNAPPY")
     open(path, "w") do io
         write_parquet(io, x; compression_codec=compression_codec)
     end
 end
 
+"""
+    _write_parquet
+
+Internal method for writing parquet
+
+itr_vectors -   An iterable of `AbstractVector`s containing the values to be
+                written
+colnames    -   Column names for each of the vectors
+path        -   The output parquet file path
+nchunks     -   The number of chunks/pages to write for each column
+ncols       -   The number of columns. This is provided as an argument for
+                the case where the `length(itr_vectors)` is not defined,
+                e.g. lazy loading of remote resources.
+encoding    -   A dictionary mapping from column names to encoding
+codec       -   A dictionary mapping from column names to compression codec
+"""
 function _write_parquet(io::IO, itr_vectors, colnames, nchunks; ncols = length(itr_vectors), encoding::Dict{String, Int32}, codec::Dict{String, Int32})
 
-    """Internal method for writing parquet
-
-    itr_vectors -   An iterable of `AbstractVector`s containing the values to be
-                    written
-    colnames    -   Column names for each of the vectors
-    path        -   The output parquet file path
-    nchunks     -   The number of chunks/pages to write for each column
-    ncols       -   The number of columns. This is provided as an argument for
-                    the case where the `length(itr_vectors)` is not defined,
-                    e.g. lazy loading of remote resources.
-    encoding    -   A dictionary mapping from column names to encoding
-    codec       -   A dictionary mapping from column names to compression codec
-    """
     write(io, "PAR1")
 
     # the + 1 comes from the fact that schema is a tree and there is an extra
