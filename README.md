@@ -1,7 +1,7 @@
 # Parquet
 
 [![CI](https://github.com/JuliaIO/Parquet.jl/actions/workflows/ci.yaml/badge.svg)](https://github.com/JuliaIO/Parquet.jl/actions/workflows/ci.yaml)
-[![Coverage Status](https://coveralls.io/repos/github/JuliaIO/Parquet.jl/badge.svg?branch=master)](https://coveralls.io/github/JuliaIO/Parquet.jl?branch=master)
+[![codecov](https://codecov.io/gh/JuliaIO/Parquet.jl/graph/badge.svg?token=qchPEYSd5Q)](https://codecov.io/gh/JuliaIO/Parquet.jl)
 
 ## Reader
 
