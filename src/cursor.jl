@@ -2,10 +2,13 @@
 # layer 3 access
 # read data as records which are named tuple representations of the schema
 
-##
-# Column cursor iterates through all values of the column, including null values.
-# Each iteration returns the value (as a Union{T,Nothing}), definition level, and repetition level for each value.
-# Row can be deduced from repetition level.
+"""
+    ColCursor{T}
+
+Column cursor iterates through all values of the column, including null values.
+Each iteration returns the value (as a Union{T,Nothing}), definition level, and
+repetition level for each value.  Row can be deduced from repetition level.
+"""
 mutable struct ColCursor{T}
     par::Parquet.File
     colname::Vector{String}                                 # column name (full path in schema)
@@ -226,13 +229,16 @@ mutable struct BatchedColumnsCursor{T}
 end
 
 """
+    BatchedColumnsCursor
+
 Create cursor to iterate over batches of column values. Each iteration returns a named tuple of column names with batch of column values. Files with nested schemas can not be read with this cursor.
 
+## Constructors
 ```julia
 BatchedColumnsCursor(par::Parquet.File; kwargs...)
 ```
 
-Cursor options:
+## Arguments
 - `rows`: the row range to iterate through, all rows by default.
 - `batchsize`: maximum number of rows to read in each batch (default: row count of first row group).
 - `reusebuffer`: boolean to indicate whether to reuse the buffers with every iteration; if each iteration processes the batch and does not need to refer to the same data buffer again, then setting this to `true` reduces GC pressure and can help significantly while processing large files.
@@ -363,13 +369,16 @@ mutable struct RecordCursor{T}
 end
 
 """
+    RecordCursor
+
 Create cursor to iterate over records. In parallel mode, multiple remote cursors can be created and iterated on in parallel.
 
+## Constructor
 ```julia
 RecordCursor(par::Parquet.File; kwargs...)
 ```
 
-Cursor options:
+## Arguments
 - `rows`: the row range to iterate through, all rows by default.
 - `colnames`: the column names to retrieve; all by default
 """
