@@ -49,13 +49,15 @@ function show(io::IO, schema::SchemaElement, indent::AbstractString="", nchildre
     if hasproperty(schema, :num_children) && (getproperty(schema, :num_children) > 0)
         push!(nchildren, schema.num_children)
         print(io, " {")
-    elseif lchildren > 0
-        nchildren[lchildren] -= 1
-        if nchildren[lchildren] == 0
+    else
+        while !isempty(nchildren) && nchildren[end] == 1
             pop!(nchildren)
             println(io, "")
             print_indent(io, length(nchildren))
             print(io, indent, "}")
+        end
+        if !isempty(nchildren)
+            nchildren[end] -= 1
         end
     end
 
