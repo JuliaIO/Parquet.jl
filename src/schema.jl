@@ -7,19 +7,35 @@ const TLogicalTypeMap = Dict{Union{Int32,Vector{String}},Tuple{DataType,Function
 mutable struct Schema
     schema::Vector{SchemaElement}
     map_logical_types::TLogicalTypeMap
-    name_lookup::Dict{Vector{String},SchemaElement}
+    graph::Dict{Int,Vector{Int}}
+    name_lookup::Dict{Vector{String},Int}
     type_lookup::Dict{Vector{String},Union{DataType,Union}}
     nttype_lookup::Dict{Vector{String},Union{DataType,Union}}
 
     function Schema(elems::Vector{SchemaElement}, map_logical_types::TLogicalTypeMap=TLogicalTypeMap())
-        name_lookup = Dict{Vector{String},SchemaElement}()
+        name_lookup = Dict{Vector{String},Int}()
+        graph = Dict{Int,Vector{Int}}(1 => [])
         name_stack = String[]
         nchildren_stack = Int[]
+        idx_stack = Vector{Int}()
+        base_idx = 1
 
         for idx in 1:length(elems)
             sch = elems[idx]
             nested_name = [name_stack; sch.name]
-            name_lookup[nested_name] = sch
+            name_lookup[nested_name] = idx
+
+            if !isempty(idx_stack)
+                parent_idx = idx_stack[end]
+                if haskey(graph, parent_idx)
+                    push!(graph[parent_idx], idx)
+                else
+                    graph[parent_idx] = [idx]
+                end
+            else
+                base_idx != idx && push!(graph[base_idx], idx)
+            end
+
             if !haskey(map_logical_types, nested_name)
                 if is_logical_string(sch)
                     map_logical_types[nested_name] = (String, logical_string)
@@ -33,17 +49,19 @@ mutable struct Schema
             if (idx > 1) && (num_children(sch) > 0)
                 push!(nchildren_stack, sch.num_children)
                 push!(name_stack, sch.name)
+                push!(idx_stack, idx)
             elseif !isempty(nchildren_stack)
                 while !isempty(nchildren_stack) && nchildren_stack[end] == 1
                     pop!(nchildren_stack)
                     pop!(name_stack)
+                    pop!(idx_stack)
                 end
                 if !isempty(nchildren_stack)
                     nchildren_stack[end] -= 1
                 end
             end
         end
-        new(elems, map_logical_types, name_lookup, Dict{Vector{String},Union{DataType,Union}}(), Dict{Vector{String},Union{DataType,Union}}())
+        new(elems, map_logical_types, graph, name_lookup, Dict{Vector{String},Union{DataType,Union}}(), Dict{Vector{String},Union{DataType,Union}}())
     end
 end
 
@@ -51,13 +69,10 @@ leafname(schname::T) where {T<:AbstractVector{String}} = [schname[end]]
 
 parentname(schname::T) where {T<:AbstractVector{String}} = istoplevel(schname) ? schname : schname[1:(end-1)]
 
-istoplevel(schname::Vector) = !(length(schname) > 1)
+istoplevel(schname::Vector) = length(schname) == 1
 
-elem(sch::Schema, schname::T) where {T<:AbstractVector{String}} = sch.name_lookup[schname]
-function elemindex(sch::Schema, schname::T) where {T<:AbstractVector{String}}
-    schema_element = elem(sch, schname)
-    findfirst(x -> x === schema_element, sch.schema)
-end
+elem(sch::Schema, schname::T) where {T<:AbstractVector{String}} = sch.schema[sch.name_lookup[schname]]
+elemindex(sch::Schema, schname::T) where {T<:AbstractVector{String}} = sch.name_lookup[schname]
 
 isrepetitiontype(schelem::SchemaElement, repetition_type) = hasproperty(schelem, :repetition_type) && (schelem.repetition_type == repetition_type)
 
@@ -88,13 +103,13 @@ end
 
 function path_in_schema(sch::Schema, schelem::SchemaElement)
     for (n, v) in sch.name_lookup
-        (v === schelem) && return n
+        (sch.schema[v] === schelem) && return n
     end
     error("schema element not found in schema")
 end
 
 function logical_converter(sch::Schema, schname::T) where {T<:AbstractVector{String}}
-    elem = sch.name_lookup[schname]
+    elem = sch.schema[sch.name_lookup[schname]]
 
     if schname in keys(sch.map_logical_types)
         _logical_type, converter = sch.map_logical_types[schname]
@@ -123,7 +138,7 @@ end
 
 elemtype(sch::Schema, schname::T) where {T<:AbstractVector{String}} =
     get!(sch.type_lookup, schname) do
-        elem = sch.name_lookup[schname]
+        elem = sch.schema[sch.name_lookup[schname]]
 
         if schname in keys(sch.map_logical_types)
             logical_type, _converter = sch.map_logical_types[schname]
@@ -152,48 +167,12 @@ function elemtype(schelem::SchemaElement)
     jtype
 end
 
-function compute_subtree_sizes(sch::Schema)
-    n = length(sch.schema)
-    subtree_sizes = zeros(Int, n)
-    stack = []
-
-    for i = n:-1:1
-        elem = sch.schema[i]
-        size = 1  # Count self
-        num_children_elem = num_children(elem)
-        if num_children_elem > 0
-            total_children_size = 0
-            for _ in 1:num_children_elem
-                child_size = pop!(stack)
-                total_children_size += child_size
-            end
-            size += total_children_size
-        end
-        push!(stack, size)
-        subtree_sizes[i] = size
-    end
-    return subtree_sizes
-end
-
 ntcolstype(sch::Schema, schname::T) where {T<:AbstractVector{String}} =
     get!(sch.nttype_lookup, schname) do
         ntcolstype(sch, sch.name_lookup[schname])
     end
-function ntcolstype(sch::Schema, schelem::SchemaElement)
-    @assert num_children(schelem) > 0
-    idx = findfirst(x -> x === schelem, sch.schema)
-    num_immediate_children = schelem.num_children
-    subtree_sizes = compute_subtree_sizes(sch)
-    child_indices = Int[]
-    i = idx + 1
-    n = length(sch.schema)
-    remaining_children = num_immediate_children
-    while remaining_children > 0 && i <= n
-        push!(child_indices, i)
-        skip = subtree_sizes[i]  # Total size of this child's subtree
-        i += skip
-        remaining_children -= 1
-    end
+function ntcolstype(sch::Schema, idx::Int)
+    child_indices = sch.graph[idx] # will error out in case of idx having no children
     names = [Symbol(x.name) for x in sch.schema[child_indices]]
     types = [(num_children(x) > 0) ? ntelemtype(sch, path_in_schema(sch, x)) : elemtype(sch, path_in_schema(sch, x)) for x in sch.schema[child_indices]]
     optionals = [isoptional(x) for x in sch.schema[child_indices]]
@@ -201,21 +180,29 @@ function ntcolstype(sch::Schema, schelem::SchemaElement)
     NamedTuple{(names...,),Tuple{types...}}
 end
 
+function ntcolstype(sch::Schema, schelem::SchemaElement)
+    idx = findfirst(x -> x === schelem, sch.schema)
+    return ntcolstype(sch, idx)
+end
+
 ntelemtype(sch::Schema, schname::T) where {T<:AbstractVector{String}} =
     get!(sch.nttype_lookup, schname) do
         ntelemtype(sch, sch.name_lookup[schname])
     end
-function ntelemtype(sch::Schema, schelem::SchemaElement)
-    @assert num_children(schelem) > 0
-    idx = findfirst(x -> x === schelem, sch.schema)
-    children_range = (idx+1):(idx+schelem.num_children)
+function ntelemtype(sch::Schema, idx::Int)
+    schelem = sch.schema[idx] # will error out in case of idx having no children
+    child_indices = sch.graph[idx]
+    names = [Symbol(x.name) for x in sch.schema[child_indices]]
     repeated = hasproperty(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REPEATED)
-    names = [Symbol(x.name) for x in sch.schema[children_range]]
-    types = [(num_children(x) > 0) ? ntelemtype(sch, path_in_schema(sch, x)) : elemtype(sch, path_in_schema(sch, x)) for x in sch.schema[children_range]]
-    optionals = [isoptional(x) for x in sch.schema[children_range]]
+    types = [(num_children(x) > 0) ? ntelemtype(sch, path_in_schema(sch, x)) : elemtype(sch, path_in_schema(sch, x)) for x in sch.schema[child_indices]]
+    optionals = [isoptional(x) for x in sch.schema[child_indices]]
     types = [opt ? Union{t,Missing} : t for (t, opt) in zip(types, optionals)]
     T = NamedTuple{(names...,),Tuple{types...}}
     repeated ? Vector{T} : T
+end
+function ntelemtype(sch::Schema, schelem::SchemaElement)
+    idx = findfirst(x -> x === schelem, sch.schema)
+    return ntelemtype(sch, idx)
 end
 
 bit_or_byte_length(sch::Schema, schname::Vector{String}) = bit_or_byte_length(elem(sch, schname))
