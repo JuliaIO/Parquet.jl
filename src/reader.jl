@@ -454,7 +454,7 @@ function is_par_file(io)
     magic = Array{UInt8}(undef, 4)
     read!(io, magic)
     (String(magic) == PAR_MAGIC) || return false
-    
+
     seek(io, sz - SZ_PAR_MAGIC)
     magic = Array{UInt8}(undef, 4)
     read!(io, magic)
