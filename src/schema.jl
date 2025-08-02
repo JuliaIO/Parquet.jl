@@ -4,6 +4,11 @@
 const TLogicalTypeMap = Dict{Union{Int32,Vector{String}},Tuple{DataType,Function}}
 
 # schema and helper methods
+"""
+    Schema
+
+Parquet table schema.
+"""
 mutable struct Schema
     schema::Vector{SchemaElement}
     map_logical_types::TLogicalTypeMap
@@ -43,7 +48,8 @@ mutable struct Schema
                 end
             end
         end
-        new(elems, map_logical_types, name_lookup, Dict{Vector{String},Union{DataType,Union}}(), Dict{Vector{String},Union{DataType,Union}}())
+        new(elems, map_logical_types, name_lookup, Dict{Vector{String},Union{DataType,Union}}(),
+            Dict{Vector{String},Union{DataType,Union}}())
     end
 end
 
@@ -189,7 +195,7 @@ num_children(schelem::SchemaElement) = hasproperty(schelem, :num_children) ? sch
 function max_repetition_level(sch::Schema, schname::T) where {T <: AbstractVector{String}}
     lev = isrepeated(sch, schname) ? 1 : 0
     istoplevel(schname) ? lev : (lev + max_repetition_level(sch, parentname(schname)))
-end 
+end
 
 function max_definition_level(sch::Schema, schname::T) where {T <: AbstractVector{String}}
     lev = isrequired(sch, schname) ? 0 : 1
