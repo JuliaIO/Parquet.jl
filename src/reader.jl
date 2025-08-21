@@ -4,7 +4,15 @@ const SZ_PAR_MAGIC = length(PAR_MAGIC)
 const SZ_FOOTER = 4
 const SZ_VALID_PAR = 2*SZ_PAR_MAGIC + SZ_FOOTER
 
-# page is the unit of compression
+"""
+    Page
+
+Data structure representing a parquet "page".
+
+Column chunks are divided into pages which are conceptually individual units in terms
+of compression and encoding.  Multiple page types can be contained in a simble column
+chunk.
+"""
 mutable struct Page
     colchunk::ColumnChunk
     hdr::PageHeader
@@ -14,8 +22,10 @@ mutable struct Page
 end
 
 """
-Keeps a cache of pages read from a file.
-Pages are kept as weak refs, so that they can be collected when there's memory pressure.
+    PageLRU
+
+Keeps a cache of pages read from a file.  Pages are kept as weak refs, so that
+they can be collected when there's memory pressure.
 """
 struct PageLRU
     refs::Dict{Tuple{ColumnChunk,Int64},WeakRef}
