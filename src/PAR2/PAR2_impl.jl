@@ -2,4 +2,4 @@
 const PARType = _Type
 export PARType
 
-# server impleneation intentionally empty as this is just the client part
+# server implementation intentionally empty as this is just the client part
