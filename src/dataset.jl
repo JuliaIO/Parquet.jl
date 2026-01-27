@@ -137,6 +137,8 @@ function dataset_schema(path::String)
 end
 
 """
+    DatasetPartitions
+
 Iterator to iterate over partitions of a parquet dataset, returned by the `Tables.partitions(dataset)` method.
 Each partition is a Parquet.Table.
 """

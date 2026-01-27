@@ -4,3 +4,4 @@
 parquet-compatibility/
 julia-parquet-compatibility/
 .vscode/settings.json
+/docs/build

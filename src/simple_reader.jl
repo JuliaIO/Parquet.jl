@@ -82,6 +82,8 @@ function column_generator(table::Table, colidx::Int, len::Int)
 end
 
 """
+    TablePartition
+
 Represents one partition of the parquet file.
 Typically a row group, but could be any other unit as mentioned while opening the table.
 """
@@ -91,6 +93,8 @@ struct TablePartition <: Tables.AbstractColumns
 end
 
 """
+    TablePartitions
+
 Iterator to iterate over partitions of a parquet file, returned by the `Tables.partitions(table)` method.
 Each partition is typically a row group, but could be any other unit as mentioned while opening the table.
 """

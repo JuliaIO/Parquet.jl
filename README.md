@@ -6,6 +6,8 @@
 
 See also alternatives: [Parquet2.jl](https://gitlab.com/ExpandingMan/Parquet2.jl); We suggest also considering [DuckDB.jl](https://github.com/duckdb/duckdb) which is backed by a mature and well-maintained C++ library and has query support (see also [QuackIO.jl](https://github.com/JuliaAPlavin/QuackIO.jl) for a simple convenience wrapper of this).
 
+**DOCUMENTATION:** [![](https://img.shields.io/badge/docs-latest-blue.svg)](http://dataframes.juliadata.org/latest/)
+
 ## Reader
 
 A [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet) or dataset can be loaded using the `read_parquet` function. A parquet dataset is a directory with multiple parquet files, each of which is a partition belonging to the dataset.
