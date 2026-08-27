@@ -1,0 +1,23 @@
+descriptor_version = 1
+id = "pyarrow-cp312-macos-15-arm64"
+status = "verified"
+authority = "pyarrow"
+platform = "macos-15-arm64"
+python_version = "3.12.8"
+python_source_revision = "2dc476bcb9142cd25d7e1d52392b73a3dcdf1756"
+python_distribution_url = "https://github.com/astral-sh/python-build-standalone/releases/download/20250115/cpython-3.12.8%2B20250115-aarch64-apple-darwin-install_only_stripped.tar.gz"
+python_distribution_sha256 = "dfb8a4c87116538717105ef3dec3668ae07590a5b5532109fec3ccad90be2fbc"
+python_tree_policy = "extract-strip-site-packages-bytecode-v1"
+python_executable_sha256 = "d6b64f766d3b08326aa10cdb37c9d922e3af38b57ec07caa28b894e5fccf6e69"
+python_tree_sha256 = "e3b7dcdffba67f605b0fa3318656387e8d4265d34531c2bdbc43d3aba4a033ec"
+wheels = [
+  { name = "pyarrow-25.0.1-cp312-cp312-macosx_12_0_arm64.whl", sha256 = "df961f2e7ae9cf496459259d798652c70625f6c080650d6952f8c04053c58ee9" },
+]
+harness_status = "verified"
+harness_file = "test/conformance/n6/harnesses/pyarrow.py"
+harness_sha256 = "6b8d6f2bd1dfe4ce26a3f772974dd5a3b875c17972264563cee8cfec49b748f0"
+support_files = [
+  { file = "test/conformance/n6/harnesses/common.py", sha256 = "8b48613a795deed37089f6dbfca8eb6ed18062ebfd907a4606c91ef3308776ad" },
+]
+test_file = "test/conformance/n6/harnesses/test_common.py"
+test_sha256 = "f3d90b023c5ec3e71713d96631054a218e4656f2345fe407daeff60ece3ae694"

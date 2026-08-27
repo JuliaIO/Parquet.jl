@@ -13,8 +13,8 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - '1.3'
-          - '1' # automatically expands to the latest stable 1.x release of Julia
+          - '1.10'
+          - '1'
           - 'nightly'
         os:
           - ubuntu-latest
@@ -23,18 +23,66 @@ jobs:
         arch:
           - x64
     steps:
-      - uses: actions/checkout@v5
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: apache/parquet-testing
+          ref: 09f3cdbde45302f0f0c689c950e465e98a9df960
+          path: test/parquet-testing
+      - uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9 # v2
         with:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
-      - uses: julia-actions/cache@v2
-      - uses: julia-actions/julia-buildpkg@v1
-      - uses: julia-actions/julia-runtest@v1
+      - uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9 # v2
+      - uses: julia-actions/julia-buildpkg@e3eb439fad4f9aba7da2667e7510e4a46ebc46e1 # v1
+      - name: Run N5 nested conformance
+        env:
+          PARQUET_TESTING_DIR: test/parquet-testing
+        run: julia --project=. test/conformance/n5/runtests.jl
+      - uses: julia-actions/julia-runtest@6e050c8013b833b1195105ff2fce9cd802f53271 # v1
         env:
           JULIA_NUM_THREADS: 4
-      - uses: julia-actions/julia-processcoverage@v1
-      - uses: codecov/codecov-action@v5
+      - uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38 # v1
+      - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
+  n6-static:
+    timeout-minutes: 20
+    name: N6 static - Julia ${{ matrix.version }} - macOS arm64
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - '1.10.11'
+          - '1.12.6'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9 # v2
+        with:
+          version: ${{ matrix.version }}
+          arch: aarch64
+      - name: Run N6 static preflight
+        env:
+          PARQUET_N6_GATE: '0'
+        run: julia --project=. --startup-file=no --history-file=no test/conformance/n6/runtests.jl
+  bounds:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: apache/parquet-testing
+          ref: 09f3cdbde45302f0f0c689c950e465e98a9df960
+          path: test/parquet-testing
+      - uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9 # v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9 # v2
+      - name: Run N5 nested conformance
+        env:
+          PARQUET_TESTING_DIR: test/parquet-testing
+        run: julia --project=. test/conformance/n5/runtests.jl
+      - run: julia --project --check-bounds=yes -e 'using Pkg; Pkg.test()'

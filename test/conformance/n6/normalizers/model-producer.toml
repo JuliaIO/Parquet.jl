@@ -1,0 +1,34 @@
+descriptor_version = 1
+producer = "n6-independent-model"
+
+[[file]]
+path = "test/conformance/n6/model/N6StatisticsModel.jl"
+sha256 = "32c090ed6e0c6af49eabf3f96afc6e17dff630c4e89372367e693202e87c4262"
+
+[[file]]
+path = "test/conformance/n6/model/README.md"
+sha256 = "143290750312ae294c9954daf3d30d9d79b8627c67059ee001ba2228fa803814"
+
+[[file]]
+path = "test/conformance/n6/model/cases.toml"
+sha256 = "925da4abeb448033b291e8f2a1ed8d68f6af30e5a4994d1e576f757581c5ad7b"
+
+[[file]]
+path = "test/conformance/n6/model/runtests.jl"
+sha256 = "c74aab7a4d522a77443bba61070bae51c15bfec75a917bcd5ea16331d2307691"
+
+[[file]]
+path = "test/conformance/n6/normalizers/common.py"
+sha256 = "ea73b2731a981b8890baae47c756db2b42f0130926e100b91edace12fb2f0b0b"
+
+[[file]]
+path = "test/conformance/n6/normalizers/model_bridge.jl"
+sha256 = "2468012b4536136c9737629842bb37424d65c82dbc0c0303b74d2612f69afb23"
+
+[[file]]
+path = "test/conformance/n6/normalizers/normalize_model.py"
+sha256 = "51932b834d4c38147dc3452c615f09d45cbbc03b6bf69e2327dcdf9508a63296"
+
+[[file]]
+path = "test/conformance/n6/normalizers/normalize_raw.py"
+sha256 = "fb9a8c0bcca7a4ca0a252e735a891120af441b8861d3321b57ba6adf9ac3099a"

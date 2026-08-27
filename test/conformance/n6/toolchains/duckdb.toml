@@ -1,0 +1,23 @@
+descriptor_version = 1
+id = "duckdb-cp312-macos-15-arm64"
+status = "verified"
+authority = "duckdb"
+platform = "macos-15-arm64"
+python_version = "3.12.8"
+python_source_revision = "2dc476bcb9142cd25d7e1d52392b73a3dcdf1756"
+python_distribution_url = "https://github.com/astral-sh/python-build-standalone/releases/download/20250115/cpython-3.12.8%2B20250115-aarch64-apple-darwin-install_only_stripped.tar.gz"
+python_distribution_sha256 = "dfb8a4c87116538717105ef3dec3668ae07590a5b5532109fec3ccad90be2fbc"
+python_tree_policy = "extract-strip-site-packages-bytecode-v1"
+python_executable_sha256 = "d6b64f766d3b08326aa10cdb37c9d922e3af38b57ec07caa28b894e5fccf6e69"
+python_tree_sha256 = "e3b7dcdffba67f605b0fa3318656387e8d4265d34531c2bdbc43d3aba4a033ec"
+wheels = [
+  { name = "duckdb-1.5.5-cp312-cp312-macosx_11_0_arm64.whl", sha256 = "f0b88535a5d86fdd63dba6ea02ab68c003dfb9e4892b11256ef24c4da208baae" },
+]
+harness_status = "verified"
+harness_file = "test/conformance/n6/harnesses/duckdb.py"
+harness_sha256 = "96e9219d8c5c0d24d348280dcbad3ee2006a5ec6f3096bb7ca671592ef422754"
+support_files = [
+  { file = "test/conformance/n6/harnesses/common.py", sha256 = "8b48613a795deed37089f6dbfca8eb6ed18062ebfd907a4606c91ef3308776ad" },
+]
+test_file = "test/conformance/n6/harnesses/test_common.py"
+test_sha256 = "f3d90b023c5ec3e71713d96631054a218e4656f2345fe407daeff60ece3ae694"

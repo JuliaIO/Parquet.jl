@@ -1,0 +1,109 @@
+format_version = "2.13.0"
+format_commit = "c47e2a66e88943fc46fde1b028a9432f14fdf5c0"
+corpus_commit = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+policy = "complete means read, write when applicable, malformed-input, and independent-oracle evidence"
+
+[[features]]
+name = "compact_protocol_metadata"
+stage = 1
+status = "in_progress"
+
+[[features]]
+name = "plain_encoding"
+stage = 2
+status = "in_progress"
+
+[[features]]
+name = "rle_and_bit_packed_hybrid"
+stage = 2
+status = "in_progress"
+
+[[features]]
+name = "schema_tree_and_levels"
+stage = 2
+status = "in_progress"
+
+[[features]]
+name = "data_page_v1"
+stage = 2
+status = "in_progress"
+
+[[features]]
+name = "page_crc32"
+stage = 2
+status = "in_progress"
+
+[[features]]
+name = "data_page_v2"
+stage = 3
+status = "in_progress"
+
+[[features]]
+name = "dictionary_encoding"
+stage = 3
+status = "in_progress"
+
+[[features]]
+name = "delta_encodings"
+stage = 3
+status = "in_progress"
+
+[[features]]
+name = "byte_stream_split"
+stage = 3
+status = "in_progress"
+
+[[features]]
+name = "compression_codecs"
+stage = 3
+status = "in_progress"
+
+[[features]]
+name = "logical_types"
+stage = 4
+status = "in_progress"
+
+[[features]]
+name = "nested_data"
+stage = 4
+status = "in_progress"
+
+[[features]]
+name = "statistics_and_column_order"
+stage = 5
+status = "planned"
+
+[[features]]
+name = "column_and_offset_indexes"
+stage = 5
+status = "planned"
+
+[[features]]
+name = "split_block_bloom_filter"
+stage = 5
+status = "planned"
+
+[[features]]
+name = "scan_pushdown"
+stage = 5
+status = "planned"
+
+[[features]]
+name = "encryption"
+stage = 6
+status = "planned"
+
+[[features]]
+name = "variant"
+stage = 7
+status = "planned"
+
+[[features]]
+name = "geospatial"
+stage = 7
+status = "planned"
+
+[[features]]
+name = "dataset"
+stage = 8
+status = "planned"

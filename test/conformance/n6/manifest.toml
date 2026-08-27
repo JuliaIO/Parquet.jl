@@ -1,0 +1,434 @@
+manifest_version = 1
+gate = "n6-a-preproduction"
+status = "preproduction"
+plan_file = "docs/dev/n6-statistics-plan.md"
+plan_sha256 = "15adf34af765a3300d8a49ced73532ed02b7e4edee5764453c58e53fcf12c304"
+capabilities_file = "test/conformance/n6/capabilities.toml"
+capabilities_sha256 = "03effcb710e2f23b3c4373ea5846510288c91876ca69c7c35cb977d783f50d95"
+fixture_manifest_file = "test/conformance/n6/fixtures.toml"
+fixture_manifest_sha256 = "670b2b1cbc0755eaa61c4638d4dc78a5ec12808c80cff56368ba40ba483e9c25"
+corpus_manifest_file = "test/conformance/n6/corpus-files.sha256"
+corpus_manifest_sha256 = "10c5e8fc52bd1d675401fd417c790e45d8103a84e636e42adec20376371c1991"
+evidence_schema_file = "test/conformance/n6/evidence.schema.json"
+evidence_schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e31"
+artifact_manifest_file = "test/conformance/n6/artifacts.sha256"
+artifact_manifest_sha256 = "dd5bf9b64b843597eabbec70b611bc7c39341ccce847b66279e25aca96fce4e6"
+model_producer_descriptor_file = "test/conformance/n6/normalizers/model-producer.toml"
+model_producer_descriptor_sha256 = "876e7382758b94c895e57769e8fb52216ac626394ff4026dee00f92812db7f3c"
+parquet_jl_producer_descriptor_file = "test/conformance/n6/julia/parquet-jl-producer.toml"
+parquet_jl_producer_descriptor_sha256 = "1af0a5d253e060181244da1416964f386dc7d215f9578f68a4ec9a70ac26a599"
+parquet_jl_source_composite_sha256 = "cdb21788f1c7c4d29e567681ecd851fb6dcdbe115bb29243e006cecb35080c05"
+supported_platforms = ["macos-15-arm64"]
+publication_authorized = false
+oracle_lock_authorized = false
+planned_evidence = []
+
+[evidence_limits]
+max_inputs = 10
+max_file_bytes = 33554432
+max_total_bytes = 67108864
+max_line_bytes = 1048576
+max_records_per_input = 328
+max_records_total = 3280
+
+[[source]]
+id = "parquet-format"
+url = "https://github.com/apache/parquet-format.git"
+version = "2.13.0"
+tag = "apache-parquet-format-2.13.0"
+tag_revision = "a9f9c3a52bd1d6309038f4d2d3a308978b55c377"
+revision = "c47e2a66e88943fc46fde1b028a9432f14fdf5c0"
+status = "verified"
+root_env = "PARQUET_N6_FORMAT_ROOT"
+files = [
+  { file = "src/main/thrift/parquet.thrift", sha256 = "53bb8fc9b96469d7ca694121ead839e449e5156d7bf79f0df728cdd72796df38" },
+  { file = "LogicalTypes.md", sha256 = "4e5748116514c8682fdf1920050cf13ed900bd4bfc9ac9995a0a92841440eeac" },
+]
+
+[[source]]
+id = "parquet-testing"
+url = "https://github.com/apache/parquet-testing.git"
+version = "snapshot"
+tag = ""
+tag_revision = ""
+revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+status = "verified"
+root_env = "PARQUET_N6_TESTING_ROOT"
+files = []
+
+[[source]]
+id = "parquet-java"
+url = "https://github.com/apache/parquet-java.git"
+version = "1.17.1"
+tag = "apache-parquet-1.17.1"
+tag_revision = "1f54ba44afb285fecbaf54bde5c0afa259327fc4"
+revision = "78a8d3230eb4769db93de5f2f2e18363c04cae81"
+status = "verified"
+root_env = "PARQUET_N6_JAVA_ROOT"
+files = [
+  { file = "parquet-common/src/main/java/org/apache/parquet/VersionParser.java", sha256 = "a8c54497632bbfacd2da1d52fcf83e3ee6c7e4c0134048c4649bd50055866c87" },
+  { file = "parquet-common/src/main/java/org/apache/parquet/SemanticVersion.java", sha256 = "1344e06d6644c9b8d027d03d3e8a595fc60f029eef5e6156b63248a4ee346dc7" },
+  { file = "parquet-column/src/main/java/org/apache/parquet/CorruptStatistics.java", sha256 = "258cb4a4b5f6b6a846c51ebf13d868fe4907ee3c8dfa6e5e73484e927564d1cd" },
+]
+
+[[source]]
+id = "arrow-rs"
+url = "https://github.com/apache/arrow-rs.git"
+version = "59.2.0"
+tag = "59.2.0"
+tag_revision = "782e5a685501a9db6cc8e9a3b7cbff894940c47a"
+revision = "782e5a685501a9db6cc8e9a3b7cbff894940c47a"
+status = "verified"
+root_env = "PARQUET_N6_ARROW_RS_ROOT"
+files = [
+  { file = "parquet/src/parquet_thrift.rs", sha256 = "efdde5da47d94685096ae9c197bc657d15269cdd53f53ea212aff2cd4122075c" },
+  { file = "parquet/src/file/statistics.rs", sha256 = "9e22a3c8e10cc3058b41b3262dfbfa2213899e09f52faec13991429957dd2c7b" },
+  { file = "parquet/src/file/metadata/mod.rs", sha256 = "34f64fe9fa851edf14745d4ebdb126d00c29ad4dccb10dec90559e6bf943b84d" },
+]
+
+[[source]]
+id = "apache-arrow-cpp-policy"
+url = "https://github.com/apache/arrow.git"
+version = "source"
+tag = ""
+tag_revision = ""
+revision = "515410b2a14ac766258e00b07eab9e5ee2692a62"
+status = "verified"
+root_env = "PARQUET_N6_ARROW_CPP_ROOT"
+files = [
+  { file = "cpp/src/parquet/metadata.cc", sha256 = "126a081d2a8270a99b2f456a25a40113567bc5f2e03a2feb266354cfa440c5f1" },
+]
+
+[[source]]
+id = "pyarrow"
+url = "https://github.com/apache/arrow.git"
+version = "25.0.1"
+tag = "apache-arrow-25.0.1"
+tag_revision = "8bf34803daea7c13f806bf29ee7b09d16773acb2"
+revision = "beccec0d0c451b7aa3e4530416ac431b3c035c69"
+status = "planned"
+root_env = "PARQUET_N6_PYARROW_ROOT"
+files = []
+
+[[source]]
+id = "duckdb"
+url = "https://github.com/duckdb/duckdb.git"
+version = "1.5.5"
+tag = "v1.5.5"
+tag_revision = "d8cdaa33fda8df955cc76ef58a280f68f4cd43fa"
+revision = "d8cdaa33fda8df955cc76ef58a280f68f4cd43fa"
+status = "planned"
+root_env = "PARQUET_N6_DUCKDB_ROOT"
+files = []
+
+[[source]]
+id = "cpython-3.12"
+url = "https://github.com/python/cpython.git"
+version = "3.12.8"
+tag = "v3.12.8"
+tag_revision = "3a523043165785601895d7cdc74713dfa64d630d"
+revision = "2dc476bcb9142cd25d7e1d52392b73a3dcdf1756"
+status = "verified"
+root_env = "PARQUET_N6_CPYTHON_312_ROOT"
+files = []
+
+[[source]]
+id = "cpython-3.14"
+url = "https://github.com/python/cpython.git"
+version = "3.14.2"
+tag = "v3.14.2"
+tag_revision = "a1d0069daf8e85b25a0c3f96abc43182be6d429e"
+revision = "df793163d5821791d4e7caf88885a2c11a107986"
+status = "verified"
+root_env = "PARQUET_N6_CPYTHON_314_ROOT"
+files = []
+
+[[toolchain]]
+id = "julia-1.10"
+status = "verified"
+version = "1.10.11"
+platform = "aarch64-apple-darwin"
+scope = "Independent model and package compatibility."
+artifacts = [
+  { name = "julia-1.10.11-executable", sha256 = "6f687953e48958fc6596962379691d1c8a1720d3a9ff39c1e3113888e43bd8ae" },
+  { name = "julia-1.10.11-runtime-tree-sha256-v1", sha256 = "c784c03af8ab52e48aa6f57ce8aa06a3c9160671054301ab6c3dfebf2e582525" },
+]
+
+[[toolchain]]
+id = "julia-1.12"
+status = "verified"
+version = "1.12.6"
+platform = "aarch64-apple-darwin"
+scope = "Independent model and package compatibility."
+artifacts = [
+  { name = "julia-1.12.6-executable", sha256 = "9ad38bea81ecace044a4bdef2a0246dee94cb8a44c9420809cc00f9872651c64" },
+  { name = "julia-1.12.6-runtime-tree-sha256-v1", sha256 = "273ec71de498a36c77a7e4bb3af4a3f75c338bd1cfe255cab30805b6a2cda76e" },
+]
+
+[[toolchain]]
+id = "parquet-jl-evidence"
+status = "verified"
+version = "parquet-jl-1.0.0-DEV_julia-1.12.6"
+platform = "macos-15-arm64"
+scope = "Exact Parquet.jl source, manifest, private dependency depot, native artifacts, bootstrap, and N6 harness."
+artifacts = [
+  { name = "parquet-jl-producer.toml", sha256 = "1af0a5d253e060181244da1416964f386dc7d215f9578f68a4ec9a70ac26a599" },
+]
+
+[[toolchain]]
+id = "raw-java"
+status = "verified"
+version = "temurin-21.0.8+9_thrift-0.23.0"
+platform = "macos-15-arm64"
+scope = "Separate raw Parquet 2.13 Compact-Thrift scanner."
+artifacts = [
+  { name = "toolchain.env", sha256 = "8608303c0624c5fb9692dc007fb4930c72af744a8a7355a19e8c607b3403f629" },
+  { name = "temurin-jdk-archive", sha256 = "59422c2292ae4e76b87e00d8808dbe49cffa39af731e08bb0292ddb0af4e0261" },
+  { name = "temurin-java", sha256 = "0045ae168ee132bbf469a26fb17dac6d1dee431c9b7826474f3b6ee574a997c9" },
+  { name = "temurin-javac", sha256 = "7be7937fc6bae0ca89f0866f9ce94fc40a935dfb87806d3c701eca3402cfb90a" },
+  { name = "thrift-compiler", sha256 = "5ee94e75371f7d0b2467db3acdb67b8b3814fcae3748c0ef078a490a15c57e11" },
+  { name = "libthrift-0.23.0.jar", sha256 = "8b41b67a5ff13c371ab18b6d34506121dcecf11372829f7d50115cfb1bf72d42" },
+  { name = "libthrift-0.23.0.pom", sha256 = "eeadf7b9d1e22ac01985fe552384ceecf44018cae93e7a23d6b0466f856330f3" },
+  { name = "slf4j-api-1.7.36.jar", sha256 = "d3ef575e3e4979678dc01bf1dcce51021493b4d11fb7f1be8ad982877c16a1c0" },
+  { name = "slf4j-nop-1.7.36.jar", sha256 = "c214958b07816cb4412b30c7bdbd4308ffdc6ba2a83767b8f3a9229cbd9274d6" },
+  { name = "generated-source-manifest", sha256 = "f738c7346ad1dd70faafd54815f829b8587a2b0397ff6b6e6710a3a7276cac09" },
+  { name = "parquet-2.13-idl", sha256 = "53bb8fc9b96469d7ca694121ead839e449e5156d7bf79f0df728cdd72796df38" },
+]
+
+[[toolchain]]
+id = "rust-arrow-rs"
+status = "verified"
+version = "rustc-and-cargo-1.96.1"
+platform = "linux-amd64-offline-harness"
+scope = "Pinned N5 Arrow Rust oracle image and verified N6 host harness."
+artifacts = [
+  { name = "rust-channel-manifest", sha256 = "87eb76c53073e72b766083bed5530820694253b832a762d8385bda5759f03975" },
+  { name = "rust-distribution", sha256 = "d29ccb1559a177c4e72291f6e5f629de7fe8885e7521ca47802627544b121e95" },
+  { name = "n5-arrow-rs-Cargo.lock", sha256 = "5797b71e20f0a4eda601c8c126336e4daffa2dfc1d9a992d6762cd3fc0b902cc" },
+  { name = "n5-arrow-rs-UPSTREAM.toml", sha256 = "d547dbed70c01b77f076a6f020767693751d869c3ff5f5279c5d6ce06f152218" },
+  { name = "n5-oracle-Dockerfile", sha256 = "68731325b41332ff580ffe0fa007d6d9e0ec09b5f3ffe09511b99ec7096280db" },
+  { name = "oracles/arrow-rs/toolchain.toml", sha256 = "c141bde2eea6442bcd8b3c7ad9f8aeadb04e7ad1080f5dc7b7cba0a2dae4cfe5" },
+  { name = "parquet-jl-n6-arrow-rs-metadata", sha256 = "a26a0a29f99adde346800e85ee66544226d2105a040b40eb3536e8d629d8c301" },
+]
+
+[[toolchain]]
+id = "parquet-java-interop"
+status = "verified"
+version = "parquet-java-1.17.1_temurin-21.0.8+9_cpython-3.12.8"
+platform = "macos-15-arm64"
+scope = "Pinned Parquet Java N6 value, statistics, and producer-policy harness."
+artifacts = [
+  { name = "oracles/parquet-java/toolchain.toml", sha256 = "a4459b555778b1979de10510fd5291372ffb9f41166539868ce3639494d5a452" },
+  { name = "cpython-distribution-archive", sha256 = "dfb8a4c87116538717105ef3dec3668ae07590a5b5532109fec3ccad90be2fbc" },
+  { name = "cpython-executable", sha256 = "d6b64f766d3b08326aa10cdb37c9d922e3af38b57ec07caa28b894e5fccf6e69" },
+  { name = "cpython-clean-tree-sha256-v1", sha256 = "e3b7dcdffba67f605b0fa3318656387e8d4265d34531c2bdbc43d3aba4a033ec" },
+  { name = "temurin-jdk-archive", sha256 = "59422c2292ae4e76b87e00d8808dbe49cffa39af731e08bb0292ddb0af4e0261" },
+  { name = "temurin-java", sha256 = "0045ae168ee132bbf469a26fb17dac6d1dee431c9b7826474f3b6ee574a997c9" },
+  { name = "temurin-javac", sha256 = "7be7937fc6bae0ca89f0866f9ce94fc40a935dfb87806d3c701eca3402cfb90a" },
+  { name = "temurin-release", sha256 = "8e98b265f9a6fd3db04d2535108497897e87f1b3821270cf10ffa937463dc2ee" },
+  { name = "temurin-tree-sha256-v1", sha256 = "7ffead12e2614843ffcc77e36d1bd142b921d91381d4ef12827c32c54369d209" },
+  { name = "parquet-cli-1.17.1-runtime.jar", sha256 = "d0173051493c506a298c691e555a41a682a405895fd0c8cc429a7e1cb1fcc711" },
+  { name = "hadoop-client-api-3.3.0.jar", sha256 = "d549ba6d131fd6c8e5d42a78dab5c790950edd6258523dedc556b537ca6654aa" },
+  { name = "hadoop-client-runtime-3.3.0.jar", sha256 = "2ba23f1e1dbb03e73600a41fcb187ad2626529684ed226085a91b0a0d6d67ee5" },
+  { name = "parquet-java-n6-harness.jar", sha256 = "7d6de1067e4e01de65f5868c8643f4a68fe4ff6afc50759716d685bd7b9e764c" },
+]
+
+[[toolchain]]
+id = "python-interop"
+status = "verified"
+version = "cpython-3.12.8+20250115"
+platform = "macos-15-arm64"
+scope = "Source-attested clean CPython, PyArrow, and DuckDB N6 harness."
+artifacts = [
+  { name = "cpython-distribution-archive", sha256 = "dfb8a4c87116538717105ef3dec3668ae07590a5b5532109fec3ccad90be2fbc" },
+  { name = "cpython-executable", sha256 = "d6b64f766d3b08326aa10cdb37c9d922e3af38b57ec07caa28b894e5fccf6e69" },
+  { name = "cpython-clean-tree-sha256-v1", sha256 = "e3b7dcdffba67f605b0fa3318656387e8d4265d34531c2bdbc43d3aba4a033ec" },
+  { name = "pyarrow-25.0.1-cp312-cp312-macosx_12_0_arm64.whl", sha256 = "df961f2e7ae9cf496459259d798652c70625f6c080650d6952f8c04053c58ee9" },
+  { name = "duckdb-1.5.5-cp312-cp312-macosx_11_0_arm64.whl", sha256 = "f0b88535a5d86fdd63dba6ea02ab68c003dfb9e4892b11256ef24c4da208baae" },
+  { name = "toolchains/pyarrow.toml", sha256 = "0e1e7fa951f82f12ddfdbeb3865936763c1818f1f20a655d2646b1186cbcd958" },
+  { name = "toolchains/duckdb.toml", sha256 = "a3c20486eae1ec54266ca94e9a29f8fa0c7e46bdddbb829d28bc92991ddda6ae" },
+]
+
+[[toolchain]]
+id = "jsonschema-validator"
+status = "verified"
+version = "cpython-3.14.2+20260127_jsonschema-4.26.0"
+platform = "macos-15-arm64"
+scope = "Draft 2020-12 schema meta-validation and semantic evidence checks."
+distribution_url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260127/cpython-3.14.2%2B20260127-aarch64-apple-darwin-install_only_stripped.tar.gz"
+tree_policy = "extract-strip-site-packages-bytecode-v1"
+artifacts = [
+  { name = "cpython-distribution-archive", sha256 = "2f82ed0cf902c8a2863a3fc5864909645c761e4e0a96525850c9ef8f7e3b79e7" },
+  { name = "cpython-executable", sha256 = "3d6400b63b150164e89a690d9813af8b0eb420af9f336ef1f6c5102c6da60eae" },
+  { name = "cpython-clean-tree-sha256-v1", sha256 = "0858c90317b52f4224a5daf095a76feaae771869700876184b4ecd16f544ea4a" },
+  { name = "jsonschema-4.26.0-py3-none-any.whl", sha256 = "d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce" },
+  { name = "attrs-25.4.0-py3-none-any.whl", sha256 = "adcf7e2a1fb3b36ac48d97835bb6d8ade15b8dcce26aba8bf1d14847b57a3373" },
+  { name = "jsonschema_specifications-2025.9.1-py3-none-any.whl", sha256 = "98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe" },
+  { name = "referencing-0.37.0-py3-none-any.whl", sha256 = "381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231" },
+  { name = "rpds_py-0.30.0-cp314-cp314-macosx_11_0_arm64.whl", sha256 = "ec7c4490c672c1a0389d319b3a9cfcd098dcdc4783991553c332a15acf7249be" },
+]
+
+[[frozen_model]]
+file = "test/conformance/n6/model/N6StatisticsModel.jl"
+sha256 = "32c090ed6e0c6af49eabf3f96afc6e17dff630c4e89372367e693202e87c4262"
+
+[[frozen_model]]
+file = "test/conformance/n6/model/runtests.jl"
+sha256 = "c74aab7a4d522a77443bba61070bae51c15bfec75a917bcd5ea16331d2307691"
+
+[[frozen_model]]
+file = "test/conformance/n6/model/cases.toml"
+sha256 = "925da4abeb448033b291e8f2a1ed8d68f6af30e5a4994d1e576f757581c5ad7b"
+
+[[frozen_model]]
+file = "test/conformance/n6/model/README.md"
+sha256 = "143290750312ae294c9954daf3d30d9d79b8627c67059ee001ba2228fa803814"
+
+[[frozen_evidence]]
+id = "raw-java-apache-corpus"
+status = "verified"
+authority = "n6-raw-java"
+toolchain_sha256 = "8608303c0624c5fb9692dc007fb4930c72af744a8a7355a19e8c607b3403f629"
+file = "test/conformance/n6/evidence/raw-java-apache-corpus.raw.jsonl"
+format = "raw-jsonl"
+storage = "gate-generated"
+schema_file = "test/conformance/n6/oracles/raw-java/evidence.schema.json"
+schema_sha256 = "8fb8144d6838906141f827736785540ac9ceaf638d60399c8d4c1940e34d8f28"
+fixture_manifest_file = "test/conformance/n6/fixtures.toml"
+case_count = 20
+record_count = 20
+sha256 = "b2ef6982235e13ff44fa8ce4562e2f4e7fd1c20eeaf61968563351ae117df439"
+scope = "Gate-generated ephemeral raw Parquet 2.13 footer records for the 20 exact Apache fixtures; the declared repository path is an identity label, not a checked-in materialization, and there is no semantic pass claim."
+
+[[frozen_evidence]]
+id = "normalized-raw-java-apache-corpus"
+status = "verified"
+authority = "n6-raw-java"
+toolchain_sha256 = "8608303c0624c5fb9692dc007fb4930c72af744a8a7355a19e8c607b3403f629"
+file = "test/conformance/n6/evidence/raw-java-apache-corpus.normalized.jsonl"
+format = "normalized-jsonl"
+storage = "checked-in"
+schema_file = "test/conformance/n6/evidence.schema.json"
+schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e31"
+fixture_manifest_file = "test/conformance/n6/fixtures.toml"
+case_count = 20
+record_count = 150
+sha256 = "1abd67a57930e7ccfb7e5c6b859570401ec6ca042ff8e9b6664b55399bb9187f"
+scope = "Normalized raw wire facts for the exact Apache corpus; no semantic model result."
+
+[[frozen_evidence]]
+id = "normalized-independent-model"
+status = "verified"
+authority = "n6-independent-model"
+toolchain_sha256 = "273ec71de498a36c77a7e4bb3af4a3f75c338bd1cfe255cab30805b6a2cda76e"
+file = "test/conformance/n6/evidence/independent-model.normalized.jsonl"
+format = "normalized-jsonl"
+storage = "checked-in"
+schema_file = "test/conformance/n6/evidence.schema.json"
+schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e31"
+fixture_manifest_file = "test/conformance/n6/fixtures.toml"
+case_count = 20
+record_count = 128
+sha256 = "f11c9f87e7a0845296ccfb3e6816d15fa7dae6ae044fc83d852f96478a996ab6"
+upstream_evidence = ["normalized-raw-java-apache-corpus"]
+scope = "Independent semantic results combined with reviewed normalized raw inputs."
+
+[[frozen_evidence]]
+id = "normalized-raw-java-generated"
+status = "verified"
+authority = "n6-raw-java"
+toolchain_sha256 = "8608303c0624c5fb9692dc007fb4930c72af744a8a7355a19e8c607b3403f629"
+file = "test/conformance/n6/evidence/raw-java-generated.normalized.jsonl"
+format = "normalized-jsonl"
+storage = "checked-in"
+schema_file = "test/conformance/n6/evidence.schema.json"
+schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e31"
+fixture_manifest_file = "test/conformance/n6/fixtures.toml"
+case_count = 12
+record_count = 82
+sha256 = "e87f7f223e0960608407901486c5ab78141095319f943a3bc58d5450aa634e5b"
+scope = "Normalized raw wire facts for the exact 12-file Parquet.jl generated corpus; no semantic model result."
+
+[[frozen_evidence]]
+id = "normalized-parquet-jl"
+status = "verified"
+authority = "parquet-jl"
+toolchain_sha256 = "1af0a5d253e060181244da1416964f386dc7d215f9578f68a4ec9a70ac26a599"
+file = "test/conformance/n6/evidence/parquet-jl.normalized.jsonl"
+format = "normalized-jsonl"
+storage = "checked-in"
+schema_file = "test/conformance/n6/evidence.schema.json"
+schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e31"
+fixture_manifest_file = "test/conformance/n6/fixtures.toml"
+case_count = 12
+record_count = 96
+sha256 = "2157dbf654f9e8709e3097ec111289961eb25a629ed499466b4696c6e8e75eb0"
+scope = "Exact generated Julia writer and reader evidence."
+
+[[frozen_evidence]]
+id = "normalized-parquet-java"
+status = "verified"
+authority = "parquet-java"
+toolchain_sha256 = "a4459b555778b1979de10510fd5291372ffb9f41166539868ce3639494d5a452"
+file = "test/conformance/n6/evidence/parquet-java.normalized.jsonl"
+format = "normalized-jsonl"
+storage = "checked-in"
+schema_file = "test/conformance/n6/evidence.schema.json"
+schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e31"
+fixture_manifest_file = "test/conformance/n6/fixtures.toml"
+case_count = 19
+record_count = 49
+sha256 = "1449e6900eb60bcaa83d588c2600645b593a2f2fb3f6a6988ca3e487cab15a9a"
+upstream_evidence = ["normalized-raw-java-apache-corpus"]
+scope = "Exact N6 parquet-java interoperability harness evidence."
+
+[[frozen_evidence]]
+id = "normalized-arrow-rs"
+status = "verified"
+authority = "arrow-rs"
+toolchain_sha256 = "c141bde2eea6442bcd8b3c7ad9f8aeadb04e7ad1080f5dc7b7cba0a2dae4cfe5"
+file = "test/conformance/n6/evidence/arrow-rs.normalized.jsonl"
+format = "normalized-jsonl"
+storage = "checked-in"
+schema_file = "test/conformance/n6/evidence.schema.json"
+schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e31"
+fixture_manifest_file = "test/conformance/n6/fixtures.toml"
+case_count = 19
+record_count = 45
+sha256 = "ed094fd3df99823713239f325da23fb081668e0f57d7821588fe04fe20c81033"
+upstream_evidence = ["normalized-raw-java-apache-corpus"]
+scope = "Exact N6 Arrow Rust interoperability harness evidence."
+
+[[frozen_evidence]]
+id = "normalized-pyarrow"
+status = "verified"
+authority = "pyarrow"
+toolchain_sha256 = "0e1e7fa951f82f12ddfdbeb3865936763c1818f1f20a655d2646b1186cbcd958"
+file = "test/conformance/n6/evidence/pyarrow.normalized.jsonl"
+format = "normalized-jsonl"
+storage = "checked-in"
+schema_file = "test/conformance/n6/evidence.schema.json"
+schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e31"
+fixture_manifest_file = "test/conformance/n6/fixtures.toml"
+case_count = 16
+record_count = 38
+sha256 = "840e773c42b952d290a3b7984b360e8398757c96fd5ef85011a9c56c05b608df"
+upstream_evidence = ["normalized-raw-java-apache-corpus"]
+scope = "Exact PyArrow logical-value and exposed statistics evidence."
+
+[[frozen_evidence]]
+id = "normalized-duckdb"
+status = "verified"
+authority = "duckdb"
+toolchain_sha256 = "a3c20486eae1ec54266ca94e9a29f8fa0c7e46bdddbb829d28bc92991ddda6ae"
+file = "test/conformance/n6/evidence/duckdb.normalized.jsonl"
+format = "normalized-jsonl"
+storage = "checked-in"
+schema_file = "test/conformance/n6/evidence.schema.json"
+schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e31"
+fixture_manifest_file = "test/conformance/n6/fixtures.toml"
+case_count = 15
+record_count = 35
+sha256 = "be2abd357f9f4a8158fc9211d9f0cc95d2995508bbc6a5b41978dcbecca3d010"
+upstream_evidence = ["normalized-raw-java-apache-corpus"]
+scope = "Exact DuckDB readability and metadata-view evidence."

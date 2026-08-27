@@ -1,0 +1,1164 @@
+{
+  "evidence_version": 1,
+  "oracle": {
+    "name": "arrow-rs",
+    "version": "59.2.0",
+    "commit": "782e5a685501a9db6cc8e9a3b7cbff894940c47a",
+    "rust_toolchain": "1.96.1",
+    "rustc": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+    "cargo": "cargo 1.96.1 (356927216 2026-06-26)"
+  },
+  "action": "generate",
+  "files": [
+    {
+      "case_id": "arrow-rs-duplicate-keys",
+      "file_name": "arrow-rs-duplicate-keys_v1.parquet",
+      "sha256": "acf5536a16167a2a870dfd55ad2a5d208712069d8e0f034cf396fa6d6c193184",
+      "file_bytes": 400,
+      "rows": 5,
+      "row_groups": 1,
+      "physical_schema": "message schema {\n  OPTIONAL group entries (MAP) {\n    REPEATED group key_value {\n      REQUIRED BYTE_ARRAY key (STRING);\n      OPTIONAL INT32 value;\n    }\n  }\n}\n",
+      "columns": [
+        {
+          "path": [
+            "entries",
+            "key_value",
+            "key"
+          ],
+          "physical_type": "BYTE_ARRAY",
+          "maximum_definition_level": 2,
+          "maximum_repetition_level": 1,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 5,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                0
+              ],
+              "definition": [
+                0,
+                1,
+                2,
+                2,
+                2,
+                2,
+                2
+              ],
+              "dense_values": [
+                "a",
+                "a",
+                "a",
+                "b",
+                "c"
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v1",
+                  "encoding": "PLAIN",
+                  "values": 7,
+                  "rows": 5
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "path": [
+            "entries",
+            "key_value",
+            "value"
+          ],
+          "physical_type": "INT32",
+          "maximum_definition_level": 3,
+          "maximum_repetition_level": 1,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 5,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                0
+              ],
+              "definition": [
+                0,
+                1,
+                2,
+                3,
+                3,
+                3,
+                3
+              ],
+              "dense_values": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v1",
+                  "encoding": "PLAIN",
+                  "values": 7,
+                  "rows": 5
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "arrow": {
+        "status": "ok",
+        "schema": [
+          {
+            "name": "entries",
+            "nullable": true,
+            "data_type": {
+              "map": {
+                "entries": {
+                  "data_type": {
+                    "struct": [
+                      {
+                        "data_type": "Utf8",
+                        "metadata": {},
+                        "name": "key",
+                        "nullable": false
+                      },
+                      {
+                        "data_type": "Int32",
+                        "metadata": {},
+                        "name": "value",
+                        "nullable": true
+                      }
+                    ]
+                  },
+                  "metadata": {},
+                  "name": "key_value",
+                  "nullable": false
+                },
+                "sorted": false
+              }
+            },
+            "metadata": {}
+          }
+        ],
+        "canonical_rows": [
+          [
+            {
+              "field": "entries",
+              "value": null
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": []
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": [
+                {
+                  "key": "a",
+                  "value": null
+                }
+              ]
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": [
+                {
+                  "key": "a",
+                  "value": 1
+                },
+                {
+                  "key": "a",
+                  "value": 2
+                },
+                {
+                  "key": "b",
+                  "value": 3
+                }
+              ]
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": [
+                {
+                  "key": "c",
+                  "value": 4
+                }
+              ]
+            }
+          ]
+        ],
+        "json_rows": [
+          "{\"entries\":null}",
+          "{\"entries\":{}}",
+          "{\"entries\":{\"a\":null}}",
+          "{\"entries\":{\"a\":1,\"a\":2,\"b\":3}}",
+          "{\"entries\":{\"c\":4}}"
+        ],
+        "ordered_map_rows": [
+          null,
+          [],
+          [
+            {
+              "key": "a",
+              "value": null
+            }
+          ],
+          [
+            {
+              "key": "a",
+              "value": 1
+            },
+            {
+              "key": "a",
+              "value": 2
+            },
+            {
+              "key": "b",
+              "value": 3
+            }
+          ],
+          [
+            {
+              "key": "c",
+              "value": 4
+            }
+          ]
+        ],
+        "diagnostic": null
+      }
+    },
+    {
+      "case_id": "arrow-rs-duplicate-keys",
+      "file_name": "arrow-rs-duplicate-keys_v2.parquet",
+      "sha256": "baaf9a09bc397db8c0b1d0453fa2d87e36f6a74bbc56778be39d27304007cbb3",
+      "file_bytes": 407,
+      "rows": 5,
+      "row_groups": 1,
+      "physical_schema": "message schema {\n  OPTIONAL group entries (MAP) {\n    REPEATED group key_value {\n      REQUIRED BYTE_ARRAY key (STRING);\n      OPTIONAL INT32 value;\n    }\n  }\n}\n",
+      "columns": [
+        {
+          "path": [
+            "entries",
+            "key_value",
+            "key"
+          ],
+          "physical_type": "BYTE_ARRAY",
+          "maximum_definition_level": 2,
+          "maximum_repetition_level": 1,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 5,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                0
+              ],
+              "definition": [
+                0,
+                1,
+                2,
+                2,
+                2,
+                2,
+                2
+              ],
+              "dense_values": [
+                "a",
+                "a",
+                "a",
+                "b",
+                "c"
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v2",
+                  "encoding": "DELTA_BYTE_ARRAY",
+                  "values": 7,
+                  "rows": 5
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "path": [
+            "entries",
+            "key_value",
+            "value"
+          ],
+          "physical_type": "INT32",
+          "maximum_definition_level": 3,
+          "maximum_repetition_level": 1,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 5,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                0
+              ],
+              "definition": [
+                0,
+                1,
+                2,
+                3,
+                3,
+                3,
+                3
+              ],
+              "dense_values": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v2",
+                  "encoding": "DELTA_BINARY_PACKED",
+                  "values": 7,
+                  "rows": 5
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "arrow": {
+        "status": "ok",
+        "schema": [
+          {
+            "name": "entries",
+            "nullable": true,
+            "data_type": {
+              "map": {
+                "entries": {
+                  "data_type": {
+                    "struct": [
+                      {
+                        "data_type": "Utf8",
+                        "metadata": {},
+                        "name": "key",
+                        "nullable": false
+                      },
+                      {
+                        "data_type": "Int32",
+                        "metadata": {},
+                        "name": "value",
+                        "nullable": true
+                      }
+                    ]
+                  },
+                  "metadata": {},
+                  "name": "key_value",
+                  "nullable": false
+                },
+                "sorted": false
+              }
+            },
+            "metadata": {}
+          }
+        ],
+        "canonical_rows": [
+          [
+            {
+              "field": "entries",
+              "value": null
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": []
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": [
+                {
+                  "key": "a",
+                  "value": null
+                }
+              ]
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": [
+                {
+                  "key": "a",
+                  "value": 1
+                },
+                {
+                  "key": "a",
+                  "value": 2
+                },
+                {
+                  "key": "b",
+                  "value": 3
+                }
+              ]
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": [
+                {
+                  "key": "c",
+                  "value": 4
+                }
+              ]
+            }
+          ]
+        ],
+        "json_rows": [
+          "{\"entries\":null}",
+          "{\"entries\":{}}",
+          "{\"entries\":{\"a\":null}}",
+          "{\"entries\":{\"a\":1,\"a\":2,\"b\":3}}",
+          "{\"entries\":{\"c\":4}}"
+        ],
+        "ordered_map_rows": [
+          null,
+          [],
+          [
+            {
+              "key": "a",
+              "value": null
+            }
+          ],
+          [
+            {
+              "key": "a",
+              "value": 1
+            },
+            {
+              "key": "a",
+              "value": 2
+            },
+            {
+              "key": "b",
+              "value": 3
+            }
+          ],
+          [
+            {
+              "key": "c",
+              "value": 4
+            }
+          ]
+        ],
+        "diagnostic": null
+      }
+    },
+    {
+      "case_id": "arrow-rs-optional-key-present",
+      "file_name": "arrow-rs-optional-key-present_v1.parquet",
+      "sha256": "a33be66fe1a5e7189c457b49163e5a4b658228ffb5054a40cd22f20f731ba21a",
+      "file_bytes": 386,
+      "rows": 4,
+      "row_groups": 1,
+      "physical_schema": "message schema {\n  OPTIONAL group entries (MAP) {\n    REPEATED group key_value {\n      OPTIONAL BYTE_ARRAY key (STRING);\n      REQUIRED INT32 value;\n    }\n  }\n}\n",
+      "columns": [
+        {
+          "path": [
+            "entries",
+            "key_value",
+            "key"
+          ],
+          "physical_type": "BYTE_ARRAY",
+          "maximum_definition_level": 3,
+          "maximum_repetition_level": 1,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 4,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                1
+              ],
+              "definition": [
+                0,
+                1,
+                3,
+                3,
+                3
+              ],
+              "dense_values": [
+                "a",
+                "b",
+                "c"
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v1",
+                  "encoding": "PLAIN",
+                  "values": 5,
+                  "rows": 4
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "path": [
+            "entries",
+            "key_value",
+            "value"
+          ],
+          "physical_type": "INT32",
+          "maximum_definition_level": 2,
+          "maximum_repetition_level": 1,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 4,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                1
+              ],
+              "definition": [
+                0,
+                1,
+                2,
+                2,
+                2
+              ],
+              "dense_values": [
+                1,
+                2,
+                3
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v1",
+                  "encoding": "PLAIN",
+                  "values": 5,
+                  "rows": 4
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "arrow": {
+        "status": "ok",
+        "schema": [
+          {
+            "name": "entries",
+            "nullable": true,
+            "data_type": {
+              "map": {
+                "entries": {
+                  "data_type": {
+                    "struct": [
+                      {
+                        "data_type": "Utf8",
+                        "metadata": {},
+                        "name": "key",
+                        "nullable": false
+                      },
+                      {
+                        "data_type": "Int32",
+                        "metadata": {},
+                        "name": "value",
+                        "nullable": false
+                      }
+                    ]
+                  },
+                  "metadata": {},
+                  "name": "key_value",
+                  "nullable": false
+                },
+                "sorted": false
+              }
+            },
+            "metadata": {}
+          }
+        ],
+        "canonical_rows": [
+          [
+            {
+              "field": "entries",
+              "value": null
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": []
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": [
+                {
+                  "key": "a",
+                  "value": 1
+                }
+              ]
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": [
+                {
+                  "key": "b",
+                  "value": 2
+                },
+                {
+                  "key": "c",
+                  "value": 3
+                }
+              ]
+            }
+          ]
+        ],
+        "json_rows": [
+          "{\"entries\":null}",
+          "{\"entries\":{}}",
+          "{\"entries\":{\"a\":1}}",
+          "{\"entries\":{\"b\":2,\"c\":3}}"
+        ],
+        "ordered_map_rows": [
+          null,
+          [],
+          [
+            {
+              "key": "a",
+              "value": 1
+            }
+          ],
+          [
+            {
+              "key": "b",
+              "value": 2
+            },
+            {
+              "key": "c",
+              "value": 3
+            }
+          ]
+        ],
+        "diagnostic": null
+      }
+    },
+    {
+      "case_id": "arrow-rs-optional-key-present",
+      "file_name": "arrow-rs-optional-key-present_v2.parquet",
+      "sha256": "f010b919bcc2d4e8c42f6d97df651266de06b6352f6b993756fd0a007e1c5028",
+      "file_bytes": 386,
+      "rows": 4,
+      "row_groups": 1,
+      "physical_schema": "message schema {\n  OPTIONAL group entries (MAP) {\n    REPEATED group key_value {\n      OPTIONAL BYTE_ARRAY key (STRING);\n      REQUIRED INT32 value;\n    }\n  }\n}\n",
+      "columns": [
+        {
+          "path": [
+            "entries",
+            "key_value",
+            "key"
+          ],
+          "physical_type": "BYTE_ARRAY",
+          "maximum_definition_level": 3,
+          "maximum_repetition_level": 1,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 4,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                1
+              ],
+              "definition": [
+                0,
+                1,
+                3,
+                3,
+                3
+              ],
+              "dense_values": [
+                "a",
+                "b",
+                "c"
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v2",
+                  "encoding": "DELTA_BYTE_ARRAY",
+                  "values": 5,
+                  "rows": 4
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "path": [
+            "entries",
+            "key_value",
+            "value"
+          ],
+          "physical_type": "INT32",
+          "maximum_definition_level": 2,
+          "maximum_repetition_level": 1,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 4,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                1
+              ],
+              "definition": [
+                0,
+                1,
+                2,
+                2,
+                2
+              ],
+              "dense_values": [
+                1,
+                2,
+                3
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v2",
+                  "encoding": "DELTA_BINARY_PACKED",
+                  "values": 5,
+                  "rows": 4
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "arrow": {
+        "status": "ok",
+        "schema": [
+          {
+            "name": "entries",
+            "nullable": true,
+            "data_type": {
+              "map": {
+                "entries": {
+                  "data_type": {
+                    "struct": [
+                      {
+                        "data_type": "Utf8",
+                        "metadata": {},
+                        "name": "key",
+                        "nullable": false
+                      },
+                      {
+                        "data_type": "Int32",
+                        "metadata": {},
+                        "name": "value",
+                        "nullable": false
+                      }
+                    ]
+                  },
+                  "metadata": {},
+                  "name": "key_value",
+                  "nullable": false
+                },
+                "sorted": false
+              }
+            },
+            "metadata": {}
+          }
+        ],
+        "canonical_rows": [
+          [
+            {
+              "field": "entries",
+              "value": null
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": []
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": [
+                {
+                  "key": "a",
+                  "value": 1
+                }
+              ]
+            }
+          ],
+          [
+            {
+              "field": "entries",
+              "value": [
+                {
+                  "key": "b",
+                  "value": 2
+                },
+                {
+                  "key": "c",
+                  "value": 3
+                }
+              ]
+            }
+          ]
+        ],
+        "json_rows": [
+          "{\"entries\":null}",
+          "{\"entries\":{}}",
+          "{\"entries\":{\"a\":1}}",
+          "{\"entries\":{\"b\":2,\"c\":3}}"
+        ],
+        "ordered_map_rows": [
+          null,
+          [],
+          [
+            {
+              "key": "a",
+              "value": 1
+            }
+          ],
+          [
+            {
+              "key": "b",
+              "value": 2
+            },
+            {
+              "key": "c",
+              "value": 3
+            }
+          ]
+        ],
+        "diagnostic": null
+      }
+    },
+    {
+      "case_id": "arrow-rs-list-rule3",
+      "file_name": "arrow-rs-list-rule3_v1.parquet",
+      "sha256": "916475c20dde6afe338d60e43d2e4a6293c2bc26efb6dd439d1d7d9299834bc6",
+      "file_bytes": 247,
+      "rows": 4,
+      "row_groups": 1,
+      "physical_schema": "message schema {\n  OPTIONAL group values (LIST) {\n    REPEATED group array (LIST) {\n      REPEATED INT32 array;\n    }\n  }\n}\n",
+      "columns": [
+        {
+          "path": [
+            "values",
+            "array",
+            "array"
+          ],
+          "physical_type": "INT32",
+          "maximum_definition_level": 3,
+          "maximum_repetition_level": 2,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 4,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                2,
+                1,
+                1
+              ],
+              "definition": [
+                0,
+                1,
+                2,
+                3,
+                3,
+                2,
+                3
+              ],
+              "dense_values": [
+                1,
+                2,
+                3
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v1",
+                  "encoding": "PLAIN",
+                  "values": 7,
+                  "rows": 4
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "arrow": {
+        "status": "ok",
+        "schema": [
+          {
+            "name": "values",
+            "nullable": true,
+            "data_type": {
+              "list": {
+                "data_type": {
+                  "list": {
+                    "data_type": "Int32",
+                    "metadata": {},
+                    "name": "array",
+                    "nullable": false
+                  }
+                },
+                "metadata": {},
+                "name": "array",
+                "nullable": false
+              }
+            },
+            "metadata": {}
+          }
+        ],
+        "canonical_rows": [
+          [
+            {
+              "field": "values",
+              "value": null
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": []
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": [
+                []
+              ]
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": [
+                [
+                  1,
+                  2
+                ],
+                [],
+                [
+                  3
+                ]
+              ]
+            }
+          ]
+        ],
+        "json_rows": [
+          "{\"values\":null}",
+          "{\"values\":[]}",
+          "{\"values\":[[]]}",
+          "{\"values\":[[1,2],[],[3]]}"
+        ],
+        "ordered_map_rows": null,
+        "diagnostic": null
+      }
+    },
+    {
+      "case_id": "arrow-rs-list-rule3",
+      "file_name": "arrow-rs-list-rule3_v2.parquet",
+      "sha256": "ef72761c509f8bc302986d130f6d7d9382b975c8a3462a955c599bd5f427edac",
+      "file_bytes": 242,
+      "rows": 4,
+      "row_groups": 1,
+      "physical_schema": "message schema {\n  OPTIONAL group values (LIST) {\n    REPEATED group array (LIST) {\n      REPEATED INT32 array;\n    }\n  }\n}\n",
+      "columns": [
+        {
+          "path": [
+            "values",
+            "array",
+            "array"
+          ],
+          "physical_type": "INT32",
+          "maximum_definition_level": 3,
+          "maximum_repetition_level": 2,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 4,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                2,
+                1,
+                1
+              ],
+              "definition": [
+                0,
+                1,
+                2,
+                3,
+                3,
+                2,
+                3
+              ],
+              "dense_values": [
+                1,
+                2,
+                3
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v2",
+                  "encoding": "DELTA_BINARY_PACKED",
+                  "values": 7,
+                  "rows": 4
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "arrow": {
+        "status": "ok",
+        "schema": [
+          {
+            "name": "values",
+            "nullable": true,
+            "data_type": {
+              "list": {
+                "data_type": {
+                  "list": {
+                    "data_type": "Int32",
+                    "metadata": {},
+                    "name": "array",
+                    "nullable": false
+                  }
+                },
+                "metadata": {},
+                "name": "array",
+                "nullable": false
+              }
+            },
+            "metadata": {}
+          }
+        ],
+        "canonical_rows": [
+          [
+            {
+              "field": "values",
+              "value": null
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": []
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": [
+                []
+              ]
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": [
+                [
+                  1,
+                  2
+                ],
+                [],
+                [
+                  3
+                ]
+              ]
+            }
+          ]
+        ],
+        "json_rows": [
+          "{\"values\":null}",
+          "{\"values\":[]}",
+          "{\"values\":[[]]}",
+          "{\"values\":[[1,2],[],[3]]}"
+        ],
+        "ordered_map_rows": null,
+        "diagnostic": null
+      }
+    }
+  ]
+}

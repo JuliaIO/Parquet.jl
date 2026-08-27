@@ -1,0 +1,573 @@
+manifest_version = 1
+authority = "parquet-testing"
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+checksum_manifest = "corpus-files.sha256"
+status_values = ["verified", "planned", "unsupported"]
+output_identity_statuses = ["planned", "verified"]
+generation_contract_version = 1
+default_digest_contract = "n6-capability-result-sha256-v1"
+digest_contracts = ["n6-capability-result-sha256-v1", "n6-no-pruning-trace-sha256-v1"]
+
+[[fixture]]
+id = "apache-alltypes-dictionary"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/alltypes_dictionary.parquet"
+sha256 = "7b58c33503858c533e1521b3022b85a0de23e5a144420d7a3c1c426929e5f6fb"
+size = 1698
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 11
+normalized_record_count = 12
+capabilities = ["read.logical-values"]
+expected_unsupported = []
+
+[[generated_case]]
+id = "julia-writer-type-order"
+status = "verified"
+source_kind = "julia-writer-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-writer-type-order.parquet"
+output_identity_status = "verified"
+output_sha256 = "333a9c3042992ba5f14c97db59c42fc98d4093bebcbab942cfcdfdedc43adf8a"
+output_size = 1884
+generator_profile = "writer-type-order-v1"
+generator_seed = 6001
+variant_id = "type-order"
+mutation = { kind = "none" }
+comparison_group = ""
+digest_contract = "n6-capability-result-sha256-v1"
+row_group_count = 2
+leaf_count = 8
+normalized_record_count = 17
+capabilities = ["write.type-order", "wire.column-order.type", "wire.statistics.modern-bounds", "wire.statistics.exactness", "wire.statistics.counts", "semantic.type-order", "semantic.logical-order", "read.logical-values"]
+expected_unsupported = []
+description = "Signed, unsigned, byte-wise, decimal, temporal, and boolean extrema."
+
+[[generated_case]]
+id = "julia-writer-ieee-order"
+status = "verified"
+source_kind = "julia-writer-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-writer-ieee-order.parquet"
+output_identity_status = "verified"
+output_sha256 = "8782589a7b6bfcb576acf04e0bc15cef156b931497f63a5623c7cb2b4355188c"
+output_size = 907
+generator_profile = "writer-ieee-order-v1"
+generator_seed = 6002
+variant_id = "ieee-order"
+mutation = { kind = "none" }
+comparison_group = ""
+digest_contract = "n6-capability-result-sha256-v1"
+row_group_count = 2
+leaf_count = 3
+normalized_record_count = 7
+capabilities = ["write.type-order", "wire.column-order.ieee", "wire.statistics.modern-bounds", "wire.statistics.exactness", "wire.statistics.counts", "wire.statistics.nan-count", "semantic.ieee-total-order", "semantic.count-state", "read.logical-values"]
+expected_unsupported = []
+description = "Float16, Float32, and Float64 zeros, finite values, infinities, and NaN payloads."
+
+[[generated_case]]
+id = "julia-writer-undefined-order"
+status = "verified"
+source_kind = "julia-writer-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-writer-undefined-order.parquet"
+output_identity_status = "verified"
+output_sha256 = "ce53d8ec5024f2694bc5a50782c918f1368b39ae4d8c94bc80791e048bb28648"
+output_size = 454
+generator_profile = "writer-undefined-order-v1"
+generator_seed = 6003
+variant_id = "undefined-order"
+mutation = { kind = "none" }
+comparison_group = ""
+digest_contract = "n6-capability-result-sha256-v1"
+row_group_count = 1
+leaf_count = 3
+normalized_record_count = 4
+capabilities = ["write.type-order", "wire.column-order.type", "wire.statistics.counts", "semantic.type-order"]
+expected_unsupported = []
+description = "Undefined-order leaves retain counts and omit bounds."
+
+[[generated_case]]
+id = "julia-writer-statistics-disabled"
+status = "verified"
+source_kind = "julia-writer-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-writer-statistics-disabled.parquet"
+output_identity_status = "verified"
+output_sha256 = "b0be13b0030888a41c82de57fafa987b29997352cd923c7542539b34a39141fd"
+output_size = 494
+generator_profile = "writer-statistics-disabled-v1"
+generator_seed = 6004
+variant_id = "statistics-disabled"
+mutation = { kind = "none" }
+comparison_group = ""
+digest_contract = "n6-capability-result-sha256-v1"
+row_group_count = 2
+leaf_count = 2
+normalized_record_count = 5
+capabilities = ["write.statistics-disabled", "read.logical-values"]
+expected_unsupported = []
+description = "statistics=false preserves the old body and omits statistics and column_orders."
+
+[[generated_case]]
+id = "julia-writer-oversized-bounds"
+status = "verified"
+source_kind = "julia-writer-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-writer-oversized-bounds.parquet"
+output_identity_status = "verified"
+output_sha256 = "0dc68216f7dd5b1ef425b59e398553af71f254fe249c7dba30de82d25d491c9a"
+output_size = 12494
+generator_profile = "writer-oversized-bounds-v1"
+generator_seed = 6005
+variant_id = "one-byte-over"
+mutation = { kind = "none" }
+comparison_group = ""
+digest_contract = "n6-capability-result-sha256-v1"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["write.type-order", "write.statistics-limit", "wire.column-order.type", "wire.statistics.counts"]
+expected_unsupported = []
+description = "One-byte-over bounds are both omitted while exact counts remain."
+
+[[generated_case]]
+id = "julia-writer-nested-row-groups"
+status = "verified"
+source_kind = "julia-writer-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-writer-nested-row-groups.parquet"
+output_identity_status = "verified"
+output_sha256 = "9a705db14a5c00260717bc907a916303ce297a039c03fb0f3ae981022e763d49"
+output_size = 1025
+generator_profile = "writer-nested-row-groups-v1"
+generator_seed = 6006
+variant_id = "nested-row-groups"
+mutation = { kind = "none" }
+comparison_group = ""
+digest_contract = "n6-capability-result-sha256-v1"
+row_group_count = 2
+leaf_count = 4
+normalized_record_count = 9
+capabilities = ["write.type-order", "wire.column-order.type", "wire.statistics.modern-bounds", "wire.statistics.exactness", "wire.statistics.counts", "semantic.type-order", "semantic.count-state", "read.logical-values"]
+expected_unsupported = []
+description = "Nested leaf-entry counts are independent of row-group row counts."
+
+[[generated_case]]
+id = "julia-reader-untrusted-producer"
+status = "verified"
+source_kind = "metadata-mutation-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-reader-untrusted-producer.parquet"
+output_identity_status = "verified"
+output_sha256 = "57f7c7b1d350fc0f84bb1de006aa7ed992194f1a12eea28a506b97e736039b93"
+output_size = 575
+generator_profile = "reader-untrusted-producer-v1"
+generator_seed = 6007
+variant_id = "parquet-mr-1.7.0"
+mutation = { kind = "created-by", created_by = "parquet-mr version 1.7.0 (build n6)" }
+comparison_group = ""
+digest_contract = "n6-capability-result-sha256-v1"
+row_group_count = 2
+leaf_count = 2
+normalized_record_count = 5
+capabilities = ["semantic.producer-trust", "compat.legacy-statistics", "read.logical-values"]
+expected_unsupported = []
+description = "Affected producer identities suppress bounds but preserve valid counts and values."
+
+[[generated_case]]
+id = "julia-reader-no-pruning-absent"
+status = "verified"
+source_kind = "metadata-mutation-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-reader-no-pruning-absent.parquet"
+output_identity_status = "verified"
+output_sha256 = "a817b4c27f01744c853aa09399c002127463940eb9a94f5b31b7fa57b33e2927"
+output_size = 321
+generator_profile = "reader-no-pruning-v1"
+generator_seed = 6008
+variant_id = "absent"
+mutation = { kind = "statistics-state", statistics_state = "absent" }
+comparison_group = "julia-reader-no-pruning-v1"
+digest_contract = "n6-no-pruning-trace-sha256-v1"
+row_group_count = 2
+leaf_count = 1
+normalized_record_count = 3
+capabilities = ["read.no-pruning", "read.logical-values"]
+expected_unsupported = []
+description = "Statistics and column orders are absent."
+
+[[generated_case]]
+id = "julia-reader-no-pruning-trusted"
+status = "verified"
+source_kind = "metadata-mutation-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-reader-no-pruning-trusted.parquet"
+output_identity_status = "verified"
+output_sha256 = "b9e499b621048f4e72d25cef732e800bfe380ee03d0eedce46de67602bf2767f"
+output_size = 394
+generator_profile = "reader-no-pruning-v1"
+generator_seed = 6008
+variant_id = "trusted"
+mutation = { kind = "statistics-state", statistics_state = "trusted", created_by = "parquet-mr version 1.10.0 (build n6)" }
+comparison_group = "julia-reader-no-pruning-v1"
+digest_contract = "n6-no-pruning-trace-sha256-v1"
+row_group_count = 2
+leaf_count = 1
+normalized_record_count = 3
+capabilities = ["read.no-pruning", "read.logical-values"]
+expected_unsupported = []
+description = "Trusted exact statistics are present."
+
+[[generated_case]]
+id = "julia-reader-no-pruning-untrusted"
+status = "verified"
+source_kind = "metadata-mutation-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-reader-no-pruning-untrusted.parquet"
+output_identity_status = "verified"
+output_sha256 = "22b92a7f1139a6d7ce8f33a5440b4891db9eae323c5e3d0c620969d3f5761771"
+output_size = 393
+generator_profile = "reader-no-pruning-v1"
+generator_seed = 6008
+variant_id = "producer-untrusted"
+mutation = { kind = "statistics-state", statistics_state = "producer-untrusted", created_by = "parquet-mr version 1.7.0 (build n6)" }
+comparison_group = "julia-reader-no-pruning-v1"
+digest_contract = "n6-no-pruning-trace-sha256-v1"
+row_group_count = 2
+leaf_count = 1
+normalized_record_count = 3
+capabilities = ["read.no-pruning", "read.logical-values"]
+expected_unsupported = []
+description = "Producer policy makes otherwise valid bounds untrusted."
+
+[[generated_case]]
+id = "julia-reader-no-pruning-oversized"
+status = "verified"
+source_kind = "metadata-mutation-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-reader-no-pruning-oversized.parquet"
+output_identity_status = "verified"
+output_sha256 = "1e416cfdbb7b25c5a7e0013845a24ef2ff28e2948b326bacb9eeb38b8e7862a9"
+output_size = 16738
+generator_profile = "reader-no-pruning-v1"
+generator_seed = 6008
+variant_id = "oversized"
+mutation = { kind = "statistics-state", statistics_state = "oversized", bound_bytes = 4097 }
+comparison_group = "julia-reader-no-pruning-v1"
+digest_contract = "n6-no-pruning-trace-sha256-v1"
+row_group_count = 2
+leaf_count = 1
+normalized_record_count = 3
+capabilities = ["read.no-pruning", "read.logical-values"]
+expected_unsupported = []
+description = "Both variable bounds are one byte over the interpretation limit."
+
+[[generated_case]]
+id = "julia-reader-no-pruning-invalid"
+status = "verified"
+source_kind = "metadata-mutation-generated"
+authority = "parquet-jl"
+output_file = "generated/julia-reader-no-pruning-invalid.parquet"
+output_identity_status = "verified"
+output_sha256 = "360c5e75bd2fa90a28e05ba46990f44f98b5e32452555d7c7f84ce5db7454d20"
+output_size = 379
+generator_profile = "reader-no-pruning-v1"
+generator_seed = 6008
+variant_id = "semantically-unusable"
+mutation = { kind = "statistics-state", statistics_state = "semantically-unusable", field = "min_value", value_hex = "000000" }
+comparison_group = "julia-reader-no-pruning-v1"
+digest_contract = "n6-no-pruning-trace-sha256-v1"
+row_group_count = 2
+leaf_count = 1
+normalized_record_count = 3
+capabilities = ["read.no-pruning", "read.logical-values"]
+expected_unsupported = []
+description = "A JSON BYTE_ARRAY lower bound contains the semantically invalid bytes 000000."
+
+[[fixture]]
+id = "apache-alltypes-plain"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/alltypes_plain.parquet"
+sha256 = "12a618d20a59ee0967fef45e7ec1ff6d451e724838edc1bbeac780ca15e8fcc4"
+size = 1851
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 11
+normalized_record_count = 12
+capabilities = ["read.logical-values"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-binary"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/binary.parquet"
+sha256 = "b48b756e48a13f58e1234a8588c507a06a7a9bcdfb63994c86fe19d22864be8b"
+size = 478
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.column-order.type", "wire.statistics.modern-bounds", "wire.statistics.counts", "semantic.logical-order", "read.logical-values", "read.statistics-metadata", "read.parquet-metadata-view"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-binary-truncated-min-max"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/binary_truncated_min_max.parquet"
+sha256 = "94a1e9ef0cd5104168c1e80480fac8918a962a355d9ab33bca3e13ff4402b201"
+size = 3070
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 6
+normalized_record_count = 7
+capabilities = ["wire.column-order.type", "wire.statistics.modern-bounds", "wire.statistics.exactness", "wire.statistics.counts", "read.statistics-metadata", "read.parquet-metadata-view"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-bson"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/bson.parquet"
+sha256 = "44b503ac1ecb70627b29fbce2d3109cd161afe5c0f72b556978b454fc64cb129"
+size = 412
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.column-order.type", "wire.statistics.modern-bounds", "wire.statistics.counts", "semantic.logical-order", "read.logical-values", "read.statistics-metadata", "read.parquet-metadata-view"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-byte-array-decimal"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/byte_array_decimal.parquet"
+sha256 = "9e3ccb253adc5881521b952f7b621954551df1e48dfda19e9b02126aca9b127d"
+size = 324
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["semantic.logical-order", "read.logical-values"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-fixed-length-byte-array"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/fixed_length_byte_array.parquet"
+sha256 = "a5a24cfabf2d8882db861502a0fe1e4539a80772f472f014637a0d01519836a7"
+size = 4437
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.column-order.type", "wire.statistics.modern-bounds", "wire.statistics.counts", "semantic.logical-order", "read.logical-values", "read.statistics-metadata", "read.parquet-metadata-view"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-fixed-length-decimal"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/fixed_length_decimal.parquet"
+sha256 = "67e61d18ecca6027731faf397c5981b29d863f9eef68e3644501588663e1bfd2"
+size = 677
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.statistics.deprecated-bounds", "wire.statistics.counts", "semantic.logical-order", "compat.legacy-statistics", "read.logical-values"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-fixed-length-decimal-legacy"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/fixed_length_decimal_legacy.parquet"
+sha256 = "323ff9d3379903d528cbf7b00f93e4598ed71d39aa6eeff3d322fff541c1fb2a"
+size = 537
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.statistics.deprecated-bounds", "wire.statistics.counts", "semantic.logical-order", "compat.legacy-statistics", "read.logical-values"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-float16-nonzeros-and-nans"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/float16_nonzeros_and_nans.parquet"
+sha256 = "d0117dd9655992b869f8207235526a7d8931e079fd68d68c88c0170faa1f11ee"
+size = 501
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.column-order.type", "wire.statistics.deprecated-bounds", "wire.statistics.modern-bounds", "wire.statistics.counts", "semantic.type-order", "semantic.logical-order"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-float16-zeros-and-nans"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/float16_zeros_and_nans.parquet"
+sha256 = "4901850e7dcd64588a49391fa1dddca514b598e6f4266239033ea73513850f47"
+size = 489
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.column-order.type", "wire.statistics.deprecated-bounds", "wire.statistics.modern-bounds", "wire.statistics.counts", "semantic.type-order", "semantic.logical-order"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-floating-orders-nan-count"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/floating_orders_nan_count.parquet"
+sha256 = "17f7d7655a089b9504a828dffaccd72225a9a6fd2a697099b5336ab274386f0a"
+size = 6143
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 5
+leaf_count = 6
+normalized_record_count = 31
+capabilities = ["wire.column-order.type", "wire.column-order.ieee", "wire.statistics.deprecated-bounds", "wire.statistics.modern-bounds", "wire.statistics.counts", "wire.statistics.nan-count", "semantic.type-order", "semantic.ieee-total-order", "semantic.count-state"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-int32-decimal"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/int32_decimal.parquet"
+sha256 = "3441daea2c44032a78a3615b82373f34575ba7d820541e821f86d8cc143653f9"
+size = 478
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.statistics.deprecated-bounds", "wire.statistics.counts", "semantic.logical-order", "compat.legacy-statistics", "read.logical-values"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-int32-with-null-pages"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/int32_with_null_pages.parquet"
+sha256 = "392046fe71c7bdf7ea59e258596b5e6919f01f65f702a27ca56d8763d2e9f9b7"
+size = 3829
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.column-order.type", "wire.statistics.deprecated-bounds", "wire.statistics.modern-bounds", "wire.statistics.counts", "semantic.type-order", "semantic.count-state", "read.logical-values", "read.statistics-metadata", "read.parquet-metadata-view"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-int64-decimal"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/int64_decimal.parquet"
+sha256 = "e24dcf95589ee230636e228ad75aa0496eca7e8f97339d9bb6ec5c8f7ab0ef56"
+size = 591
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.statistics.deprecated-bounds", "wire.statistics.counts", "semantic.logical-order", "compat.legacy-statistics", "read.logical-values"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-int96-timestamp-order"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/int96_timestamp_order.parquet"
+sha256 = "e35f8748d286a729e719a01c5411f81c79802d61a55046d5cf9a663918a14644"
+size = 427
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.column-order.empty", "wire.statistics.modern-bounds", "wire.statistics.counts"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-json"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/json.parquet"
+sha256 = "594f8dca52a6428e4350d12faeaca9e2155c77511abb9122b935bd5be1a26bf5"
+size = 402
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.column-order.type", "wire.statistics.modern-bounds", "wire.statistics.counts", "semantic.logical-order", "read.logical-values", "read.statistics-metadata", "read.parquet-metadata-view"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-nan-in-stats"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/nan_in_stats.parquet"
+sha256 = "77d921ab7bed54232da778f920f423bd821075353b6147e3680f5b20c85f6337"
+size = 329
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.column-order.type", "wire.statistics.deprecated-bounds", "wire.statistics.modern-bounds", "wire.statistics.counts", "semantic.type-order", "read.statistics-metadata", "read.parquet-metadata-view"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-rle-boolean-encoding"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/rle_boolean_encoding.parquet"
+sha256 = "585e22b54c482befc54fc6caaea5efce788f1d0737505c2d8b121da8ac0c7d76"
+size = 192
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.statistics.deprecated-bounds", "wire.statistics.modern-bounds", "wire.statistics.counts", "semantic.type-order", "read.logical-values"]
+expected_unsupported = []
+
+[[fixture]]
+id = "apache-single-nan"
+status = "verified"
+source_kind = "apache-corpus"
+authority = "parquet-testing"
+file = "data/single_nan.parquet"
+sha256 = "ea3371c44ed1794843a2f529888120537f68aedcb80d6fbe32cea1003ab5769e"
+size = 660
+source_revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+row_group_count = 1
+leaf_count = 1
+normalized_record_count = 2
+capabilities = ["wire.column-order.type", "wire.statistics.counts", "semantic.count-state"]
+expected_unsupported = []

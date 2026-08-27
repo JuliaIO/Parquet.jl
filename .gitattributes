@@ -1,0 +1,3 @@
+# These frozen N6 artifacts include a pinned terminal blank line.
+test/conformance/n6/oracles/parquet-java/check.sh whitespace=-blank-at-eof
+test/conformance/n6/oracles/raw-java/.gitignore whitespace=-blank-at-eof

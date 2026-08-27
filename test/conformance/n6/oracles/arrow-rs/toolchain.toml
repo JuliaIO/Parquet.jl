@@ -1,0 +1,103 @@
+descriptor_version = 1
+status = "verified"
+producer = "arrow-rs"
+producer_version = "59.2.0"
+source_revision = "782e5a685501a9db6cc8e9a3b7cbff894940c47a"
+image_reference = "parquet-jl-n5-oracles:n5d-canonical-a"
+image_id = "sha256:04e56f6512080165bff7c9ae869b27ab20b14fd2dbb7fd7dc3827bc2a1a6568b"
+image_platform = "linux/amd64"
+binary_path = "/usr/local/bin/parquet-jl-n5-arrow-rs-oracle"
+binary_sha256 = "be68c3de1ef338e64966cfc632ab71be68a6646c16d205d5e2a7fcbd8d51885c"
+metadata_binary_file = "test/conformance/n6/oracles/arrow-rs/build/parquet-jl-n6-arrow-rs-metadata"
+metadata_binary_sha256 = "a26a0a29f99adde346800e85ee66544226d2105a040b40eb3536e8d629d8c301"
+metadata_binary_size = 710064
+platform = "macos-15-arm64"
+python_version = "3.12.8"
+python_distribution_url = "https://github.com/astral-sh/python-build-standalone/releases/download/20250115/cpython-3.12.8%2B20250115-aarch64-apple-darwin-install_only_stripped.tar.gz"
+python_distribution_sha256 = "dfb8a4c87116538717105ef3dec3668ae07590a5b5532109fec3ccad90be2fbc"
+python_tree_policy = "extract-strip-site-packages-bytecode-v1"
+python_executable_sha256 = "d6b64f766d3b08326aa10cdb37c9d922e3af38b57ec07caa28b894e5fccf6e69"
+python_tree_sha256 = "e3b7dcdffba67f605b0fa3318656387e8d4265d34531c2bdbc43d3aba4a033ec"
+rust_toolchain = "1.96.1"
+rustc = "rustc 1.96.1 (31fca3adb 2026-06-26)"
+cargo = "cargo 1.96.1 (356927216 2026-06-26)"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/.gitignore"
+sha256 = "88f688c06fa1b7a099d148c3448775bdfaee09a65efe2d88072d2a8c38a9df97"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/Cargo.lock"
+sha256 = "5797b71e20f0a4eda601c8c126336e4daffa2dfc1d9a992d6762cd3fc0b902cc"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/Cargo.toml"
+sha256 = "f33fdb977c0281b98554bf1e701aebe8bd012d8166e9b354a013ac81ed54696f"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/README.md"
+sha256 = "6e3c26f9ef32fe2f0503761437e40a2acecdc0b2c4c8490a787c70e510263a23"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/UPSTREAM.toml"
+sha256 = "d547dbed70c01b77f076a6f020767693751d869c3ff5f5279c5d6ce06f152218"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/rust-toolchain.toml"
+sha256 = "2a64c46431c4bd1e02f1d4bbcbe3390e74dd4668faf9d3cb8da8663efd371add"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/scripts/build.sh"
+sha256 = "7aaaecaf6b37b2b139aa2ff2d3c7bc8e1d5c089749fc620da2f0079ae3dd8311"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/scripts/run.sh"
+sha256 = "2cdedbc41fb639af8a739bc253e36e0fad2f668dcfbadf620cda0f40bdd8c00f"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/scripts/test.sh"
+sha256 = "55c150ce78f3f1a9b9f00758a725a0bb369f5021435df5c0f36667078333db3e"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/src/cases.rs"
+sha256 = "b5e5a12e7e21fe5bf6de85ae43a2a9062b36beaa683419d0df46d9a744cd49bf"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/src/evidence.rs"
+sha256 = "b37cc66e4fa258b5e47ba4103ce190e24b7fb8c5cbdce0d1083da7ecab469730"
+
+[[source]]
+path = "/opt/bootstrap/arrow-rs/src/main.rs"
+sha256 = "172ff23c1ba569fc1d5170fc183152a376acc450a119c5ef330f9edcf7edde12"
+
+[[wrapper]]
+path = "test/conformance/n6/harnesses/common.py"
+sha256 = "8b48613a795deed37089f6dbfca8eb6ed18062ebfd907a4606c91ef3308776ad"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/arrow-rs/build.sh"
+sha256 = "7d2a79ea00d64ac50eea6e866a6ff94b20275e2bcdb27d7256b16070def316c7"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/arrow-rs/run.py"
+sha256 = "992c487acf716a324cc49713c5ac1aefbc5a5b195bc66047830e9a16e0da833c"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/arrow-rs/run.sh"
+sha256 = "b386e4b83c599ee646beb72df02efcd5c61e77ef9b69e8fa1c4a0bc3fb1df084"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/arrow-rs/runtests.py"
+sha256 = "a3857a242c9bad0f3a3405fd6222389a7f66b0726a547e7a24a470975e040c43"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/arrow-rs/check.sh"
+sha256 = "453fc2b3a93d45c90f43bcb4684ed0726999529fb44dbc3f567db8fc416fa56d"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/arrow-rs/metadata/Cargo.toml"
+sha256 = "a7b9439da961d319d828c758badebb9f93d1d85625f2461e7867c34848d060cc"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/arrow-rs/metadata/src/main.rs"
+sha256 = "a2b50a6b20153dee9a4a8d48d8adae5f223b430909b90c6b208eaae3e067e9a8"
