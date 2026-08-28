@@ -66,8 +66,50 @@ their input without building an object tree. `Parquet.Decimal`, `Parquet.Timesta
 and `Parquet.Interval` preserve exact Parquet values that have no single matching
 Julia standard-library type.
 
+### Annotations that a read and write cycle does not preserve
+
+A Julia element type cannot always carry the complete Parquet annotation, so some
+columns are written back with a different annotation. Values are still exact.
+
+- A millisecond `TIMESTAMP` reads as `Parquet.Timestamp{:millis}` when
+  `isAdjustedToUTC` is true, and as `Dates.DateTime` when it is false. Microsecond
+  and nanosecond timestamps always read as `Parquet.Timestamp`.
+- An `ENUM` column reads as `String` and is written back as `STRING`.
+- A millisecond or microsecond `TIME` column reads as `Dates.Time` and is written
+  back as `TIME` with nanosecond units.
+- A `Vector{UInt8}` column is written as `BYTE_ARRAY`. A list of `UInt8` elements is
+  written as a `LIST` of 8-bit integers.
+
+Use `Parquet.LogicalColumn` to select the exact annotation when it matters.
+
 ## Resource limits
 
 Pass a `Parquet.Limits` value to `Parquet.File`, `Parquet.Table`, or `Parquet.write`.
 Limits reject oversized metadata, pages, strings, decimals, statistics bounds, and
 materialized values before large allocations occur.
+
+`max_schema_name_bytes` bounds the new top-level column names a single operation may
+intern as Julia `Symbol`s. Interned names are process-permanent, so the registry also
+keeps a cumulative byte count, but one file's names never consume a later
+operation's budget.
+
+### Nesting depth
+
+Schema parsing and write validation are iterative and accept very deep schemas under a
+raised `max_metadata_depth`. Nested reading still recurses once per level, so it
+rejects a plan deeper than 1024 levels with a `LimitError` instead of exhausting the
+stack. The writer can therefore produce a synthetic file that the reader declines.
+Ordinary Parquet nesting is far below this bound.
+
+## Sources and file lifetime
+
+`Parquet.File` and `Parquet.Table` accept a path, a byte vector, or an `IO`. A path is
+memory mapped. `close` releases the file descriptor, but the mapping itself lives until
+the garbage collector finalizes it. On Windows the file may therefore stay locked after
+`close`. If another process truncates a mapped file while it is open, reads of the
+removed region terminate the process, and no bounds check can prevent that.
+
+`max_materialized_bytes` covers the bytes this package allocates. A byte vector is
+borrowed and a mapped path is not copied, so neither is charged. An `IO` source is
+copied and is charged. A source type supplied by another package owns its own storage,
+so bytes it allocates are not charged here.
