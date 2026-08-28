@@ -1330,3 +1330,48 @@ end
     @test Parquet._budgetused(exactbudget) == precharge
     Parquet._release!(exactbudget, precharge)
 end
+
+@testset "aggregate scan without a trace covers MAP sources" begin
+    # A MAP key snapshot exists only while a trace records one, so a traceless
+    # aggregate scan has no snapshot to assert against. Both MAP scan arms used to
+    # reach the key assertion with no snapshot and raise a MethodError, so this
+    # helper was only ever exercised with struct and list sources.
+    rows = 4
+    dicts = [Dict("k$(index)" => Int32(index)) for index in 1:rows]
+    dictscan, dictrows = wnwriterpassallocations(dicts)
+    @test dictscan >= 0 && dictrows >= 0
+
+    views = Parquet.MapVector(collect(Int32(0):Int32(rows)),
+        String["k$(index)" for index in 1:rows], collect(Int32(1):Int32(rows)))
+    viewscan, viewrows = wnwriterpassallocations(views)
+    @test viewscan >= 0 && viewrows >= 0
+
+    # Inferring the leaf schema is the reason a traceless scan exists, so check that
+    # it still aggregates rather than merely completing.
+    limits = Parquet.Limits(max_materialized_bytes=1_000_000_000)
+    function wnmapaggregate(source)
+        budget = Parquet._LiveByteBudget(limits)
+        shape = Parquet._nestedwriteshape("value", eltype(source), source,
+            limits, budget)
+        Parquet._nestedwritescanaggregates!(Parquet._NestedWriteShape[shape],
+            AbstractVector[source], length(source), limits, nothing)
+        return shape.value.aggregate
+    end
+    decimals = Dict{String,Parquet.Decimal}[
+        Dict("k" => Parquet.Decimal(Int128(1234), Int32(2)))]
+    decimal = wnmapaggregate(decimals)
+    @test decimal.seen && decimal.precision == 4 && decimal.scale == Int32(2)
+    stamps = Dict{String,Parquet.Timestamp{:micros}}[
+        Dict("k" => Parquet.Timestamp(Int64(5), :micros, true))]
+    stamp = wnmapaggregate(stamps)
+    @test stamp.seen && something(stamp.adjusted)
+
+    # The snapshot is the only check the traceless path drops; a key that does not
+    # match its declared shape must still be rejected.
+    budget = Parquet._LiveByteBudget(limits)
+    keyshape = Parquet._nestedwriteshape("key", String, String[], limits, budget)
+    @test_throws ArgumentError Parquet._nestedwritekeyassert!(nothing, Int32(1),
+        keyshape, limits, nothing, nothing, nothing)
+    @test Parquet._nestedwritekeyassert!(nothing, "k", keyshape, limits, nothing,
+        nothing, nothing) === nothing
+end

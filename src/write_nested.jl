@@ -2068,6 +2068,22 @@ function _nestedwritetracekey!(trace, value)
     return _nestedwritetracekey!(trace, value, nothing, Limits())
 end
 
+"""
+    _nestedwritekeyassert!(nothing, value, shape, limits, trace, witness, row_witness)
+
+Assert a MAP key when no key snapshot was captured. A snapshot exists only while a
+trace records one, so an aggregate scan that runs without a trace has nothing to
+compare the key against. Still apply every check that does not need the snapshot.
+"""
+function _nestedwritekeyassert!(::Nothing, value,
+        shape::Union{Nothing,_NestedWriteShape}, limits::Limits, trace, witness,
+        row_witness)
+    _nestedwriterowcheck(row_witness)
+    _nestedwritekeywitnessroot(witness, value)
+    _nestedwritekeydeclared(shape, value)
+    return
+end
+
 function _nestedwritekeyassert!(expected::_NestedWriteKeySnapshot, value,
         shape::Union{Nothing,_NestedWriteShape}, limits::Limits,
         trace::_NestedWriteTrace, witness, row_witness)

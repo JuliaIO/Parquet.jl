@@ -4,7 +4,7 @@ status = "preproduction"
 plan_file = "docs/dev/n6-statistics-plan.md"
 plan_sha256 = "15adf34af765a3300d8a49ced73532ed02b7e4edee5764453c58e53fcf12c304"
 capabilities_file = "test/conformance/n6/capabilities.toml"
-capabilities_sha256 = "9a764ac55ce9bc26ec91802ed0efdcac8498fcd80614bb96e5a84a034c184b58"
+capabilities_sha256 = "599289af825a9086075797261585528fca0c26b54b265be65023393fbb638992"
 fixture_manifest_file = "test/conformance/n6/fixtures.toml"
 fixture_manifest_sha256 = "670b2b1cbc0755eaa61c4638d4dc78a5ec12808c80cff56368ba40ba483e9c25"
 corpus_manifest_file = "test/conformance/n6/corpus-files.sha256"
@@ -12,12 +12,12 @@ corpus_manifest_sha256 = "10c5e8fc52bd1d675401fd417c790e45d8103a84e636e42adec203
 evidence_schema_file = "test/conformance/n6/evidence.schema.json"
 evidence_schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e31"
 artifact_manifest_file = "test/conformance/n6/artifacts.sha256"
-artifact_manifest_sha256 = "97ceea84a8b8a2a7b44c5da5c77cb22b97cac7ce53d6e2da61f58f58b889434f"
+artifact_manifest_sha256 = "55625a6dfcf0f037accb4843fb9aeb7efdfa15332508609c824ca69520682a89"
 model_producer_descriptor_file = "test/conformance/n6/normalizers/model-producer.toml"
 model_producer_descriptor_sha256 = "876e7382758b94c895e57769e8fb52216ac626394ff4026dee00f92812db7f3c"
 parquet_jl_producer_descriptor_file = "test/conformance/n6/julia/parquet-jl-producer.toml"
-parquet_jl_producer_descriptor_sha256 = "04d9bdc1d0115fde6e84326b44415d0f93eaa74631b1fab7410ac1bb8e37a9db"
-parquet_jl_source_composite_sha256 = "1f47b15bae2ec29903adee20de2ba84e9ee578c0ad7f9dcaed9307b9616af681"
+parquet_jl_producer_descriptor_sha256 = "9c4d3173bb9ee79cd52c989bb715fb0642f3774ad5288a4707e69ec47fb841fb"
+parquet_jl_source_composite_sha256 = "6b3c1ba5ddf7936276da53f7dcbb0a6fd317004edcb0ffe4064f89c315ee7914"
 supported_platforms = ["macos-15-arm64"]
 publication_authorized = false
 oracle_lock_authorized = false
@@ -172,7 +172,7 @@ version = "parquet-jl-1.0.0-DEV_julia-1.12.6"
 platform = "macos-15-arm64"
 scope = "Exact Parquet.jl source, manifest, private dependency depot, native artifacts, bootstrap, and N6 harness."
 artifacts = [
-  { name = "parquet-jl-producer.toml", sha256 = "04d9bdc1d0115fde6e84326b44415d0f93eaa74631b1fab7410ac1bb8e37a9db" },
+  { name = "parquet-jl-producer.toml", sha256 = "9c4d3173bb9ee79cd52c989bb715fb0642f3774ad5288a4707e69ec47fb841fb" },
 ]
 
 [[toolchain]]
@@ -313,7 +313,7 @@ schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e3
 fixture_manifest_file = "test/conformance/n6/fixtures.toml"
 case_count = 20
 record_count = 150
-sha256 = "d348030843e06ac3a13a1b6c6a754a36678f04d31541e1fde40c25b1bc28d36d"
+sha256 = "f7cf868be5cc4272ecdb3d78b028cef156e87c3f1010bcede71a7e7183e95cba"
 scope = "Normalized raw wire facts for the exact Apache corpus; no semantic model result."
 
 [[frozen_evidence]]
@@ -329,7 +329,7 @@ schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e3
 fixture_manifest_file = "test/conformance/n6/fixtures.toml"
 case_count = 20
 record_count = 128
-sha256 = "b056b516d1209679467eb1149bed311d87884099fd81186a47b126192db2b6d8"
+sha256 = "517afd281d55b8cc0eb3ffbf1d43dacf1e9fb48d8b7547f303316eba54503f33"
 upstream_evidence = ["normalized-raw-java-apache-corpus"]
 scope = "Independent semantic results combined with reviewed normalized raw inputs."
 
@@ -346,14 +346,14 @@ schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e3
 fixture_manifest_file = "test/conformance/n6/fixtures.toml"
 case_count = 12
 record_count = 82
-sha256 = "3b9fdd74ed12d8b65906f08d70f23dfc8e6469c50a82461fa4b06ff3daeb2ef8"
+sha256 = "e051c66e6c8b4bf30cc2a074b0458b5a5c83d0fdcecd81ed50bbf4b7e1bef49e"
 scope = "Normalized raw wire facts for the exact 12-file Parquet.jl generated corpus; no semantic model result."
 
 [[frozen_evidence]]
 id = "normalized-parquet-jl"
 status = "verified"
 authority = "parquet-jl"
-toolchain_sha256 = "04d9bdc1d0115fde6e84326b44415d0f93eaa74631b1fab7410ac1bb8e37a9db"
+toolchain_sha256 = "9c4d3173bb9ee79cd52c989bb715fb0642f3774ad5288a4707e69ec47fb841fb"
 file = "test/conformance/n6/evidence/parquet-jl.normalized.jsonl"
 format = "normalized-jsonl"
 storage = "checked-in"
@@ -362,7 +362,7 @@ schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e3
 fixture_manifest_file = "test/conformance/n6/fixtures.toml"
 case_count = 12
 record_count = 96
-sha256 = "59b168af025ff7a48e05a13393eebc231dc74fe46321f1ba886620420979aa05"
+sha256 = "0b6321ee8ce621c0ecad75e6c51df556a33f5fa13c7e6a9eff55be98e69da713"
 scope = "Exact generated Julia writer and reader evidence."
 
 [[frozen_evidence]]
@@ -378,7 +378,7 @@ schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e3
 fixture_manifest_file = "test/conformance/n6/fixtures.toml"
 case_count = 19
 record_count = 49
-sha256 = "957a2c5f1776e13d205525d55fc86380310d29a140f5677db1d6135943de5741"
+sha256 = "a83fa856568540490a1bfbade82e23f7c49c3e277c136619a750d18c67487c78"
 upstream_evidence = ["normalized-raw-java-apache-corpus"]
 scope = "Exact N6 parquet-java interoperability harness evidence."
 
@@ -395,7 +395,7 @@ schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e3
 fixture_manifest_file = "test/conformance/n6/fixtures.toml"
 case_count = 19
 record_count = 45
-sha256 = "e34d042dfde9d4ea42e836dc90eb1e8ced7998734c81559739baf14413835e03"
+sha256 = "e19d20bec3c116a90028dbb6e93d39f1510e5f9e601ef5b6c38889340cf0a49e"
 upstream_evidence = ["normalized-raw-java-apache-corpus"]
 scope = "Exact N6 Arrow Rust interoperability harness evidence."
 
@@ -412,7 +412,7 @@ schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e3
 fixture_manifest_file = "test/conformance/n6/fixtures.toml"
 case_count = 16
 record_count = 38
-sha256 = "f757c92e84958f3ed8fc4e15b49bf061b5f8e07974a8f79a41bf9901cc3703a1"
+sha256 = "7241ed272169614458f5654a1d65b9e498eaa97ba40d3f59f66f45990d9b74bf"
 upstream_evidence = ["normalized-raw-java-apache-corpus"]
 scope = "Exact PyArrow logical-value and exposed statistics evidence."
 
@@ -429,6 +429,6 @@ schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e3
 fixture_manifest_file = "test/conformance/n6/fixtures.toml"
 case_count = 15
 record_count = 35
-sha256 = "1c08ed6031e1b5ad6a40b4735c556434cafd96693a38f2113143c47a149ef6b1"
+sha256 = "3bb9903988575e0574f9786c5d16d2973ff800c0540d05a1e8bbf5c5af24762c"
 upstream_evidence = ["normalized-raw-java-apache-corpus"]
 scope = "Exact DuckDB readability and metadata-view evidence."

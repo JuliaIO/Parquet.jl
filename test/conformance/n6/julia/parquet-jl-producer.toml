@@ -11,9 +11,9 @@ julia_runtime_tree_sha256 = "273ec71de498a36c77a7e4bb3af4a3f75c338bd1cfe255cab30
 julia_runtime_entry_count = 7180
 julia_runtime_total_bytes = 820750312
 source_composite_algorithm = "parquet-jl-n6-source-composite-v1"
-source_composite_sha256 = "1f47b15bae2ec29903adee20de2ba84e9ee578c0ad7f9dcaed9307b9616af681"
+source_composite_sha256 = "6b3c1ba5ddf7936276da53f7dcbb0a6fd317004edcb0ffe4064f89c315ee7914"
 source_file_count = 38
-source_total_bytes = 1159933
+source_total_bytes = 1160570
 project_file = "Project.toml"
 project_sha256 = "267fbe0fb90440d6de6bf855a971121f665360cd9f7d256a0d9f0d039e2e424a"
 manifest_file = "test/conformance/n6/julia/Manifest.toml"
@@ -385,7 +385,7 @@ sha256 = "220757c98e62562f6654bf7fadcb19253c44b0318217b66c9753811b1bf63736"
 
 [[file]]
 path = "src/write_nested.jl"
-sha256 = "0486a81937c89027622dd01def87df851ed7feac9429dce1b9183c4338473179"
+sha256 = "a15ac92645a11bf658d02d0b9488be169dfa25beb7ac3281b63fbbf7946f3e04"
 
 [[file]]
 path = "src/write_provenance.jl"
