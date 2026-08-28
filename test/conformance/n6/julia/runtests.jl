@@ -84,7 +84,10 @@ end
     @test_throws ArgumentError N6H._safeoutput("../escape.parquet")
     @test_throws ArgumentError N6H._safeoutput("generated/nested/escape.parquet")
     @test_throws ArgumentError N6H._safeoutput("generated/escape\\file.parquet")
-    mktempdir() do directory
+    # Durable publication fsyncs its destination directory and relies on POSIX
+    # rename and symlink behavior, so the harness refuses to publish anywhere else.
+    # Exercise those guarantees only where they exist.
+    Sys.isunix() && mktempdir() do directory
         path = joinpath(directory, "value.bin")
         N6H._atomicreplacebytes(path, UInt8[0x01, 0x02])
         @test read(path) == UInt8[0x01, 0x02]
