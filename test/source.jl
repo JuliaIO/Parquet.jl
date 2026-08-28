@@ -210,7 +210,16 @@ end
         @test_throws ArgumentError Parquet.readrange(src, 0, 1)
     finally
         isopen(io) && close(io)
-        rm(path; force=true)
+        # `close!` releases the descriptor, but the mapping itself lives until the
+        # garbage collector finalizes it, so Windows can still hold the file open
+        # here. That is the documented source lifetime, not a leak, so treat a
+        # refused removal of this temporary file as acceptable.
+        GC.gc()
+        try
+            rm(path; force=true)
+        catch err
+            err isa Base.IOError || rethrow()
+        end
     end
 end
 
