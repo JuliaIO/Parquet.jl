@@ -87,7 +87,9 @@ function n5externalrelativepath(value, label::String)
     parts = split(path, '/')
     any(part -> isempty(part) || part in (".", ".."), parts) &&
         throw(ArgumentError("$label is not a normalized relative path"))
-    normpath(path) == path || throw(ArgumentError(
+    # normpath emits the platform separator, so compare in the manifest's own
+    # forward-slash form to keep this check meaningful on Windows.
+    replace(normpath(path), '\\' => '/') == path || throw(ArgumentError(
         "$label is not a normalized relative path"))
     return path
 end

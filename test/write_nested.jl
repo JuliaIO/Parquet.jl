@@ -1264,10 +1264,13 @@ end
         fill(Int32(1), rows))
     structscan, structrows = wnwriterpassallocations(structs)
     listscan, listrows = wnwriterpassallocations(lists)
-    @test structscan < 1200 * rows
-    @test structrows < 2200 * rows
-    @test listscan < 2800 * rows
-    @test listrows < 4200 * rows
+    # These bounds catch a pass that stops reusing its scratch stacks, which costs
+    # far more than a constant per row. Keep them loose: the same measurement runs
+    # about a seventh higher on x86-64 than on arm64, and varies by Julia version.
+    @test structscan < 1800 * rows
+    @test structrows < 3300 * rows
+    @test listscan < 4200 * rows
+    @test listrows < 6300 * rows
 
     limits = Parquet.Limits()
     budget = Parquet._LiveByteBudget(limits)

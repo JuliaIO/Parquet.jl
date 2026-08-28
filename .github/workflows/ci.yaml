@@ -81,6 +81,7 @@ jobs:
         with:
           version: '1'
       - uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9 # v2
+      - uses: julia-actions/julia-buildpkg@e3eb439fad4f9aba7da2667e7510e4a46ebc46e1 # v1
       - name: Run N5 nested conformance
         env:
           PARQUET_TESTING_DIR: test/parquet-testing
