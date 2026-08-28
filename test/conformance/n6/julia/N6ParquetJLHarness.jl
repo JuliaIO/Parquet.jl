@@ -1723,7 +1723,8 @@ function _checkmodelpins(manifest::Dict{String,Any})
         path == MODEL_FILE && bytes != FROZEN_MODEL_BYTES && throw(ArgumentError(
             "included N6 model bytes differ from the checked snapshot"))
     end
-    modelrelative = relpath(MODEL_FILE, REPO_ROOT)
+    modelrelative = replace(relpath(MODEL_FILE, REPO_ROOT),
+        Base.Filesystem.path_separator => '/')
     modelrelative in seen || throw(ArgumentError(
         "manifest does not pin the included N6 model source"))
     only(entry for entry in entries if entry["file"] == modelrelative)["sha256"] ==

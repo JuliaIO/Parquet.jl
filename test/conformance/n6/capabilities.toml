@@ -318,7 +318,7 @@ kind = "implementation-under-test"
 version = "1.0.0-DEV"
 revision = "1f47b15bae2ec29903adee20de2ba84e9ee578c0ad7f9dcaed9307b9616af681"
 platforms = ["julia-1.10", "julia-1.12"]
-toolchain_sha256 = ["6f687953e48958fc6596962379691d1c8a1720d3a9ff39c1e3113888e43bd8ae", "9ad38bea81ecace044a4bdef2a0246dee94cb8a44c9420809cc00f9872651c64", "f367b708fd5e118f30b7446f3406ec6d63897890484e54e80aa1a4a996e63858"]
+toolchain_sha256 = ["6f687953e48958fc6596962379691d1c8a1720d3a9ff39c1e3113888e43bd8ae", "9ad38bea81ecace044a4bdef2a0246dee94cb8a44c9420809cc00f9872651c64", "04d9bdc1d0115fde6e84326b44415d0f93eaa74631b1fab7410ac1bb8e37a9db"]
 
 [[authority.claim]]
 capability = "write.type-order"

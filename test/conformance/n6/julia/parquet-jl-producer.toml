@@ -19,7 +19,7 @@ project_sha256 = "267fbe0fb90440d6de6bf855a971121f665360cd9f7d256a0d9f0d039e2e42
 manifest_file = "test/conformance/n6/julia/Manifest.toml"
 manifest_sha256 = "186cc635d7fcbc19f9acabc0ba9198d837d6eb0fccdd1a431a3137a6a43be565"
 harness_file = "test/conformance/n6/julia/N6ParquetJLHarness.jl"
-harness_sha256 = "d4110b353744e9c1b364fa1754ddf7416833e6c9fcf632d55336a228d1028134"
+harness_sha256 = "e3e0e903e3ecca103eeb5ec2d11aa0ee81c28f4344f48c8bfd1df0eaa5c01370"
 runner_file = "test/conformance/n6/julia/generate.jl"
 runner_sha256 = "508a7d640a7f24e6548f2973f6e2aa867834d1f91dd98b577ef40417d3209dd4"
 bootstrap_file = "test/conformance/n6/julia/bootstrap.jl"
@@ -405,7 +405,7 @@ sha256 = "186cc635d7fcbc19f9acabc0ba9198d837d6eb0fccdd1a431a3137a6a43be565"
 
 [[file]]
 path = "test/conformance/n6/julia/N6ParquetJLHarness.jl"
-sha256 = "d4110b353744e9c1b364fa1754ddf7416833e6c9fcf632d55336a228d1028134"
+sha256 = "e3e0e903e3ecca103eeb5ec2d11aa0ee81c28f4344f48c8bfd1df0eaa5c01370"
 
 [[file]]
 path = "test/conformance/n6/julia/bootstrap.jl"
