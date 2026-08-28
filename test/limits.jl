@@ -17,22 +17,30 @@ end
     before = Parquet._internedschemanamebytes()
     name = "__parquet_schema_name_budget_regression__"
     charge = Parquet._schemanamecharge(name, typemax(Int64))
-    small = Parquet.Limits(max_schema_name_bytes=before + charge - 1)
+    small = Parquet.Limits(max_schema_name_bytes=charge - 1)
     @test_throws Parquet.LimitError Parquet._internschemanames(String[name], small)
     @test Parquet._internedschemanamebytes() == before
 
-    exact = Parquet.Limits(max_schema_name_bytes=before + charge)
+    exact = Parquet.Limits(max_schema_name_bytes=charge)
     @test Parquet._internschemanames(String[name], exact) == Symbol[Symbol(name)]
     @test Parquet._internedschemanamebytes() == before + charge
     @test Parquet._internschemanames(String[name],
         Parquet.Limits(max_schema_name_bytes=0)) == Symbol[Symbol(name)]
     @test Parquet._internedschemanamebytes() == before + charge
 
+    # Regression: the limit admits each operation's new names independently, so
+    # earlier interning (hostile or not) must not consume later operations' budget.
+    second = "__parquet_schema_name_budget_regression_second__"
+    secondcharge = Parquet._schemanamecharge(second, typemax(Int64))
+    @test Parquet._internschemanames(String[second],
+        Parquet.Limits(max_schema_name_bytes=secondcharge)) == Symbol[Symbol(second)]
+    @test Parquet._internedschemanamebytes() == before + charge + secondcharge
+
     @test_throws Parquet.UnsupportedFeatureError Parquet._internschemanames(
         String["duplicate", "duplicate"], Parquet.Limits())
     @test_throws Parquet.UnsupportedFeatureError Parquet._internschemanames(
         String["nul\0name"], Parquet.Limits())
-    @test Parquet._internedschemanamebytes() == before + charge
+    @test Parquet._internedschemanamebytes() == before + charge + secondcharge
 end
 
 @testset "isolated schema-name boundary and precedence" begin
@@ -70,6 +78,12 @@ end
         expected = Int64(64) +
             Parquet._materializedarraybytes(Symbol, 1)
         Parquet._budgetused(budget) == expected || exit(19)
+        second = "__parquet_isolated_exact_schema_name_second__"
+        secondcharge = Parquet._schemanamecharge(second, typemax(Int64))
+        Parquet._internschemanames(String[second],
+            Parquet.Limits(max_schema_name_bytes=secondcharge)) ==
+            Symbol[Symbol(second)] || exit(20)
+        Parquet._internedschemanamebytes() == charge + secondcharge || exit(21)
         """
     command = `$(Base.julia_cmd()) --startup-file=no --project=$project -e $script`
     @test success(command)
@@ -207,7 +221,7 @@ end
     firstatomic = "__parquet_atomic_batch_first__"
     secondatomic = "__parquet_atomic_batch_second__"
     firstcharge = Parquet._schemanamecharge(firstatomic, typemax(Int64))
-    atomiclimits = Parquet.Limits(max_schema_name_bytes=before + firstcharge)
+    atomiclimits = Parquet.Limits(max_schema_name_bytes=firstcharge)
     atomicbudget = Parquet._LiveByteBudget(atomiclimits)
     Parquet._reserve!(atomicbudget, Int64(64))
     @test_throws Parquet.LimitError Parquet._internschemanames(
@@ -228,7 +242,7 @@ end
     temporary = Parquet._materializedarraybytes(String, 0) +
         2 * Parquet._MATERIALIZED_OBJECT_BYTES +
         Parquet._materializedarraybytes(String, 2; header=false)
-    tight = Parquet.Limits(max_schema_name_bytes=before + charge,
+    tight = Parquet.Limits(max_schema_name_bytes=charge,
         max_materialized_bytes=temporary)
     tightbudget = Parquet._LiveByteBudget(tight)
     @test_throws Parquet.LimitError Parquet._internschemanames(String[atomic],

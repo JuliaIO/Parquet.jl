@@ -12,8 +12,8 @@ mutable struct OwnerRegion{B<:AbstractVector{UInt8},I}
     bytes::B
     io::I
     budget::Union{Nothing,_LiveByteBudget}
-    materializedcharge::Int64
-    closed::Bool
+    @atomic materializedcharge::Int64
+    @atomic closed::Bool
 end
 
 struct MemorySource{R<:OwnerRegion} <: AbstractSource
@@ -55,22 +55,20 @@ function Base.length(bytes::BufferSlice)
 end
 
 function Base.getindex(bytes::BufferSlice, index::Int)
-    bytes.region.closed && throw(ArgumentError("Parquet byte region is closed"))
+    (@atomic bytes.region.closed) && throw(ArgumentError("Parquet byte region is closed"))
     checkbounds(bytes, index)
     first = firstindex(bytes.region.bytes)
     return bytes.region.bytes[first + Int(bytes.offset) + index - 1]
 end
 
 function Base.copy(bytes::BufferSlice)
-    bytes.region.closed && throw(ArgumentError("Parquet byte region is closed"))
+    (@atomic bytes.region.closed) && throw(ArgumentError("Parquet byte region is closed"))
     return collect(bytes)
 end
 
 function close!(region::OwnerRegion)
-    region.closed && return
-    region.closed = true
-    charge = region.materializedcharge
-    region.materializedcharge = Int64(0)
+    (@atomicswap region.closed = true) && return
+    charge = @atomicswap region.materializedcharge = Int64(0)
     try
         region.io === nothing || close(region.io)
     finally
@@ -181,7 +179,7 @@ function source(src::AbstractSource;
 end
 
 function sourcelength(src::MemorySource)
-    src.region.closed && throw(ArgumentError("Parquet byte region is closed"))
+    (@atomic src.region.closed) && throw(ArgumentError("Parquet byte region is closed"))
     return Int64(length(src.region.bytes))
 end
 
@@ -190,7 +188,7 @@ function concurrentreads(::MemorySource)
 end
 
 function readrange(src::MemorySource, offset::Integer, count::Integer)
-    src.region.closed && throw(ArgumentError("Parquet byte region is closed"))
+    (@atomic src.region.closed) && throw(ArgumentError("Parquet byte region is closed"))
     return BufferSlice(src.region, offset, count)
 end
 

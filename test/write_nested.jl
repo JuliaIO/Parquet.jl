@@ -856,6 +856,15 @@ function wnchecklogicalschema(metadata::WNMD.FileMetaData)
     return
 end
 
+@testset "nested local millisecond timestamp compatibility annotation" begin
+    input = (events=[(at=DateTime(1970, 1, 1),)],)
+    metadata = wninspect(Parquet._encodefile(input)).metadata
+    timestamp = only(filter(element -> element.name == "at", metadata.schema))
+    @test timestamp.logicalType.TIMESTAMP.unit.MILLIS !== nothing
+    @test !timestamp.logicalType.TIMESTAMP.isAdjustedToUTC
+    @test timestamp.converted_type == WNMD.ConvertedType.TIMESTAMP_MILLIS
+end
+
 @testset "recursive writer explicit logical leaves" begin
     missingvalues = (
         Parquet.LogicalColumn(Missing[missing,missing], :enum),
@@ -1108,14 +1117,6 @@ end
         (value=WNTrackedBytes[tracked],), pagelimits, payloadbudget)
     @test tracked.reads[] == 0
     @test Parquet._budgetused(payloadbudget) == 0
-
-    pagebudget = Parquet._LiveByteBudget(pagelimits)
-    column = Parquet._writecolumn(:value, Int32[1])
-    @test_throws Parquet.LimitError Parquet._budgetedcolumnpages(
-        column, pagelimits, pagebudget; checksum=true, dictionary=false,
-        codec=WNMD.CompressionCodec.UNCOMPRESSED, compressionlevel=nothing,
-        pageversion=:v1)
-    @test Parquet._budgetused(pagebudget) == 0
 
     large = repeat("y", 100_000)
     wnmutationattack(large)

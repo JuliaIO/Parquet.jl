@@ -11,7 +11,7 @@ end
 mutable struct File{S<:AbstractSource,F<:Footer}
     source::S
     footer::F
-    closed::Bool
+    @atomic closed::Bool
 end
 
 function _readu32le(bytes::AbstractVector{UInt8}, offset::Int=1)
@@ -67,8 +67,7 @@ function File(input; limits::Limits=Limits(),
 end
 
 function close!(file::File)
-    file.closed && return
-    file.closed = true
+    (@atomicswap file.closed = true) && return
     close!(file.source)
     return
 end

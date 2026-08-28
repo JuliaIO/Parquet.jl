@@ -226,3 +226,32 @@ end
     @test error === sentinel
     @test !isopen(io)
 end
+
+@testset "close guards are atomic" begin
+    # Regression: closed/materializedcharge were plain fields, so concurrent
+    # close! calls could both pass the guard and double-release the charge.
+    src = Parquet.source(UInt8[0x00])
+    region = src.region
+    @test Base.isfieldatomic(typeof(region), :closed)
+    @test Base.isfieldatomic(typeof(region), :materializedcharge)
+    Parquet.close!(src)
+    Parquet.close!(src)
+
+    limits = Parquet.Limits(max_materialized_bytes=1024)
+    budget = Parquet._LiveByteBudget(limits)
+    owned = Parquet.source(IOBuffer(zeros(UInt8, 12)); budget=budget)
+    @test Parquet._budgetused(budget) > 0
+    @sync for _ in 1:32
+        errormonitor(Threads.@spawn Parquet.close!(owned))
+    end
+    @test Parquet._budgetused(budget) == 0
+
+    file = Parquet.File(Parquet._encodefile((a=Int32[1],)))
+    @test Base.isfieldatomic(typeof(file), :closed)
+    close(file)
+    close(file)
+    table = Parquet.Table(Parquet._encodefile((a=Int32[1],)))
+    @test Base.isfieldatomic(typeof(table), :closed)
+    close(table)
+    close(table)
+end

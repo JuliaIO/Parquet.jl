@@ -350,6 +350,23 @@ end
     Parquet._release!(budget, charge)
     @test Parquet._budgetused(budget) == 0
 
+    # A page build that throws must release its working reservation, leaving only
+    # what the caller already held.
+    failbudget = Parquet._LiveByteBudget(Parquet.Limits())
+    Parquet._reserve!(failbudget, Int64(64))
+    failerror = try
+        Parquet._budgetedsplitcolumnpages(leaf,
+            Parquet.Limits(max_page_bytes=3), failbudget;
+            pagesize=nothing, checksum=true, dictionary=false,
+            codec=WSMD.CompressionCodec.UNCOMPRESSED, compressionlevel=nothing,
+            pageversion=:v1)
+        nothing
+    catch err
+        err
+    end
+    @test failerror isa Parquet.LimitError
+    @test Parquet._budgetused(failbudget) == 64
+
     error = try
         Parquet._encodefile((value=Int32[1],); pagesize=nothing,
             limits=Parquet.Limits(max_page_bytes=3))

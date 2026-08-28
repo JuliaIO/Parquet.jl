@@ -139,6 +139,14 @@ end
     @test headerlength == length(page) - 12
     @test header.data_page_header.num_values == 3 && header.crc !== nothing
     @test Parquet.validatepageheader(header) === :data_v1
+    sharedbudget = Parquet._LiveByteBudget(Parquet.Limits())
+    sharedheader, sharedlength = Parquet.readpageheader(src, Int64(0),
+        Int64(length(page)), Parquet.Limits(); budget=sharedbudget)
+    @test sharedheader == header
+    @test sharedlength == headerlength
+    retainedcharge = Parquet._budgetused(sharedbudget)
+    @test retainedcharge > 0
+    Parquet._release!(sharedbudget, retainedcharge)
     frame = readframe(page)
     @test frame.offset == 0 && frame.headerlength == headerlength && Parquet.pageend(frame) == length(page)
     @test collect(frame.payload) == Parquet.encode_plain(Int32[1, 2, 3]) && Parquet.pagekind(frame) === :data_v1

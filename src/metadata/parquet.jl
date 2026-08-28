@@ -157,7 +157,7 @@ Base.@kwdef struct SizeStatistics
     unencoded_byte_array_data_bytes::Union{Nothing, Int64} = nothing  # 1: optional i64 unencoded_byte_array_data_bytes
     repetition_level_histogram::Union{Nothing, Vector{Int64}} = nothing  # 2: optional list<i64> repetition_level_histogram
     definition_level_histogram::Union{Nothing, Vector{Int64}} = nothing  # 3: optional list<i64> definition_level_histogram
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::SizeStatistics, b::SizeStatistics)
@@ -222,7 +222,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{SizeStatistics})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return SizeStatistics(f_unencoded_byte_array_data_bytes, f_repetition_level_histogram, f_definition_level_histogram, unknown_fields)
 end
 
@@ -264,7 +264,7 @@ Base.@kwdef struct BoundingBox
     zmax::Union{Nothing, Float64} = nothing  # 6: optional double zmax
     mmin::Union{Nothing, Float64} = nothing  # 7: optional double mmin
     mmax::Union{Nothing, Float64} = nothing  # 8: optional double mmax
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::BoundingBox, b::BoundingBox)
@@ -339,7 +339,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{BoundingBox})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_xmin === nothing && Thrift.missingfield(:BoundingBox, :xmin)
     f_xmax === nothing && Thrift.missingfield(:BoundingBox, :xmax)
     f_ymin === nothing && Thrift.missingfield(:BoundingBox, :ymin)
@@ -397,7 +397,7 @@ end
 Base.@kwdef struct GeospatialStatistics
     bbox::Union{Nothing, BoundingBox} = nothing  # 1: optional BoundingBox bbox
     geospatial_types::Union{Nothing, Vector{Int32}} = nothing  # 2: optional list<i32> geospatial_types
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::GeospatialStatistics, b::GeospatialStatistics)
@@ -453,7 +453,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{GeospatialStatistics})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return GeospatialStatistics(f_bbox, f_geospatial_types, unknown_fields)
 end
 
@@ -490,7 +490,7 @@ Base.@kwdef struct Statistics
     is_max_value_exact::Union{Nothing, Bool} = nothing  # 7: optional bool is_max_value_exact
     is_min_value_exact::Union{Nothing, Bool} = nothing  # 8: optional bool is_min_value_exact
     nan_count::Union{Nothing, Int64} = nothing  # 9: optional i64 nan_count
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::Statistics, b::Statistics)
@@ -569,7 +569,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{Statistics})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return Statistics(f_max, f_min, f_null_count, f_distinct_count, f_max_value, f_min_value, f_is_max_value_exact, f_is_min_value_exact, f_nan_count, unknown_fields)
 end
 
@@ -637,7 +637,7 @@ end
 
 # Thrift struct StringType
 Base.@kwdef struct StringType
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::StringType, b::StringType)
@@ -678,7 +678,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{StringType})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return StringType(unknown_fields)
 end
 
@@ -694,7 +694,7 @@ end
 
 # Thrift struct UUIDType
 Base.@kwdef struct UUIDType
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::UUIDType, b::UUIDType)
@@ -735,7 +735,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{UUIDType})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return UUIDType(unknown_fields)
 end
 
@@ -751,7 +751,7 @@ end
 
 # Thrift struct MapType
 Base.@kwdef struct MapType
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::MapType, b::MapType)
@@ -792,7 +792,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{MapType})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return MapType(unknown_fields)
 end
 
@@ -808,7 +808,7 @@ end
 
 # Thrift struct ListType
 Base.@kwdef struct ListType
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::ListType, b::ListType)
@@ -849,7 +849,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{ListType})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return ListType(unknown_fields)
 end
 
@@ -865,7 +865,7 @@ end
 
 # Thrift struct EnumType
 Base.@kwdef struct EnumType
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::EnumType, b::EnumType)
@@ -906,7 +906,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{EnumType})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return EnumType(unknown_fields)
 end
 
@@ -922,7 +922,7 @@ end
 
 # Thrift struct DateType
 Base.@kwdef struct DateType
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::DateType, b::DateType)
@@ -963,7 +963,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{DateType})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return DateType(unknown_fields)
 end
 
@@ -979,7 +979,7 @@ end
 
 # Thrift struct Float16Type
 Base.@kwdef struct Float16Type
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::Float16Type, b::Float16Type)
@@ -1020,7 +1020,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{Float16Type})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return Float16Type(unknown_fields)
 end
 
@@ -1036,7 +1036,7 @@ end
 
 # Thrift struct NullType
 Base.@kwdef struct NullType
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::NullType, b::NullType)
@@ -1077,7 +1077,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{NullType})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return NullType(unknown_fields)
 end
 
@@ -1095,7 +1095,7 @@ end
 Base.@kwdef struct DecimalType
     scale::Int32  # 1: required i32 scale
     precision::Int32  # 2: required i32 precision
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::DecimalType, b::DecimalType)
@@ -1146,7 +1146,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{DecimalType})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_scale === nothing && Thrift.missingfield(:DecimalType, :scale)
     f_precision === nothing && Thrift.missingfield(:DecimalType, :precision)
     return DecimalType(f_scale, f_precision, unknown_fields)
@@ -1170,7 +1170,7 @@ end
 
 # Thrift struct MilliSeconds
 Base.@kwdef struct MilliSeconds
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::MilliSeconds, b::MilliSeconds)
@@ -1211,7 +1211,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{MilliSeconds})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return MilliSeconds(unknown_fields)
 end
 
@@ -1227,7 +1227,7 @@ end
 
 # Thrift struct MicroSeconds
 Base.@kwdef struct MicroSeconds
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::MicroSeconds, b::MicroSeconds)
@@ -1268,7 +1268,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{MicroSeconds})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return MicroSeconds(unknown_fields)
 end
 
@@ -1284,7 +1284,7 @@ end
 
 # Thrift struct NanoSeconds
 Base.@kwdef struct NanoSeconds
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::NanoSeconds, b::NanoSeconds)
@@ -1325,7 +1325,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{NanoSeconds})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return NanoSeconds(unknown_fields)
 end
 
@@ -1344,14 +1344,14 @@ struct TimeUnit
     MILLIS::Union{Nothing, MilliSeconds}  # 1: MilliSeconds MILLIS
     MICROS::Union{Nothing, MicroSeconds}  # 2: MicroSeconds MICROS
     NANOS::Union{Nothing, NanoSeconds}  # 3: NanoSeconds NANOS
-    unknown_fields::Tuple{Vararg{Thrift.RawField}}
+    unknown_fields::Vector{Thrift.RawField}
     function TimeUnit(MILLIS, MICROS, NANOS, unknown_fields)
         Thrift.checkunionargs(:TimeUnit, (MILLIS !== nothing) + (MICROS !== nothing) + (NANOS !== nothing), unknown_fields)
         return new(MILLIS, MICROS, NANOS, unknown_fields)
     end
 end
 
-function TimeUnit(; MILLIS=nothing, MICROS=nothing, NANOS=nothing, unknown_fields=())
+function TimeUnit(; MILLIS=nothing, MICROS=nothing, NANOS=nothing, unknown_fields=Thrift.RawField[])
     return TimeUnit(MILLIS, MICROS, NANOS, unknown_fields)
 end
 
@@ -1407,13 +1407,14 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{TimeUnit})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     Thrift.checkunion(:TimeUnit, (f_MILLIS !== nothing) + (f_MICROS !== nothing) + (f_NANOS !== nothing), unknown_fields)
     return TimeUnit(f_MILLIS, f_MICROS, f_NANOS, unknown_fields)
 end
 
 function Thrift.encode!(w::Thrift.Writer, x::TimeUnit)
     unknown = x.unknown_fields
+    Thrift.checkunionargs(:TimeUnit, (x.MILLIS !== nothing) + (x.MICROS !== nothing) + (x.NANOS !== nothing), unknown)
     lastid = Int16(0)
     index = 1
     (lastid, index) = Thrift.writeunknownafter!(w, unknown, index, lastid)
@@ -1444,7 +1445,7 @@ end
 Base.@kwdef struct TimestampType
     isAdjustedToUTC::Bool  # 1: required bool isAdjustedToUTC
     unit::TimeUnit  # 2: required TimeUnit unit
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::TimestampType, b::TimestampType)
@@ -1495,7 +1496,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{TimestampType})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_isAdjustedToUTC === nothing && Thrift.missingfield(:TimestampType, :isAdjustedToUTC)
     f_unit === nothing && Thrift.missingfield(:TimestampType, :unit)
     return TimestampType(f_isAdjustedToUTC, f_unit, unknown_fields)
@@ -1520,7 +1521,7 @@ end
 Base.@kwdef struct TimeType
     isAdjustedToUTC::Bool  # 1: required bool isAdjustedToUTC
     unit::TimeUnit  # 2: required TimeUnit unit
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::TimeType, b::TimeType)
@@ -1571,7 +1572,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{TimeType})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_isAdjustedToUTC === nothing && Thrift.missingfield(:TimeType, :isAdjustedToUTC)
     f_unit === nothing && Thrift.missingfield(:TimeType, :unit)
     return TimeType(f_isAdjustedToUTC, f_unit, unknown_fields)
@@ -1596,7 +1597,7 @@ end
 Base.@kwdef struct IntType
     bitWidth::Int8  # 1: required i8 bitWidth
     isSigned::Bool  # 2: required bool isSigned
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::IntType, b::IntType)
@@ -1647,7 +1648,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{IntType})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_bitWidth === nothing && Thrift.missingfield(:IntType, :bitWidth)
     f_isSigned === nothing && Thrift.missingfield(:IntType, :isSigned)
     return IntType(f_bitWidth, f_isSigned, unknown_fields)
@@ -1670,7 +1671,7 @@ end
 
 # Thrift struct JsonType
 Base.@kwdef struct JsonType
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::JsonType, b::JsonType)
@@ -1711,7 +1712,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{JsonType})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return JsonType(unknown_fields)
 end
 
@@ -1727,7 +1728,7 @@ end
 
 # Thrift struct BsonType
 Base.@kwdef struct BsonType
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::BsonType, b::BsonType)
@@ -1768,7 +1769,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{BsonType})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return BsonType(unknown_fields)
 end
 
@@ -1785,7 +1786,7 @@ end
 # Thrift struct VariantType
 Base.@kwdef struct VariantType
     specification_version::Union{Nothing, Int8} = nothing  # 1: optional i8 specification_version
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::VariantType, b::VariantType)
@@ -1832,7 +1833,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{VariantType})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return VariantType(f_specification_version, unknown_fields)
 end
 
@@ -1892,7 +1893,7 @@ end
 # Thrift struct GeometryType
 Base.@kwdef struct GeometryType
     crs::Union{Nothing, String} = nothing  # 1: optional string crs
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::GeometryType, b::GeometryType)
@@ -1939,7 +1940,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{GeometryType})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return GeometryType(f_crs, unknown_fields)
 end
 
@@ -1963,7 +1964,7 @@ end
 Base.@kwdef struct GeographyType
     crs::Union{Nothing, String} = nothing  # 1: optional string crs
     algorithm::Union{Nothing, EdgeInterpolationAlgorithm.T} = nothing  # 2: optional EdgeInterpolationAlgorithm algorithm
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::GeographyType, b::GeographyType)
@@ -2014,7 +2015,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{GeographyType})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return GeographyType(f_crs, f_algorithm, unknown_fields)
 end
 
@@ -2059,14 +2060,14 @@ struct LogicalType
     VARIANT::Union{Nothing, VariantType}  # 16: VariantType VARIANT
     GEOMETRY::Union{Nothing, GeometryType}  # 17: GeometryType GEOMETRY
     GEOGRAPHY::Union{Nothing, GeographyType}  # 18: GeographyType GEOGRAPHY
-    unknown_fields::Tuple{Vararg{Thrift.RawField}}
+    unknown_fields::Vector{Thrift.RawField}
     function LogicalType(STRING, MAP, LIST, ENUM, DECIMAL, DATE, TIME, TIMESTAMP, INTEGER, UNKNOWN, JSON, BSON, UUID, FLOAT16, VARIANT, GEOMETRY, GEOGRAPHY, unknown_fields)
         Thrift.checkunionargs(:LogicalType, (STRING !== nothing) + (MAP !== nothing) + (LIST !== nothing) + (ENUM !== nothing) + (DECIMAL !== nothing) + (DATE !== nothing) + (TIME !== nothing) + (TIMESTAMP !== nothing) + (INTEGER !== nothing) + (UNKNOWN !== nothing) + (JSON !== nothing) + (BSON !== nothing) + (UUID !== nothing) + (FLOAT16 !== nothing) + (VARIANT !== nothing) + (GEOMETRY !== nothing) + (GEOGRAPHY !== nothing), unknown_fields)
         return new(STRING, MAP, LIST, ENUM, DECIMAL, DATE, TIME, TIMESTAMP, INTEGER, UNKNOWN, JSON, BSON, UUID, FLOAT16, VARIANT, GEOMETRY, GEOGRAPHY, unknown_fields)
     end
 end
 
-function LogicalType(; STRING=nothing, MAP=nothing, LIST=nothing, ENUM=nothing, DECIMAL=nothing, DATE=nothing, TIME=nothing, TIMESTAMP=nothing, INTEGER=nothing, UNKNOWN=nothing, JSON=nothing, BSON=nothing, UUID=nothing, FLOAT16=nothing, VARIANT=nothing, GEOMETRY=nothing, GEOGRAPHY=nothing, unknown_fields=())
+function LogicalType(; STRING=nothing, MAP=nothing, LIST=nothing, ENUM=nothing, DECIMAL=nothing, DATE=nothing, TIME=nothing, TIMESTAMP=nothing, INTEGER=nothing, UNKNOWN=nothing, JSON=nothing, BSON=nothing, UUID=nothing, FLOAT16=nothing, VARIANT=nothing, GEOMETRY=nothing, GEOGRAPHY=nothing, unknown_fields=Thrift.RawField[])
     return LogicalType(STRING, MAP, LIST, ENUM, DECIMAL, DATE, TIME, TIMESTAMP, INTEGER, UNKNOWN, JSON, BSON, UUID, FLOAT16, VARIANT, GEOMETRY, GEOGRAPHY, unknown_fields)
 end
 
@@ -2178,13 +2179,14 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{LogicalType})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     Thrift.checkunion(:LogicalType, (f_STRING !== nothing) + (f_MAP !== nothing) + (f_LIST !== nothing) + (f_ENUM !== nothing) + (f_DECIMAL !== nothing) + (f_DATE !== nothing) + (f_TIME !== nothing) + (f_TIMESTAMP !== nothing) + (f_INTEGER !== nothing) + (f_UNKNOWN !== nothing) + (f_JSON !== nothing) + (f_BSON !== nothing) + (f_UUID !== nothing) + (f_FLOAT16 !== nothing) + (f_VARIANT !== nothing) + (f_GEOMETRY !== nothing) + (f_GEOGRAPHY !== nothing), unknown_fields)
     return LogicalType(f_STRING, f_MAP, f_LIST, f_ENUM, f_DECIMAL, f_DATE, f_TIME, f_TIMESTAMP, f_INTEGER, f_UNKNOWN, f_JSON, f_BSON, f_UUID, f_FLOAT16, f_VARIANT, f_GEOMETRY, f_GEOGRAPHY, unknown_fields)
 end
 
 function Thrift.encode!(w::Thrift.Writer, x::LogicalType)
     unknown = x.unknown_fields
+    Thrift.checkunionargs(:LogicalType, (x.STRING !== nothing) + (x.MAP !== nothing) + (x.LIST !== nothing) + (x.ENUM !== nothing) + (x.DECIMAL !== nothing) + (x.DATE !== nothing) + (x.TIME !== nothing) + (x.TIMESTAMP !== nothing) + (x.INTEGER !== nothing) + (x.UNKNOWN !== nothing) + (x.JSON !== nothing) + (x.BSON !== nothing) + (x.UUID !== nothing) + (x.FLOAT16 !== nothing) + (x.VARIANT !== nothing) + (x.GEOMETRY !== nothing) + (x.GEOGRAPHY !== nothing), unknown)
     lastid = Int16(0)
     index = 1
     (lastid, index) = Thrift.writeunknownafter!(w, unknown, index, lastid)
@@ -2307,7 +2309,7 @@ Base.@kwdef struct SchemaElement
     precision::Union{Nothing, Int32} = nothing  # 8: optional i32 precision
     field_id::Union{Nothing, Int32} = nothing  # 9: optional i32 field_id
     logicalType::Union{Nothing, LogicalType} = nothing  # 10: optional LogicalType logicalType
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::SchemaElement, b::SchemaElement)
@@ -2390,7 +2392,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{SchemaElement})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_name === nothing && Thrift.missingfield(:SchemaElement, :name)
     return SchemaElement(f_type_, f_type_length, f_repetition_type, f_name, f_num_children, f_converted_type, f_scale, f_precision, f_field_id, f_logicalType, unknown_fields)
 end
@@ -2625,7 +2627,7 @@ Base.@kwdef struct DataPageHeader
     definition_level_encoding::Encoding.T  # 3: required Encoding definition_level_encoding
     repetition_level_encoding::Encoding.T  # 4: required Encoding repetition_level_encoding
     statistics::Union{Nothing, Statistics} = nothing  # 5: optional Statistics statistics
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::DataPageHeader, b::DataPageHeader)
@@ -2688,7 +2690,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{DataPageHeader})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_num_values === nothing && Thrift.missingfield(:DataPageHeader, :num_values)
     f_encoding === nothing && Thrift.missingfield(:DataPageHeader, :encoding)
     f_definition_level_encoding === nothing && Thrift.missingfield(:DataPageHeader, :definition_level_encoding)
@@ -2726,7 +2728,7 @@ end
 
 # Thrift struct IndexPageHeader
 Base.@kwdef struct IndexPageHeader
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::IndexPageHeader, b::IndexPageHeader)
@@ -2767,7 +2769,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{IndexPageHeader})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return IndexPageHeader(unknown_fields)
 end
 
@@ -2786,7 +2788,7 @@ Base.@kwdef struct DictionaryPageHeader
     num_values::Int32  # 1: required i32 num_values
     encoding::Encoding.T  # 2: required Encoding encoding
     is_sorted::Union{Nothing, Bool} = nothing  # 3: optional bool is_sorted
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::DictionaryPageHeader, b::DictionaryPageHeader)
@@ -2841,7 +2843,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{DictionaryPageHeader})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_num_values === nothing && Thrift.missingfield(:DictionaryPageHeader, :num_values)
     f_encoding === nothing && Thrift.missingfield(:DictionaryPageHeader, :encoding)
     return DictionaryPageHeader(f_num_values, f_encoding, f_is_sorted, unknown_fields)
@@ -2878,7 +2880,7 @@ Base.@kwdef struct DataPageHeaderV2
     repetition_levels_byte_length::Int32  # 6: required i32 repetition_levels_byte_length
     is_compressed::Union{Nothing, Bool} = nothing  # 7: optional bool is_compressed = true
     statistics::Union{Nothing, Statistics} = nothing  # 8: optional Statistics statistics
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::DataPageHeaderV2, b::DataPageHeaderV2)
@@ -2953,7 +2955,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{DataPageHeaderV2})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_num_values === nothing && Thrift.missingfield(:DataPageHeaderV2, :num_values)
     f_num_nulls === nothing && Thrift.missingfield(:DataPageHeaderV2, :num_nulls)
     f_num_rows === nothing && Thrift.missingfield(:DataPageHeaderV2, :num_rows)
@@ -3004,7 +3006,7 @@ end
 
 # Thrift struct SplitBlockAlgorithm
 Base.@kwdef struct SplitBlockAlgorithm
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::SplitBlockAlgorithm, b::SplitBlockAlgorithm)
@@ -3045,7 +3047,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{SplitBlockAlgorithm})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return SplitBlockAlgorithm(unknown_fields)
 end
 
@@ -3062,14 +3064,14 @@ end
 # Thrift union BloomFilterAlgorithm
 struct BloomFilterAlgorithm
     BLOCK::Union{Nothing, SplitBlockAlgorithm}  # 1: SplitBlockAlgorithm BLOCK
-    unknown_fields::Tuple{Vararg{Thrift.RawField}}
+    unknown_fields::Vector{Thrift.RawField}
     function BloomFilterAlgorithm(BLOCK, unknown_fields)
         Thrift.checkunionargs(:BloomFilterAlgorithm, (BLOCK !== nothing), unknown_fields)
         return new(BLOCK, unknown_fields)
     end
 end
 
-function BloomFilterAlgorithm(; BLOCK=nothing, unknown_fields=())
+function BloomFilterAlgorithm(; BLOCK=nothing, unknown_fields=Thrift.RawField[])
     return BloomFilterAlgorithm(BLOCK, unknown_fields)
 end
 
@@ -3117,13 +3119,14 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{BloomFilterAlgorithm})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     Thrift.checkunion(:BloomFilterAlgorithm, (f_BLOCK !== nothing), unknown_fields)
     return BloomFilterAlgorithm(f_BLOCK, unknown_fields)
 end
 
 function Thrift.encode!(w::Thrift.Writer, x::BloomFilterAlgorithm)
     unknown = x.unknown_fields
+    Thrift.checkunionargs(:BloomFilterAlgorithm, (x.BLOCK !== nothing), unknown)
     lastid = Int16(0)
     index = 1
     (lastid, index) = Thrift.writeunknownafter!(w, unknown, index, lastid)
@@ -3140,7 +3143,7 @@ end
 
 # Thrift struct XxHash
 Base.@kwdef struct XxHash
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::XxHash, b::XxHash)
@@ -3181,7 +3184,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{XxHash})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return XxHash(unknown_fields)
 end
 
@@ -3198,14 +3201,14 @@ end
 # Thrift union BloomFilterHash
 struct BloomFilterHash
     XXHASH::Union{Nothing, XxHash}  # 1: XxHash XXHASH
-    unknown_fields::Tuple{Vararg{Thrift.RawField}}
+    unknown_fields::Vector{Thrift.RawField}
     function BloomFilterHash(XXHASH, unknown_fields)
         Thrift.checkunionargs(:BloomFilterHash, (XXHASH !== nothing), unknown_fields)
         return new(XXHASH, unknown_fields)
     end
 end
 
-function BloomFilterHash(; XXHASH=nothing, unknown_fields=())
+function BloomFilterHash(; XXHASH=nothing, unknown_fields=Thrift.RawField[])
     return BloomFilterHash(XXHASH, unknown_fields)
 end
 
@@ -3253,13 +3256,14 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{BloomFilterHash})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     Thrift.checkunion(:BloomFilterHash, (f_XXHASH !== nothing), unknown_fields)
     return BloomFilterHash(f_XXHASH, unknown_fields)
 end
 
 function Thrift.encode!(w::Thrift.Writer, x::BloomFilterHash)
     unknown = x.unknown_fields
+    Thrift.checkunionargs(:BloomFilterHash, (x.XXHASH !== nothing), unknown)
     lastid = Int16(0)
     index = 1
     (lastid, index) = Thrift.writeunknownafter!(w, unknown, index, lastid)
@@ -3276,7 +3280,7 @@ end
 
 # Thrift struct Uncompressed
 Base.@kwdef struct Uncompressed
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::Uncompressed, b::Uncompressed)
@@ -3317,7 +3321,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{Uncompressed})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return Uncompressed(unknown_fields)
 end
 
@@ -3334,14 +3338,14 @@ end
 # Thrift union BloomFilterCompression
 struct BloomFilterCompression
     UNCOMPRESSED::Union{Nothing, Uncompressed}  # 1: Uncompressed UNCOMPRESSED
-    unknown_fields::Tuple{Vararg{Thrift.RawField}}
+    unknown_fields::Vector{Thrift.RawField}
     function BloomFilterCompression(UNCOMPRESSED, unknown_fields)
         Thrift.checkunionargs(:BloomFilterCompression, (UNCOMPRESSED !== nothing), unknown_fields)
         return new(UNCOMPRESSED, unknown_fields)
     end
 end
 
-function BloomFilterCompression(; UNCOMPRESSED=nothing, unknown_fields=())
+function BloomFilterCompression(; UNCOMPRESSED=nothing, unknown_fields=Thrift.RawField[])
     return BloomFilterCompression(UNCOMPRESSED, unknown_fields)
 end
 
@@ -3389,13 +3393,14 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{BloomFilterCompression})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     Thrift.checkunion(:BloomFilterCompression, (f_UNCOMPRESSED !== nothing), unknown_fields)
     return BloomFilterCompression(f_UNCOMPRESSED, unknown_fields)
 end
 
 function Thrift.encode!(w::Thrift.Writer, x::BloomFilterCompression)
     unknown = x.unknown_fields
+    Thrift.checkunionargs(:BloomFilterCompression, (x.UNCOMPRESSED !== nothing), unknown)
     lastid = Int16(0)
     index = 1
     (lastid, index) = Thrift.writeunknownafter!(w, unknown, index, lastid)
@@ -3416,7 +3421,7 @@ Base.@kwdef struct BloomFilterHeader
     algorithm::BloomFilterAlgorithm  # 2: required BloomFilterAlgorithm algorithm
     hash::BloomFilterHash  # 3: required BloomFilterHash hash
     compression::BloomFilterCompression  # 4: required BloomFilterCompression compression
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::BloomFilterHeader, b::BloomFilterHeader)
@@ -3475,7 +3480,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{BloomFilterHeader})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_numBytes === nothing && Thrift.missingfield(:BloomFilterHeader, :numBytes)
     f_algorithm === nothing && Thrift.missingfield(:BloomFilterHeader, :algorithm)
     f_hash === nothing && Thrift.missingfield(:BloomFilterHeader, :hash)
@@ -3515,7 +3520,7 @@ Base.@kwdef struct PageHeader
     index_page_header::Union{Nothing, IndexPageHeader} = nothing  # 6: optional IndexPageHeader index_page_header
     dictionary_page_header::Union{Nothing, DictionaryPageHeader} = nothing  # 7: optional DictionaryPageHeader dictionary_page_header
     data_page_header_v2::Union{Nothing, DataPageHeaderV2} = nothing  # 8: optional DataPageHeaderV2 data_page_header_v2
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::PageHeader, b::PageHeader)
@@ -3590,7 +3595,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{PageHeader})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_type_ === nothing && Thrift.missingfield(:PageHeader, :type)
     f_uncompressed_page_size === nothing && Thrift.missingfield(:PageHeader, :uncompressed_page_size)
     f_compressed_page_size === nothing && Thrift.missingfield(:PageHeader, :compressed_page_size)
@@ -3650,7 +3655,7 @@ end
 Base.@kwdef struct KeyValue
     key::String  # 1: required string key
     value::Union{Nothing, String} = nothing  # 2: optional string value
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::KeyValue, b::KeyValue)
@@ -3701,7 +3706,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{KeyValue})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_key === nothing && Thrift.missingfield(:KeyValue, :key)
     return KeyValue(f_key, f_value, unknown_fields)
 end
@@ -3730,7 +3735,7 @@ Base.@kwdef struct SortingColumn
     column_idx::Int32  # 1: required i32 column_idx
     descending::Bool  # 2: required bool descending
     nulls_first::Bool  # 3: required bool nulls_first
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::SortingColumn, b::SortingColumn)
@@ -3785,7 +3790,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{SortingColumn})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_column_idx === nothing && Thrift.missingfield(:SortingColumn, :column_idx)
     f_descending === nothing && Thrift.missingfield(:SortingColumn, :descending)
     f_nulls_first === nothing && Thrift.missingfield(:SortingColumn, :nulls_first)
@@ -3814,7 +3819,7 @@ Base.@kwdef struct PageEncodingStats
     page_type::PageType.T  # 1: required PageType page_type
     encoding::Encoding.T  # 2: required Encoding encoding
     count::Int32  # 3: required i32 count
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::PageEncodingStats, b::PageEncodingStats)
@@ -3869,7 +3874,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{PageEncodingStats})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_page_type === nothing && Thrift.missingfield(:PageEncodingStats, :page_type)
     f_encoding === nothing && Thrift.missingfield(:PageEncodingStats, :encoding)
     f_count === nothing && Thrift.missingfield(:PageEncodingStats, :count)
@@ -3914,7 +3919,7 @@ Base.@kwdef struct ColumnMetaData
     bloom_filter_length::Union{Nothing, Int32} = nothing  # 15: optional i32 bloom_filter_length
     size_statistics::Union{Nothing, SizeStatistics} = nothing  # 16: optional SizeStatistics size_statistics
     geospatial_statistics::Union{Nothing, GeospatialStatistics} = nothing  # 17: optional GeospatialStatistics geospatial_statistics
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::ColumnMetaData, b::ColumnMetaData)
@@ -4045,7 +4050,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{ColumnMetaData})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_type_ === nothing && Thrift.missingfield(:ColumnMetaData, :type)
     f_encodings === nothing && Thrift.missingfield(:ColumnMetaData, :encodings)
     f_path_in_schema === nothing && Thrift.missingfield(:ColumnMetaData, :path_in_schema)
@@ -4147,7 +4152,7 @@ end
 
 # Thrift struct EncryptionWithFooterKey
 Base.@kwdef struct EncryptionWithFooterKey
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::EncryptionWithFooterKey, b::EncryptionWithFooterKey)
@@ -4188,7 +4193,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{EncryptionWithFooterKey})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return EncryptionWithFooterKey(unknown_fields)
 end
 
@@ -4206,7 +4211,7 @@ end
 Base.@kwdef struct EncryptionWithColumnKey
     path_in_schema::Vector{String}  # 1: required list<string> path_in_schema
     key_metadata::Union{Nothing, Vector{UInt8}} = nothing  # 2: optional binary key_metadata
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::EncryptionWithColumnKey, b::EncryptionWithColumnKey)
@@ -4262,7 +4267,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{EncryptionWithColumnKey})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_path_in_schema === nothing && Thrift.missingfield(:EncryptionWithColumnKey, :path_in_schema)
     return EncryptionWithColumnKey(f_path_in_schema, f_key_metadata, unknown_fields)
 end
@@ -4290,14 +4295,14 @@ end
 struct ColumnCryptoMetaData
     ENCRYPTION_WITH_FOOTER_KEY::Union{Nothing, EncryptionWithFooterKey}  # 1: EncryptionWithFooterKey ENCRYPTION_WITH_FOOTER_KEY
     ENCRYPTION_WITH_COLUMN_KEY::Union{Nothing, EncryptionWithColumnKey}  # 2: EncryptionWithColumnKey ENCRYPTION_WITH_COLUMN_KEY
-    unknown_fields::Tuple{Vararg{Thrift.RawField}}
+    unknown_fields::Vector{Thrift.RawField}
     function ColumnCryptoMetaData(ENCRYPTION_WITH_FOOTER_KEY, ENCRYPTION_WITH_COLUMN_KEY, unknown_fields)
         Thrift.checkunionargs(:ColumnCryptoMetaData, (ENCRYPTION_WITH_FOOTER_KEY !== nothing) + (ENCRYPTION_WITH_COLUMN_KEY !== nothing), unknown_fields)
         return new(ENCRYPTION_WITH_FOOTER_KEY, ENCRYPTION_WITH_COLUMN_KEY, unknown_fields)
     end
 end
 
-function ColumnCryptoMetaData(; ENCRYPTION_WITH_FOOTER_KEY=nothing, ENCRYPTION_WITH_COLUMN_KEY=nothing, unknown_fields=())
+function ColumnCryptoMetaData(; ENCRYPTION_WITH_FOOTER_KEY=nothing, ENCRYPTION_WITH_COLUMN_KEY=nothing, unknown_fields=Thrift.RawField[])
     return ColumnCryptoMetaData(ENCRYPTION_WITH_FOOTER_KEY, ENCRYPTION_WITH_COLUMN_KEY, unknown_fields)
 end
 
@@ -4349,13 +4354,14 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{ColumnCryptoMetaData})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     Thrift.checkunion(:ColumnCryptoMetaData, (f_ENCRYPTION_WITH_FOOTER_KEY !== nothing) + (f_ENCRYPTION_WITH_COLUMN_KEY !== nothing), unknown_fields)
     return ColumnCryptoMetaData(f_ENCRYPTION_WITH_FOOTER_KEY, f_ENCRYPTION_WITH_COLUMN_KEY, unknown_fields)
 end
 
 function Thrift.encode!(w::Thrift.Writer, x::ColumnCryptoMetaData)
     unknown = x.unknown_fields
+    Thrift.checkunionargs(:ColumnCryptoMetaData, (x.ENCRYPTION_WITH_FOOTER_KEY !== nothing) + (x.ENCRYPTION_WITH_COLUMN_KEY !== nothing), unknown)
     lastid = Int16(0)
     index = 1
     (lastid, index) = Thrift.writeunknownafter!(w, unknown, index, lastid)
@@ -4387,7 +4393,7 @@ Base.@kwdef struct ColumnChunk
     column_index_length::Union{Nothing, Int32} = nothing  # 7: optional i32 column_index_length
     crypto_metadata::Union{Nothing, ColumnCryptoMetaData} = nothing  # 8: optional ColumnCryptoMetaData crypto_metadata
     encrypted_column_metadata::Union{Nothing, Vector{UInt8}} = nothing  # 9: optional binary encrypted_column_metadata
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::ColumnChunk, b::ColumnChunk)
@@ -4466,7 +4472,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{ColumnChunk})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return ColumnChunk(f_file_path, f_file_offset, f_meta_data, f_offset_index_offset, f_offset_index_length, f_column_index_offset, f_column_index_length, f_crypto_metadata, f_encrypted_column_metadata, unknown_fields)
 end
 
@@ -4540,7 +4546,7 @@ Base.@kwdef struct RowGroup
     file_offset::Union{Nothing, Int64} = nothing  # 5: optional i64 file_offset
     total_compressed_size::Union{Nothing, Int64} = nothing  # 6: optional i64 total_compressed_size
     ordinal::Union{Nothing, Int16} = nothing  # 7: optional i16 ordinal
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::RowGroup, b::RowGroup)
@@ -4621,7 +4627,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{RowGroup})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_columns === nothing && Thrift.missingfield(:RowGroup, :columns)
     f_total_byte_size === nothing && Thrift.missingfield(:RowGroup, :total_byte_size)
     f_num_rows === nothing && Thrift.missingfield(:RowGroup, :num_rows)
@@ -4673,7 +4679,7 @@ end
 
 # Thrift struct TypeDefinedOrder
 Base.@kwdef struct TypeDefinedOrder
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::TypeDefinedOrder, b::TypeDefinedOrder)
@@ -4714,7 +4720,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{TypeDefinedOrder})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return TypeDefinedOrder(unknown_fields)
 end
 
@@ -4730,7 +4736,7 @@ end
 
 # Thrift struct IEEE754TotalOrder
 Base.@kwdef struct IEEE754TotalOrder
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::IEEE754TotalOrder, b::IEEE754TotalOrder)
@@ -4771,7 +4777,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{IEEE754TotalOrder})
         unknown = Thrift.pushunknown!(unknown, Thrift.readrawfield(r, id, ty))
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return IEEE754TotalOrder(unknown_fields)
 end
 
@@ -4789,14 +4795,14 @@ end
 struct ColumnOrder
     TYPE_ORDER::Union{Nothing, TypeDefinedOrder}  # 1: TypeDefinedOrder TYPE_ORDER
     IEEE_754_TOTAL_ORDER::Union{Nothing, IEEE754TotalOrder}  # 2: IEEE754TotalOrder IEEE_754_TOTAL_ORDER
-    unknown_fields::Tuple{Vararg{Thrift.RawField}}
+    unknown_fields::Vector{Thrift.RawField}
     function ColumnOrder(TYPE_ORDER, IEEE_754_TOTAL_ORDER, unknown_fields)
         Thrift.checkunionargs(:ColumnOrder, (TYPE_ORDER !== nothing) + (IEEE_754_TOTAL_ORDER !== nothing), unknown_fields)
         return new(TYPE_ORDER, IEEE_754_TOTAL_ORDER, unknown_fields)
     end
 end
 
-function ColumnOrder(; TYPE_ORDER=nothing, IEEE_754_TOTAL_ORDER=nothing, unknown_fields=())
+function ColumnOrder(; TYPE_ORDER=nothing, IEEE_754_TOTAL_ORDER=nothing, unknown_fields=Thrift.RawField[])
     return ColumnOrder(TYPE_ORDER, IEEE_754_TOTAL_ORDER, unknown_fields)
 end
 
@@ -4848,13 +4854,14 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{ColumnOrder})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     Thrift.checkunion(:ColumnOrder, (f_TYPE_ORDER !== nothing) + (f_IEEE_754_TOTAL_ORDER !== nothing), unknown_fields)
     return ColumnOrder(f_TYPE_ORDER, f_IEEE_754_TOTAL_ORDER, unknown_fields)
 end
 
 function Thrift.encode!(w::Thrift.Writer, x::ColumnOrder)
     unknown = x.unknown_fields
+    Thrift.checkunionargs(:ColumnOrder, (x.TYPE_ORDER !== nothing) + (x.IEEE_754_TOTAL_ORDER !== nothing), unknown)
     lastid = Int16(0)
     index = 1
     (lastid, index) = Thrift.writeunknownafter!(w, unknown, index, lastid)
@@ -4880,7 +4887,7 @@ Base.@kwdef struct PageLocation
     offset::Int64  # 1: required i64 offset
     compressed_page_size::Int32  # 2: required i32 compressed_page_size
     first_row_index::Int64  # 3: required i64 first_row_index
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::PageLocation, b::PageLocation)
@@ -4935,7 +4942,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{PageLocation})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_offset === nothing && Thrift.missingfield(:PageLocation, :offset)
     f_compressed_page_size === nothing && Thrift.missingfield(:PageLocation, :compressed_page_size)
     f_first_row_index === nothing && Thrift.missingfield(:PageLocation, :first_row_index)
@@ -4965,7 +4972,7 @@ end
 Base.@kwdef struct OffsetIndex
     page_locations::Vector{PageLocation}  # 1: required list<PageLocation> page_locations
     unencoded_byte_array_data_bytes::Union{Nothing, Vector{Int64}} = nothing  # 2: optional list<i64> unencoded_byte_array_data_bytes
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::OffsetIndex, b::OffsetIndex)
@@ -5026,7 +5033,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{OffsetIndex})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_page_locations === nothing && Thrift.missingfield(:OffsetIndex, :page_locations)
     return OffsetIndex(f_page_locations, f_unencoded_byte_array_data_bytes, unknown_fields)
 end
@@ -5060,7 +5067,7 @@ Base.@kwdef struct ColumnIndex
     repetition_level_histograms::Union{Nothing, Vector{Int64}} = nothing  # 6: optional list<i64> repetition_level_histograms
     definition_level_histograms::Union{Nothing, Vector{Int64}} = nothing  # 7: optional list<i64> definition_level_histograms
     nan_counts::Union{Nothing, Vector{Int64}} = nothing  # 8: optional list<i64> nan_counts
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::ColumnIndex, b::ColumnIndex)
@@ -5170,7 +5177,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{ColumnIndex})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_null_pages === nothing && Thrift.missingfield(:ColumnIndex, :null_pages)
     f_min_values === nothing && Thrift.missingfield(:ColumnIndex, :min_values)
     f_max_values === nothing && Thrift.missingfield(:ColumnIndex, :max_values)
@@ -5229,7 +5236,7 @@ Base.@kwdef struct AesGcmV1
     aad_prefix::Union{Nothing, Vector{UInt8}} = nothing  # 1: optional binary aad_prefix
     aad_file_unique::Union{Nothing, Vector{UInt8}} = nothing  # 2: optional binary aad_file_unique
     supply_aad_prefix::Union{Nothing, Bool} = nothing  # 3: optional bool supply_aad_prefix
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::AesGcmV1, b::AesGcmV1)
@@ -5284,7 +5291,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{AesGcmV1})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return AesGcmV1(f_aad_prefix, f_aad_file_unique, f_supply_aad_prefix, unknown_fields)
 end
 
@@ -5320,7 +5327,7 @@ Base.@kwdef struct AesGcmCtrV1
     aad_prefix::Union{Nothing, Vector{UInt8}} = nothing  # 1: optional binary aad_prefix
     aad_file_unique::Union{Nothing, Vector{UInt8}} = nothing  # 2: optional binary aad_file_unique
     supply_aad_prefix::Union{Nothing, Bool} = nothing  # 3: optional bool supply_aad_prefix
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::AesGcmCtrV1, b::AesGcmCtrV1)
@@ -5375,7 +5382,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{AesGcmCtrV1})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     return AesGcmCtrV1(f_aad_prefix, f_aad_file_unique, f_supply_aad_prefix, unknown_fields)
 end
 
@@ -5410,14 +5417,14 @@ end
 struct EncryptionAlgorithm
     AES_GCM_V1::Union{Nothing, AesGcmV1}  # 1: AesGcmV1 AES_GCM_V1
     AES_GCM_CTR_V1::Union{Nothing, AesGcmCtrV1}  # 2: AesGcmCtrV1 AES_GCM_CTR_V1
-    unknown_fields::Tuple{Vararg{Thrift.RawField}}
+    unknown_fields::Vector{Thrift.RawField}
     function EncryptionAlgorithm(AES_GCM_V1, AES_GCM_CTR_V1, unknown_fields)
         Thrift.checkunionargs(:EncryptionAlgorithm, (AES_GCM_V1 !== nothing) + (AES_GCM_CTR_V1 !== nothing), unknown_fields)
         return new(AES_GCM_V1, AES_GCM_CTR_V1, unknown_fields)
     end
 end
 
-function EncryptionAlgorithm(; AES_GCM_V1=nothing, AES_GCM_CTR_V1=nothing, unknown_fields=())
+function EncryptionAlgorithm(; AES_GCM_V1=nothing, AES_GCM_CTR_V1=nothing, unknown_fields=Thrift.RawField[])
     return EncryptionAlgorithm(AES_GCM_V1, AES_GCM_CTR_V1, unknown_fields)
 end
 
@@ -5469,13 +5476,14 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{EncryptionAlgorithm})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     Thrift.checkunion(:EncryptionAlgorithm, (f_AES_GCM_V1 !== nothing) + (f_AES_GCM_CTR_V1 !== nothing), unknown_fields)
     return EncryptionAlgorithm(f_AES_GCM_V1, f_AES_GCM_CTR_V1, unknown_fields)
 end
 
 function Thrift.encode!(w::Thrift.Writer, x::EncryptionAlgorithm)
     unknown = x.unknown_fields
+    Thrift.checkunionargs(:EncryptionAlgorithm, (x.AES_GCM_V1 !== nothing) + (x.AES_GCM_CTR_V1 !== nothing), unknown)
     lastid = Int16(0)
     index = 1
     (lastid, index) = Thrift.writeunknownafter!(w, unknown, index, lastid)
@@ -5507,7 +5515,7 @@ Base.@kwdef struct FileMetaData
     column_orders::Union{Nothing, Vector{ColumnOrder}} = nothing  # 7: optional list<ColumnOrder> column_orders
     encryption_algorithm::Union{Nothing, EncryptionAlgorithm} = nothing  # 8: optional EncryptionAlgorithm encryption_algorithm
     footer_signing_key_metadata::Union{Nothing, Vector{UInt8}} = nothing  # 9: optional binary footer_signing_key_metadata
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::FileMetaData, b::FileMetaData)
@@ -5606,7 +5614,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{FileMetaData})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_version === nothing && Thrift.missingfield(:FileMetaData, :version)
     f_schema === nothing && Thrift.missingfield(:FileMetaData, :schema)
     f_num_rows === nothing && Thrift.missingfield(:FileMetaData, :num_rows)
@@ -5670,7 +5678,7 @@ end
 Base.@kwdef struct FileCryptoMetaData
     encryption_algorithm::EncryptionAlgorithm  # 1: required EncryptionAlgorithm encryption_algorithm
     key_metadata::Union{Nothing, Vector{UInt8}} = nothing  # 2: optional binary key_metadata
-    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()
+    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]
 end
 
 function Base.:(==)(a::FileCryptoMetaData, b::FileCryptoMetaData)
@@ -5721,7 +5729,7 @@ function Thrift.decode(r::Thrift.Reader, ::Core.Type{FileCryptoMetaData})
         end
     end
     Thrift.leave!(r)
-    unknown_fields = Thrift.finishunknown(unknown)
+    unknown_fields = Thrift.finishunknown(r, unknown)
     f_encryption_algorithm === nothing && Thrift.missingfield(:FileCryptoMetaData, :encryption_algorithm)
     return FileCryptoMetaData(f_encryption_algorithm, f_key_metadata, unknown_fields)
 end

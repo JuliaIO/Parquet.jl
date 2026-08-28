@@ -1095,7 +1095,8 @@ end
     @test_throws Parquet.FormatError readsynthetic([page], int32; num_values=1, encryptedmeta=UInt8[0x01])
     @test_throws Parquet.FormatError readsynthetic([page], int32; num_values=1, type=MD.Type.INT64)
     @test_throws Parquet.FormatError readsynthetic([page], int32; num_values=1, path=["other"])
-    @test_throws Parquet.FormatError readsynthetic([page], columnleaf(MD.Type.INT96); num_values=1)
+    @test_throws Parquet.UnsupportedFeatureError readsynthetic([page],
+        columnleaf(MD.Type.INT96); num_values=1)
     repeated = columnleaf(MD.Type.INT32; repetition=MD.FieldRepetitionType.REPEATED)
     @test_throws Parquet.FormatError readsynthetic([page], repeated; num_values=1)
     bytes, meta, schema = syntheticfile([page], int32; num_values=1)

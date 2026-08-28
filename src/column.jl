@@ -9,7 +9,8 @@ function _physicaleltype(type::Metadata.Type.T)
     type == Metadata.Type.DOUBLE && return Float64
     type == Metadata.Type.BYTE_ARRAY && return Vector{UInt8}
     type == Metadata.Type.FIXED_LEN_BYTE_ARRAY && return Vector{UInt8}
-    type == Metadata.Type.INT96 && throw(FormatError("INT96 columns are not supported yet"))
+    type == Metadata.Type.INT96 &&
+        throw(UnsupportedFeatureError("INT96 columns are not supported yet"))
     throw(FormatError("unknown physical type $type"))
 end
 
@@ -382,7 +383,8 @@ function _decodeencodedvalues(::Type{T}, encoding::Metadata.Encoding.T,
         elseif T == Vector{UInt8} && width !== nothing
             matrix, position = decode_byte_stream_split_fixed(bytes, count, width;
                 offset=offset, limits=limits)
-            return _matrixvalues(matrix), position, Int64(0)
+            values, valuescharge = _matrixvaluescharged(matrix, budget)
+            return values, position, valuescharge
         end
         return _encodingerror(encoding, T)
     elseif encoding == Metadata.Encoding.RLE

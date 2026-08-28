@@ -622,3 +622,44 @@ end
     @test result[1]["raw"] == UInt8[0x63]
     @test result[1]["text"] == "b"
 end
+
+@testset "deep plans are rejected before recursive assembly" begin
+    # A plan deeper than the reader's recursion cap must fail with a clean
+    # LimitError instead of overflowing the stack. The guard is checked before
+    # any recursion, so this test never recurses to the cap depth itself.
+    maxdepth = Parquet._NESTED_READ_MAX_DEPTH
+    @test maxdepth == 1024
+    required = NRMD.FieldRepetitionType.REQUIRED
+    limits = Parquet.Limits(max_metadata_depth=maxdepth + 8,
+        max_container_elements=maxdepth + 8)
+    function nrdeepchain(depth)
+        elements = NRMD.SchemaElement[nrroot(1)]
+        for _ in 1:(depth - 2)
+            push!(elements, nrelement("group"; repetition=required,
+                children=Int32(1)))
+        end
+        push!(elements, nrelement("leaf"; physical=NRMD.Type.INT32,
+            repetition=required))
+        return nrplan(elements; limits=limits)
+    end
+    deepplan = nrdeepchain(maxdepth + 1)
+    @test deepplan.depth == maxdepth + 1
+    deepstreams = Parquet.LeafStream[
+        nrstream(deepplan, 1, [0], [0], Int32[7]; rows=1)]
+    deeperror = try
+        Parquet._assemblenested(deepplan, deepstreams, 1; limits=limits)
+        nothing
+    catch err
+        err
+    end
+    @test deeperror isa Parquet.LimitError
+    @test deeperror.resource == :nested_read_depth
+
+    # A plan at the cap still assembles (moderate depth exercises the recursion).
+    okplan = nrdeepchain(64)
+    @test okplan.depth <= maxdepth
+    result = Parquet._assemblenested(okplan,
+        Parquet.LeafStream[nrstream(okplan, 1, [0], [0], Int32[7]; rows=1)], 1;
+        limits=limits)
+    @test length(result) == 1
+end

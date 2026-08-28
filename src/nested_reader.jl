@@ -1,5 +1,14 @@
 # Recursive Dremel assembly from aligned physical leaf streams.
 
+# The assembly passes recurse one Julia stack frame per plan-tree level, unlike the
+# iterative schema parser and plan compiler, so a plan deep enough to be built under
+# a raised max_metadata_depth could otherwise overflow the stack here (with corrupted
+# process state, not a clean error). Reject such plans up front with a LimitError.
+# Keep a wide safety margin below observed process-corrupting stack overflows. Writer
+# validation is iterative and can accept deeper synthetic values, but the reader must
+# reject them until every assembly pass is iterative.
+const _NESTED_READ_MAX_DEPTH = 1024
+
 mutable struct _NestedReadState
     plan::_NestedPlan
     children::Vector{_NestedReadState}
@@ -771,6 +780,8 @@ end
 function _assemblenested(plan::_NestedSchemaPlan, streams::AbstractVector,
     rows::Integer; limits::Limits=Limits(),
     budget::_LiveByteBudget=_LiveByteBudget(limits))
+    plan.depth <= _NESTED_READ_MAX_DEPTH || throw(LimitError(:nested_read_depth,
+        Int64(plan.depth), Int64(_NESTED_READ_MAX_DEPTH)))
     rowcount = _nestedreadint(rows, "nested row count")
     _checklimit(:container_elements, rowcount, limits.max_container_elements)
     _nestedreadvalidatestreams(plan, streams, rowcount, limits)

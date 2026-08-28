@@ -230,6 +230,17 @@ function _timestampwriteadjustment(values::AbstractVector)
     return adjusted
 end
 
+function _timestampwriteunitcode(value_type::Type)
+    value_type == Timestamp{:millis} && return _TEMPORAL_MILLIS
+    value_type == Timestamp{:micros} && return _TEMPORAL_MICROS
+    value_type == Timestamp{:nanos} && return _TEMPORAL_NANOS
+    throw(ArgumentError("unsupported TIMESTAMP element type $value_type"))
+end
+
+function _timestampwriteunit(value_type::Type)
+    return _canonicaltimeunit(_timestampwriteunitcode(value_type))
+end
+
 function _temporalwriteelement(name, values::AbstractVector, value_type::Type,
     optional::Bool)
     integer = _integerwriteelement(name, value_type, optional)
@@ -245,22 +256,17 @@ function _temporalwriteelement(name, values::AbstractVector, value_type::Type,
         logical = Metadata.LogicalType(
             TIMESTAMP=Metadata.TimestampType(isAdjustedToUTC=false, unit=unit))
         return _logicalwriteelement(name, Metadata.Type.INT64, optional;
-            logical=logical, converted=Metadata.ConvertedType.TIMESTAMP_MILLIS)
+            logical=logical,
+            converted=Metadata.ConvertedType.TIMESTAMP_MILLIS)
     elseif value_type <: Timestamp
         adjusted = _timestampwriteadjustment(values)
-        if value_type == Timestamp{:micros}
-            unit = Metadata.TimeUnit(MICROS=Metadata.MicroSeconds())
-            converted = Metadata.ConvertedType.TIMESTAMP_MICROS
-        elseif value_type == Timestamp{:nanos}
-            unit = Metadata.TimeUnit(NANOS=Metadata.NanoSeconds())
-            converted = nothing
-        else
-            throw(ArgumentError("unsupported TIMESTAMP element type $value_type"))
-        end
+        unit = _timestampwriteunit(value_type)
         logical = Metadata.LogicalType(
             TIMESTAMP=Metadata.TimestampType(isAdjustedToUTC=adjusted, unit=unit))
         return _logicalwriteelement(name, Metadata.Type.INT64, optional;
-            logical=logical, converted=converted)
+            logical=logical,
+            converted=_canonicalconverted(
+                _TimestampLogicalKind(_timestampwriteunitcode(value_type), adjusted)))
     end
     return nothing
 end

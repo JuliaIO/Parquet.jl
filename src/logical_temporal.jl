@@ -11,17 +11,31 @@ const _PARQUET_DATETIME_EPOCH = Dates.value(Dates.DateTime(1970, 1, 1))
 """
     Timestamp(ticks, unit, is_adjusted_to_utc)
 
-An exact Parquet microsecond or nanosecond timestamp. `unit` is `:micros` or `:nanos`.
+An exact Parquet timestamp. `unit` is `:millis`, `:micros`, or `:nanos`. Millisecond
+columns with `isAdjustedToUTC=false` read as `Dates.DateTime` instead; `Timestamp`
+carries the UTC adjustment for every other combination.
 """
 struct Timestamp{U}
     ticks::Int64
     is_adjusted_to_utc::Bool
 
     function Timestamp(ticks::Int64, unit::Symbol, is_adjusted_to_utc::Bool)
+        if unit === :millis
+            # Millisecond timestamps without UTC adjustment are represented as
+            # Dates.DateTime, so Timestamp{:millis} only ever carries adjusted=true.
+            is_adjusted_to_utc || throw(ArgumentError(
+                "millisecond timestamps with isAdjustedToUTC=false are represented " *
+                "as Dates.DateTime; use a DateTime value instead"))
+            return new{:millis}(ticks, is_adjusted_to_utc)
+        end
         unit === :micros && return new{:micros}(ticks, is_adjusted_to_utc)
         unit === :nanos && return new{:nanos}(ticks, is_adjusted_to_utc)
-        throw(ArgumentError("Timestamp unit must be :micros or :nanos"))
+        throw(ArgumentError("Timestamp unit must be :millis, :micros, or :nanos"))
     end
+end
+
+function _timestampunit(::Timestamp{:millis})
+    return :millis
 end
 
 function _timestampunit(::Timestamp{:micros})
@@ -193,7 +207,10 @@ function _temporaljuliatype(::_TimeLogicalKind)
 end
 
 function _temporaljuliatype(kind::_TimestampLogicalKind)
-    kind.unit == _TEMPORAL_MILLIS && return Dates.DateTime
+    if kind.unit == _TEMPORAL_MILLIS
+        kind.is_adjusted_to_utc || return Dates.DateTime
+        return Timestamp{:millis}
+    end
     kind.unit == _TEMPORAL_MICROS && return Timestamp{:micros}
     return Timestamp{:nanos}
 end
@@ -265,13 +282,14 @@ function _fromparquettimestamp(kind::_TimestampLogicalKind, value,
     element::Metadata.SchemaElement)
     value isa Int64 ||
         throw(FormatError("TIMESTAMP column $(repr(element.name)) contains a non-Int64 value"))
-    kind.unit == _TEMPORAL_MILLIS && return _fromparquetdatetime(value)
+    kind.unit == _TEMPORAL_MILLIS && !kind.is_adjusted_to_utc &&
+        return _fromparquetdatetime(value)
     return Timestamp(value, _temporalunitname(kind.unit), kind.is_adjusted_to_utc)
 end
 
 function _toparquettimestamp(kind::_TimestampLogicalKind, value,
     element::Metadata.SchemaElement)
-    if kind.unit == _TEMPORAL_MILLIS
+    if kind.unit == _TEMPORAL_MILLIS && !kind.is_adjusted_to_utc
         value isa Dates.DateTime ||
             throw(ArgumentError("millisecond TIMESTAMP column $(repr(element.name)) " *
                 "contains a non-DateTime value"))

@@ -330,7 +330,7 @@ end
     @test decimal.precision == Int32(9)
     @test decimal.scale == Int32(2)
     close(table)
-    @test table.closed
+    @test @atomic table.closed
     for pageversion in (:v1, :v2), codec in (:uncompressed, :snappy)
         output = wpexactrewrite(table; pageversion=pageversion, codec=codec)
         @test wpschemaequal(wpmetadata(output).schema, expected)
@@ -338,6 +338,38 @@ end
     io = IOBuffer()
     Parquet.write(io, table; pageversion=:v2, codec=:zstd)
     @test wpschemaequal(wpmetadata(take!(io)).schema, expected)
+end
+
+@testset "schema-bearing writer preserves file key-value metadata" begin
+    bytes = Parquet._encodefile((value=Int32[1],))
+    original = wpmetadata(bytes)
+    keyvalue = WPMD.KeyValue(key="ARROW:schema", value="opaque-schema",
+        unknown_fields=[wprawi32(90, 900)])
+    bytes = wprewritefooter(bytes, wpreplace(original;
+        key_value_metadata=[keyvalue]))
+    table = Parquet.Table(bytes)
+    expected = only(table.metadata.key_value_metadata)
+    output = try
+        error = try
+            Parquet._encodefile(table;
+                limits=Parquet.Limits(max_string_bytes=5))
+            nothing
+        catch err
+            err
+        end
+        @test error isa Parquet.LimitError
+        @test error.resource == :string_bytes
+        Parquet._encodefile(table)
+    finally
+        close(table)
+    end
+    rewritten = wpmetadata(output)
+    @test rewritten.key_value_metadata !== nothing
+    actual = only(rewritten.key_value_metadata)
+    @test actual.key == expected.key
+    @test actual.value == expected.value
+    @test Parquet._provenanceexact(actual.unknown_fields,
+        expected.unknown_fields)
 end
 
 @testset "schema-bearing writer selectors" begin
@@ -458,6 +490,30 @@ end
     table.schema = Parquet.Schema(changedmetadata)
     wprejects(() -> Parquet._encodefile(table))
     close(table)
+
+    table = Parquet.Table(wpcustomschemafile())
+    changed = copy(table.metadata.schema)
+    raw = only(changed[1].unknown_fields)
+    changedraw = WPTH.RawField(raw.id, raw.type, Int16(raw.previd + 1),
+        raw.headerlength, copy(raw.bytes))
+    @test raw == changedraw
+    @test !Parquet._provenanceexact(raw, changedraw)
+    changed[1] = wpreplace(changed[1]; unknown_fields=[changedraw])
+    table.metadata = wpreplace(table.metadata; schema=changed)
+    wprejects(() -> Parquet._encodefile(table))
+    close(table)
+end
+
+@testset "unknown-field provenance clone charge includes its vector" begin
+    fields = WPTH.RawField[wprawi32(90, 900), wprawi32(91, 910)]
+    expected = Parquet._materializedarraybytes(WPTH.RawField, length(fields))
+    for field in fields
+        fieldcharge = Parquet._materializedsum(
+            Parquet._MATERIALIZED_OBJECT_BYTES,
+            Parquet._materializedarraybytes(UInt8, length(field.bytes)))
+        expected = Parquet._materializedsum(expected, fieldcharge)
+    end
+    @test Parquet._provenanceclonecharge(fields) == expected
 end
 
 @testset "schema-bearing writer rejects vector tampering" begin
@@ -568,21 +624,14 @@ end
             @test length(metadata.schema) == depth + 2
             @test metadata.schema[2].name == "deep"
             @test metadata.schema[end].name == "value"
-            rewritten = Parquet.Table(output; limits=limits)
-            try
-                @test rewritten.rows == rows
-                if iszero(rows)
-                    @test isempty(rewritten.columns.deep)
-                else
-                    value = rewritten.columns.deep[1]
-                    for _ in 1:depth
-                        value = value[1]
-                    end
-                    @test value == Int32(7)
-                end
-            finally
-                close(rewritten)
+            error = try
+                Parquet.Table(output; limits=limits)
+                nothing
+            catch err
+                err
             end
+            @test error isa Parquet.LimitError
+            @test error.resource == :nested_read_depth
         finally
             close(table)
         end
@@ -590,6 +639,17 @@ end
 
     table, limits = wpdeepstructtable(256, 1)
     try
+        output = Parquet._encodefile(table; limits=limits)
+        rewritten = Parquet.Table(output; limits=limits)
+        try
+            value = rewritten.columns.deep[1]
+            for _ in 1:256
+                value = value[1]
+            end
+            @test value == Int32(7)
+        finally
+            close(rewritten)
+        end
         shallow = Parquet.Limits(max_metadata_depth=257,
             max_container_elements=limits.max_container_elements)
         budget = Parquet._LiveByteBudget(shallow)

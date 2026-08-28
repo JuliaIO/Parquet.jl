@@ -1405,32 +1405,6 @@ function _columnpagestransferredbytes(pages::ColumnPages)
             length(pages.encoding_stats)))
 end
 
-function _budgetedcolumnpages(column::WriteColumn, limits::Limits,
-    budget::_LiveByteBudget; checksum::Bool, dictionary::Bool,
-    codec::Metadata.CompressionCodec.T,
-    compressionlevel::Union{Nothing,Integer}, pageversion::Symbol,
-    encoding::Union{Nothing,Metadata.Encoding.T}=nothing)
-    working = _writerpageworkingbytes(column, dictionary)
-    _reserve!(budget, working)
-    pages = try
-        _columnpages(column, limits; checksum=checksum,
-            dictionary=dictionary, codec=codec,
-            compressionlevel=compressionlevel,
-            pageversion=pageversion, encoding=encoding)
-    catch
-        _release!(budget, working)
-        rethrow()
-    end
-    live = _columnpageslivebytes(pages)
-    if live > working
-        _release!(budget, working)
-        throw(AssertionError(
-            "writer page allocation exceeded its materialization preflight"))
-    end
-    _release!(budget, working - live)
-    return pages, live
-end
-
 function _columnnullcount(column::WriteColumn)
     column.definitions === nothing && return count(ismissing, column.values)
     maximum = UInt64(column.max_definition_level)
@@ -1580,96 +1554,6 @@ end
 function _datapagetype(pageversion::Symbol)
     pageversion === :v1 && return Metadata.PageType.DATA_PAGE
     return Metadata.PageType.DATA_PAGE_V2
-end
-
-function _encodedcolumnpages(column::WriteColumn, encoding::Metadata.Encoding.T,
-    limits::Limits; checksum::Bool,
-    codec::Metadata.CompressionCodec.T, compressionlevel::Union{Nothing,Integer},
-    pageversion::Symbol)
-    page, headerlength, payloadlength = _datapagebytes(column,
-        _encodedpayload(column, encoding, limits), encoding, pageversion, limits;
-        checksum=checksum, codec=codec,
-        compressionlevel=compressionlevel)
-    encodings = Metadata.Encoding.T[]
-    (!iszero(column.max_repetition_level) || !iszero(column.max_definition_level)) &&
-        encoding != Metadata.Encoding.RLE &&
-        push!(encodings, Metadata.Encoding.RLE)
-    push!(encodings, encoding)
-    stats = Metadata.PageEncodingStats[
-        Metadata.PageEncodingStats(
-            page_type=_datapagetype(pageversion),
-            encoding=encoding,
-            count=Int32(1),
-        ),
-    ]
-    uncompressed = Int64(headerlength) + Int64(payloadlength)
-    return ColumnPages(page, uncompressed, Int64(0), nothing, encodings, stats)
-end
-
-function _plaincolumnpages(column::WriteColumn, limits::Limits; checksum::Bool,
-    codec::Metadata.CompressionCodec.T, compressionlevel::Union{Nothing,Integer},
-    pageversion::Symbol)
-    return _encodedcolumnpages(column, Metadata.Encoding.PLAIN, limits; checksum=checksum,
-        codec=codec, compressionlevel=compressionlevel, pageversion=pageversion)
-end
-
-function _dictionarycolumnpages(column::WriteColumn, limits::Limits; checksum::Bool,
-    codec::Metadata.CompressionCodec.T, compressionlevel::Union{Nothing,Integer},
-    pageversion::Symbol)
-    plan = _dictionaryplan(column, limits)
-    dictionary_header = Metadata.DictionaryPageHeader(
-        num_values=Int32(length(plan.values)),
-        encoding=Metadata.Encoding.PLAIN,
-        is_sorted=false,
-    )
-    dictionary_page, dictionary_headerlength, dictionary_payloadlength = _framedpage(plan.dictionary_payload,
-        Metadata.PageType.DICTIONARY_PAGE, limits; checksum=checksum,
-        codec=codec, compressionlevel=compressionlevel,
-        dictionary_header=dictionary_header)
-    data_page, data_headerlength, data_payloadlength = _datapagebytes(column,
-        plan.index_payload, Metadata.Encoding.RLE_DICTIONARY, pageversion, limits;
-        checksum=checksum, codec=codec, compressionlevel=compressionlevel)
-    bytes = vcat(dictionary_page, data_page)
-    uncompressed = Int64(dictionary_headerlength) + Int64(dictionary_payloadlength) +
-        Int64(data_headerlength) + Int64(data_payloadlength)
-    encodings = Metadata.Encoding.T[Metadata.Encoding.PLAIN, Metadata.Encoding.RLE,
-        Metadata.Encoding.RLE_DICTIONARY]
-    stats = Metadata.PageEncodingStats[
-        Metadata.PageEncodingStats(
-            page_type=Metadata.PageType.DICTIONARY_PAGE,
-            encoding=Metadata.Encoding.PLAIN,
-            count=Int32(1),
-        ),
-        Metadata.PageEncodingStats(
-            page_type=_datapagetype(pageversion),
-            encoding=Metadata.Encoding.RLE_DICTIONARY,
-            count=Int32(1),
-        ),
-    ]
-    return ColumnPages(bytes, uncompressed, Int64(length(dictionary_page)), Int64(0),
-        encodings, stats)
-end
-
-function _columnpages(column::WriteColumn, limits::Limits; checksum::Bool, dictionary::Bool,
-    codec::Metadata.CompressionCodec.T, compressionlevel::Union{Nothing,Integer},
-    pageversion::Symbol, encoding::Union{Nothing,Metadata.Encoding.T}=nothing)
-    encoding === nothing || return _encodedcolumnpages(column, encoding, limits;
-        checksum=checksum, codec=codec, compressionlevel=compressionlevel,
-        pageversion=pageversion)
-    plain = _plaincolumnpages(column, limits; checksum=checksum, codec=codec,
-        compressionlevel=compressionlevel, pageversion=pageversion)
-    dictionary || return plain
-    column.physical == Metadata.Type.BOOLEAN && return plain
-    encoded = try
-        _dictionarycolumnpages(column, limits; checksum=checksum, codec=codec,
-            compressionlevel=compressionlevel, pageversion=pageversion)
-    catch err
-        # The optional candidate may exceed a page limit even when PLAIN fits.
-        err isa LimitError && return plain
-        rethrow()
-    end
-    length(encoded.bytes) < length(plain.bytes) || return plain
-    return encoded
 end
 
 function _schemaelements(column::WriteColumn)
@@ -1958,6 +1842,11 @@ function _reserveoutputgrowth!(budget::_LiveByteBudget, bytes::Integer)
     return charge
 end
 
+function _writekeyvaluemetadata(table, ::Limits, ::_LiveByteBudget)
+    Base.@nospecialize table
+    return nothing
+end
+
 function _encodefile(table; checksum::Bool=true, dictionary::Bool=false,
     codec=:uncompressed, compressionlevel::Union{Nothing,Integer}=nothing,
     pageversion=:v1, encoding=nothing, rowgroupsize=1_048_576,
@@ -2077,6 +1966,7 @@ function _encodefile(table; checksum::Bool=true, dictionary::Bool=false,
         schema=plan.elements,
         num_rows=Int64(plan.rows),
         row_groups=rowgroups,
+        key_value_metadata=_writekeyvaluemetadata(table, limits, budget),
         created_by="Parquet.jl version 1.0.0-DEV",
         column_orders=columnorders,
     )

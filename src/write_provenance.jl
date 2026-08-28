@@ -131,7 +131,8 @@ function _provenanceexact(left::Thrift.RawField, right::Thrift.RawField)
         left.bytes == right.bytes
 end
 
-function _provenanceexact(left::Tuple, right::Tuple)
+function _provenanceexact(left::Vector{Thrift.RawField},
+        right::Vector{Thrift.RawField})
     length(left) == length(right) || return false
     for index in eachindex(left, right)
         _provenanceexact(left[index], right[index]) || return false
@@ -157,7 +158,7 @@ function _provenanceclone(value::Thrift.RawField)
         value.headerlength, copy(value.bytes))
 end
 
-function _provenanceclone(value::Tuple)
+function _provenanceclone(value::Vector{Thrift.RawField})
     return map(_provenanceclone, value)
 end
 
@@ -176,8 +177,8 @@ function _provenanceclonecharge(value::Thrift.RawField)
         _materializedarraybytes(UInt8, length(value.bytes)))
 end
 
-function _provenanceclonecharge(value::Tuple)
-    bytes = Int64(0)
+function _provenanceclonecharge(value::Vector{Thrift.RawField})
+    bytes = _materializedarraybytes(Thrift.RawField, length(value))
     for item in value
         bytes = _materializedsum(bytes, _provenanceclonecharge(item))
     end

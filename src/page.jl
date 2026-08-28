@@ -198,6 +198,9 @@ end
     decompresspage(frame, codec; limits) -> bytes
 
 Return the page payload decompressed to the exact size declared in its header.
+Use this helper only for Data Page V1, dictionary, index, and unknown pages. Data
+Page V2 stores repetition and definition levels outside its compressed value
+section; use the V2 reader path instead of passing the full V2 payload here.
 """
 function decompresspage(frame::PageFrame, codec::Metadata.CompressionCodec.T;
         limits::Limits=Limits(),

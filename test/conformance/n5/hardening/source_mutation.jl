@@ -1411,7 +1411,7 @@ function n5hprovenancedeclaredkeyattack(value=n5hchain(64))
     keys.calls = 0
     table = Parquet.Table(originaltable.file, originaltable.metadata,
         originaltable.schema, (m=replacement,), originaltable.rows, false)
-    originaltable.closed = true
+    @atomic originaltable.closed = true
     return table
 end
 
@@ -1427,7 +1427,7 @@ function n5hprovenancekeysequence(values::Vector{Int32})
     keys.calls = 0
     table = Parquet.Table(originaltable.file, originaltable.metadata,
         originaltable.schema, (m=replacement,), originaltable.rows, false)
-    originaltable.closed = true
+    @atomic originaltable.closed = true
     return table, keys
 end
 
@@ -1446,7 +1446,7 @@ function n5hprovenancethrowkey(error)
     keys.trigger = 1
     table = Parquet.Table(originaltable.file, originaltable.metadata,
         originaltable.schema, (m=replacement,), originaltable.rows, false)
-    originaltable.closed = true
+    @atomic originaltable.closed = true
     return table, keys
 end
 
@@ -1465,7 +1465,7 @@ function n5hprovenancelistphase(trigger::Int)
     owner[] = replacement
     table = Parquet.Table(originaltable.file, originaltable.metadata,
         originaltable.schema, (items=replacement,), originaltable.rows, false)
-    originaltable.closed = true
+    @atomic originaltable.closed = true
     return table, child
 end
 
@@ -1575,7 +1575,7 @@ function n5hprovenancemapphase(trigger::Int)
     keys.trigger = trigger
     table = Parquet.Table(originaltable.file, originaltable.metadata,
         originaltable.schema, (m=replacement,), originaltable.rows, false)
-    originaltable.closed = true
+    @atomic originaltable.closed = true
     return table, keys
 end
 
@@ -1587,7 +1587,7 @@ function n5hprovenancescalaraxis(trigger::Int)
         trigger, false)
     table = Parquet.Table(originaltable.file, originaltable.metadata,
         originaltable.schema, (x=values,), originaltable.rows, false)
-    originaltable.closed = true
+    @atomic originaltable.closed = true
     return table, values
 end
 
@@ -1609,7 +1609,7 @@ function n5hprovenancemapaxis(trigger::Int)
     keys.trigger = trigger
     table = Parquet.Table(originaltable.file, originaltable.metadata,
         originaltable.schema, (m=replacement,), originaltable.rows, false)
-    originaltable.closed = true
+    @atomic originaltable.closed = true
     return table, keys
 end
 

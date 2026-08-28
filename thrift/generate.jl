@@ -517,7 +517,7 @@ function emitstructdef(io::IO, ctx::Context, def::StructDef)
             println(io, "    ", fieldname(field), "::", jt, " = nothing  ", fieldcomment(field))
         end
     end
-    println(io, "    unknown_fields::Tuple{Vararg{Thrift.RawField}} = ()")
+    println(io, "    unknown_fields::Vector{Thrift.RawField} = Thrift.RawField[]")
     println(io, "end")
     return
 end
@@ -535,14 +535,14 @@ function emituniondef(io::IO, ctx::Context, def::StructDef)
     for field in def.fields
         println(io, "    ", fieldname(field), "::", fieldtype(ctx, def, field), "  ", fieldcomment(field))
     end
-    println(io, "    unknown_fields::Tuple{Vararg{Thrift.RawField}}")
+    println(io, "    unknown_fields::Vector{Thrift.RawField}")
     println(io, "    function ", def.name, "(", args, ")")
     println(io, "        Thrift.checkunionargs(:", def.name, ", ", knowncountexpr(def), ", unknown_fields)")
     println(io, "        return new(", args, ")")
     println(io, "    end")
     println(io, "end")
     println(io)
-    kwargs = join(vcat(["$name=nothing" for name in names], "unknown_fields=()"), ", ")
+    kwargs = join(vcat(["$name=nothing" for name in names], "unknown_fields=Thrift.RawField[]"), ", ")
     println(io, "function ", def.name, "(; ", kwargs, ")")
     println(io, "    return ", def.name, "(", args, ")")
     println(io, "end")
@@ -632,7 +632,7 @@ function emitdecode(io::IO, ctx::Context, def::StructDef)
     isempty(def.fields) || println(io, "        end")
     println(io, "    end")
     println(io, "    Thrift.leave!(r)")
-    println(io, "    unknown_fields = Thrift.finishunknown(unknown)")
+    println(io, "    unknown_fields = Thrift.finishunknown(r, unknown)")
     for field in def.fields
         isrequired(def, field) && !hasdefault(def, field) || continue
         println(io, "    ", localname(field), " === nothing && Thrift.missingfield(:", def.name, ", :", field.name, ")")
@@ -669,6 +669,13 @@ function emitencode(io::IO, ctx::Context, def::StructDef)
     println(io)
     println(io, "function Thrift.encode!(w::Thrift.Writer, x::", def.name, ")")
     println(io, "    unknown = x.unknown_fields")
+    if def.kind == :union
+        known = isempty(def.fields) ? "0" :
+            join(("(x.$(fieldname(field)) !== nothing)" for field in def.fields),
+                " + ")
+        println(io, "    Thrift.checkunionargs(:", def.name, ", ",
+            known, ", unknown)")
+    end
     println(io, "    lastid = Int16(0)")
     println(io, "    index = 1")
     println(io, "    (lastid, index) = Thrift.writeunknownafter!(w, unknown, index, lastid)")

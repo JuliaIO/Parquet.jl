@@ -246,21 +246,27 @@ function _internschemanames(names::AbstractVector{String}, limits::Limits,
     try
         lock(registry.lock)
         try
+            # max_schema_name_bytes bounds the new name bytes ONE operation may
+            # intern, not the process-global total: interned Symbols are immortal,
+            # so charging every operation against a shared lifetime cap would let a
+            # single hostile file exhaust it and deny every later file that carries
+            # any not-yet-interned name. The registry still tracks the global total
+            # as an observability metric.
             state = registry.state
             charge = Int64(0)
             additions = 0
-            requested = state.bytes
             for name in validated
                 name in state.names && continue
                 nextcharge = _schemanamecharge(name,
                     limits.max_schema_name_bytes)
-                charge = _materializedsum(charge, nextcharge)
-                requested = _budgetrequest(state.bytes, charge,
+                charge = _budgetrequest(charge, nextcharge,
                     limits.max_schema_name_bytes, :schema_name_bytes)
-                requested >= state.bytes || throw(AssertionError(
-                    "schema-name registry byte accounting decreased"))
                 additions += 1
             end
+            requested = _budgetrequest(state.bytes, charge, typemax(Int64),
+                :schema_name_bytes)
+            requested >= state.bytes || throw(AssertionError(
+                "schema-name registry byte accounting decreased"))
             outputcharge = _reservearray!(budget, Symbol,
                 length(validated))
             output = Vector{Symbol}(undef, length(validated))

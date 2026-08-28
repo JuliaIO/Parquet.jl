@@ -357,9 +357,6 @@ const _NESTED_WRITE_SCAN_LIST = UInt8(4)
 const _NESTED_WRITE_SCAN_MAP_DICT = UInt8(5)
 const _NESTED_WRITE_SCAN_MAP_VIEW_KEY = UInt8(6)
 const _NESTED_WRITE_SCAN_MAP_VIEW_VALUE = UInt8(7)
-const _NESTED_WRITE_SCAN_MAP_ITER_KEY = UInt8(8)
-const _NESTED_WRITE_SCAN_MAP_ITER_VALUE = UInt8(9)
-const _NESTED_WRITE_SCAN_MAP_ITER_NEXT = UInt8(10)
 const _NESTED_WRITE_SCAN_KEYASSERT = UInt8(11)
 const _NESTED_WRITE_SCAN_DICT_RELEASE = UInt8(12)
 
@@ -387,9 +384,6 @@ const _NESTED_WRITE_SHRED_LIST = UInt8(4)
 const _NESTED_WRITE_SHRED_MAP_DICT = UInt8(5)
 const _NESTED_WRITE_SHRED_MAP_VIEW_KEY = UInt8(6)
 const _NESTED_WRITE_SHRED_MAP_VIEW_VALUE = UInt8(7)
-const _NESTED_WRITE_SHRED_MAP_ITER_KEY = UInt8(8)
-const _NESTED_WRITE_SHRED_MAP_ITER_VALUE = UInt8(9)
-const _NESTED_WRITE_SHRED_MAP_ITER_NEXT = UInt8(10)
 const _NESTED_WRITE_SHRED_KEYASSERT = UInt8(11)
 const _NESTED_WRITE_SHRED_DICT_RELEASE = UInt8(12)
 
@@ -2072,18 +2066,6 @@ end
 
 function _nestedwritetracekey!(trace, value)
     return _nestedwritetracekey!(trace, value, nothing, Limits())
-end
-
-function _nestedwritekeyassert!(::Nothing, value,
-        ::Union{Nothing,_NestedWriteShape}, ::Limits, trace)
-    return
-end
-
-function _nestedwritekeyassert!(expected::_NestedWriteKeySnapshot, value,
-        shape::Union{Nothing,_NestedWriteShape}, limits::Limits,
-        trace::_NestedWriteTrace)
-    return _nestedwritekeyassert!(expected, value, shape, limits, trace,
-        nothing, nothing)
 end
 
 function _nestedwritekeyassert!(expected::_NestedWriteKeySnapshot, value,
@@ -4504,12 +4486,6 @@ function _nestedwritescanlist!(
     return
 end
 
-function _nestedwritemappair(item, name::String)
-    item isa Pair || throw(ArgumentError(
-        "Parquet MAP field $(repr(name)) must iterate Pair values"))
-    return item
-end
-
 function _nestedwritescandictrelease!(
         stack::_NestedWritePassStack{_NestedWriteScanAction},
         shape::_NestedWriteMapShape,
@@ -4566,25 +4542,16 @@ function _nestedwritescanmap!(
         _nestedvectoraxes(value, "Parquet MAP field $(repr(shape.name))") :
         (0, 0)
     iszero(count) && return
-    if value isa MapValue
-        keysnapshot = _nestedwriteoccurrencesnapshot!(trace, value.keys,
-            shape.key, limits)
-        valuesnapshot = shape.source_has_values ?
-            _nestedwriteoccurrencesnapshot!(trace,
-                something(value.values), shape.value, limits) : nothing
-        _nestedwritestackpush!(stack, _NestedWriteScanAction(
-            _NESTED_WRITE_SCAN_MAP_VIEW_KEY, shape, value, row_witness,
-            nothing, nothing, nothing, nothing, keysnapshot, valuesnapshot, 1,
-            count, first, last), budget)
-        return
-    end
-    result = iterate(value)
-    if result !== nothing
-        _nestedwritestackpush!(stack, _NestedWriteScanAction(
-            _NESTED_WRITE_SCAN_MAP_ITER_KEY, shape, value, row_witness,
-            nothing, result, nothing, nothing, nothing, nothing, 1, count,
-            first, last), budget)
-    end
+    value = value::MapValue
+    keysnapshot = _nestedwriteoccurrencesnapshot!(trace, value.keys,
+        shape.key, limits)
+    valuesnapshot = shape.source_has_values ?
+        _nestedwriteoccurrencesnapshot!(trace,
+            something(value.values), shape.value, limits) : nothing
+    _nestedwritestackpush!(stack, _NestedWriteScanAction(
+        _NESTED_WRITE_SCAN_MAP_VIEW_KEY, shape, value, row_witness,
+        nothing, nothing, nothing, nothing, keysnapshot, valuesnapshot, 1,
+        count, first, last), budget)
     return
 end
 
@@ -4740,47 +4707,7 @@ function _nestedwritescanprocess!(
         _nestedwritestackpush!(stack, _nestedwritescanenter(mapshape.value,
             mapvalue, value_witness), budget)
         return
-    elseif kind == _NESTED_WRITE_SCAN_MAP_ITER_KEY
-        mapshape = shape::_NestedWriteMapShape
-        _nestedwriteviewaccesscheck(action.value, action.count, action.first,
-            action.last)
-        result = action.state
-        pair = _nestedwritemappair(result[1], mapshape.name)
-        ismissing(pair.first) && throw(ArgumentError(
-            "Parquet MAP field $(repr(mapshape.name)) contains a missing key"))
-        expected = _nestedwritetracekey!(trace, pair.first, mapshape.key,
-            limits)
-        _nestedwritestackpush!(stack, _NestedWriteScanAction(
-            _NESTED_WRITE_SCAN_MAP_ITER_VALUE, shape, action.value,
-            action.row_witness, nothing, pair, expected, nothing, result[2],
-            nothing, action.position, action.count, action.first, action.last),
-            budget)
-        _nestedwritestackpush!(stack, _nestedwritescanenter(mapshape.key,
-            pair.first, nothing), budget)
-        return
-    elseif kind == _NESTED_WRITE_SCAN_MAP_ITER_VALUE
-        mapshape = shape::_NestedWriteMapShape
-        pair = action.state::Pair
-        _nestedwritekeyassert!(action.expected, pair.first, mapshape.key,
-            limits, trace)
-        _nestedwritestackpush!(stack, _NestedWriteScanAction(
-            _NESTED_WRITE_SCAN_MAP_ITER_NEXT, shape, action.value,
-            action.row_witness, nothing, action.snapshot1, nothing, nothing,
-            nothing, nothing, action.position, action.count, action.first,
-            action.last), budget)
-        mapvalue = mapshape.source_has_values ? pair.second : missing
-        _nestedwritestackpush!(stack, _nestedwritescanenter(mapshape.value,
-            mapvalue, nothing), budget)
-        return
     end
-    _nestedwriteviewaccesscheck(action.value, action.count, action.first,
-        action.last)
-    result = iterate(action.value, action.state)
-    result === nothing || _nestedwritestackpush!(stack,
-        _NestedWriteScanAction(_NESTED_WRITE_SCAN_MAP_ITER_KEY, shape,
-            action.value, action.row_witness, nothing, result, nothing,
-            nothing, nothing, nothing, action.position + 1, action.count,
-            action.first, action.last), budget)
     return
 end
 
@@ -4870,19 +4797,14 @@ function _nestedwritetimestampelement(shape::_NestedWriteLeafShape)
         "cannot infer TIMESTAMP UTC adjustment for empty or all-null field " *
         "$(repr(shape.name)); use Parquet.LogicalColumn"))
     value_type = shape.value_type
-    if value_type == Timestamp{:micros}
-        unit = Metadata.TimeUnit(MICROS=Metadata.MicroSeconds())
-        converted = Metadata.ConvertedType.TIMESTAMP_MICROS
-    elseif value_type == Timestamp{:nanos}
-        unit = Metadata.TimeUnit(NANOS=Metadata.NanoSeconds())
-        converted = nothing
-    else
-        throw(ArgumentError("unsupported TIMESTAMP element type $value_type"))
-    end
+    adjusted = something(aggregate.adjusted)
+    unit = _timestampwriteunit(value_type)
     logical = Metadata.LogicalType(TIMESTAMP=Metadata.TimestampType(
-        isAdjustedToUTC=something(aggregate.adjusted), unit=unit))
+        isAdjustedToUTC=adjusted, unit=unit))
     return _logicalwriteelement(shape.name, Metadata.Type.INT64, shape.optional;
-        logical=logical, converted=converted)
+        logical=logical,
+        converted=_canonicalconverted(
+            _TimestampLogicalKind(_timestampwriteunitcode(value_type), adjusted)))
 end
 
 function _nestedwritedecimalelement(shape::_NestedWriteLeafShape,
@@ -5908,26 +5830,18 @@ function _nestedwriteshredmapenter!(
     end
     first, last = value isa AbstractVector ?
         _nestedvectoraxes(value, label) : (0, 0)
-    if value isa MapValue
-        keysnapshot = _nestedwriteoccurrencesnapshot!(context.trace,
-            value.keys, plan.key.shape, context.limits)
-        valuesnapshot = shape.source_has_values ?
-            _nestedwriteoccurrencesnapshot!(context.trace,
-                something(value.values), plan.value.shape, context.limits) :
-            nothing
-        _nestedwritestackpush!(stack, _NestedWriteShredAction(
-            _NESTED_WRITE_SHRED_MAP_VIEW_KEY, plan, value, expected, keymode,
-            repetition, row_witness, nothing, nothing, nothing, nothing,
-            keysnapshot, valuesnapshot, 1, count, first, last, UInt8(0)),
-            budget)
-        return
-    end
-    result = iterate(value)
-    result === nothing || _nestedwritestackpush!(stack,
-        _NestedWriteShredAction(_NESTED_WRITE_SHRED_MAP_ITER_KEY, plan, value,
-            expected, keymode, repetition, row_witness, nothing, result,
-            nothing, nothing, nothing, nothing, 1, count, first, last,
-            UInt8(0)), budget)
+    value = value::MapValue
+    keysnapshot = _nestedwriteoccurrencesnapshot!(context.trace,
+        value.keys, plan.key.shape, context.limits)
+    valuesnapshot = shape.source_has_values ?
+        _nestedwriteoccurrencesnapshot!(context.trace,
+            something(value.values), plan.value.shape, context.limits) :
+        nothing
+    _nestedwritestackpush!(stack, _NestedWriteShredAction(
+        _NESTED_WRITE_SHRED_MAP_VIEW_KEY, plan, value, expected, keymode,
+        repetition, row_witness, nothing, nothing, nothing, nothing,
+        keysnapshot, valuesnapshot, 1, count, first, last, UInt8(0)),
+        budget)
     return
 end
 
@@ -6154,55 +6068,6 @@ function _nestedwriteshredprocessviewvalue!(
     return
 end
 
-function _nestedwriteshredprocessiterkey!(
-        stack::_NestedWritePassStack{_NestedWriteShredAction}, context,
-        action::_NestedWriteShredAction, budget::_LiveByteBudget)
-    plan = action.plan::_NestedWriteMapPlan
-    shape = plan.shape
-    _nestedwriteviewaccesscheck(action.value, action.count, action.first,
-        action.last)
-    result = action.state
-    pair = _nestedwritemappair(result[1], shape.name)
-    ismissing(pair.first) && throw(ArgumentError(
-        "Parquet MAP field $(repr(shape.name)) contains a missing key"))
-    nested = _nestedwritetracekey!(context.trace, pair.first, shape.key,
-        context.limits)
-    entry = action.position
-    itemrepetition = _nestedwriteshredmaprepetition(action, entry)
-    _nestedwritestackpush!(stack, _NestedWriteShredAction(
-        _NESTED_WRITE_SHRED_MAP_ITER_VALUE, plan, action.value,
-        action.expected, action.keymode, action.repetition, action.row_witness,
-        nothing, pair, nested, nothing, result[2], nothing, entry,
-        action.count, action.first, action.last, UInt8(0)), budget)
-    keyexpected = _nestedwriteshredmapkeyexpected(action, entry, nested)
-    _nestedwritestackpush!(stack, _nestedwriteshredenter(plan.key, pair.first,
-        keyexpected, _nestedwriteshredkeymode(action, nested), itemrepetition,
-        nothing), budget)
-    return
-end
-
-function _nestedwriteshredprocessitervalue!(
-        stack::_NestedWritePassStack{_NestedWriteShredAction}, context,
-        action::_NestedWriteShredAction, budget::_LiveByteBudget)
-    plan = action.plan::_NestedWriteMapPlan
-    shape = plan.shape
-    pair = action.state::Pair
-    _nestedwritekeyassert!(action.nested, pair.first, shape.key,
-        context.limits, context.trace)
-    entry = action.position
-    itemrepetition = _nestedwriteshredmaprepetition(action, entry)
-    _nestedwritestackpush!(stack, _NestedWriteShredAction(
-        _NESTED_WRITE_SHRED_MAP_ITER_NEXT, plan, action.value,
-        action.expected, action.keymode, action.repetition, action.row_witness,
-        nothing, action.snapshot1, nothing, nothing, nothing, nothing, entry,
-        action.count, action.first, action.last, UInt8(0)), budget)
-    mapvalue = shape.source_has_values ? pair.second : missing
-    _nestedwritestackpush!(stack, _nestedwriteshredenter(plan.value, mapvalue,
-        _nestedwriteshredmapvalueexpected(action, entry), action.keymode,
-        itemrepetition, nothing), budget)
-    return
-end
-
 function _nestedwriteshredprocess!(
         stack::_NestedWritePassStack{_NestedWriteShredAction},
         context, action::_NestedWriteShredAction, budget::_LiveByteBudget)
@@ -6252,21 +6117,7 @@ function _nestedwriteshredprocess!(
     elseif kind == _NESTED_WRITE_SHRED_MAP_VIEW_VALUE
         return _nestedwriteshredprocessviewvalue!(stack, context, action,
             budget)
-    elseif kind == _NESTED_WRITE_SHRED_MAP_ITER_KEY
-        return _nestedwriteshredprocessiterkey!(stack, context, action, budget)
-    elseif kind == _NESTED_WRITE_SHRED_MAP_ITER_VALUE
-        return _nestedwriteshredprocessitervalue!(stack, context, action,
-            budget)
     end
-    _nestedwriteviewaccesscheck(action.value, action.count, action.first,
-        action.last)
-    result = iterate(action.value, action.state)
-    result === nothing || _nestedwritestackpush!(stack,
-        _NestedWriteShredAction(_NESTED_WRITE_SHRED_MAP_ITER_KEY, plan,
-            action.value, action.expected, action.keymode, action.repetition,
-            action.row_witness, nothing, result, nothing, nothing, nothing,
-            nothing, action.position + 1, action.count, action.first,
-            action.last, UInt8(0)), budget)
     return
 end
 

@@ -58,7 +58,7 @@ end
 
 @testset "generated metadata structs" begin
     kv = MD.KeyValue(key="a")
-    @test kv.value === nothing && kv.unknown_fields === ()
+    @test kv.value === nothing && kv.unknown_fields == TH.RawField[]
     @test kv == MD.KeyValue(key="a") && hash(kv) == hash(MD.KeyValue(key="a"))
     @test kv != MD.KeyValue(key="a", value="b")
     @test_throws UndefKeywordError MD.KeyValue()
@@ -180,6 +180,41 @@ end
     @test TH.encode(order) == UInt8[0x3c, 0x00, 0x00]
     @test_throws Parquet.FormatError TH.decode(UInt8[0x1c, 0x00, 0x2c, 0x00, 0x00], MD.ColumnOrder)
     @test_throws Parquet.FormatError TH.decode(UInt8[0x1c, 0x00, 0x1c, 0x00, 0x00], MD.LogicalType)
+end
+
+@testset "many unknown fields decode to a Vector, not a per-length tuple type" begin
+    # Regression: unknown_fields was Tuple{Vararg{RawField}}, so a footer with
+    # thousands of unknown fields minted a fresh NTuple{N} type whose recursive
+    # ==/isequal/hash forced seconds of compilation per distinct N.
+    bytes = metabytes() do w
+        lastid = TH.writefieldheader!(w, Int16(0), Int16(1), TH.BINARY)
+        TH.writestring!(w, "k")
+        for id in Int16(100):Int16(1599)
+            lastid = TH.writefieldheader!(w, lastid, id, TH.I32)
+            TH.writei32!(w, Int32(id))
+        end
+        TH.writestop!(w)
+    end
+    kv = TH.decode(bytes, MD.KeyValue)
+    @test kv.unknown_fields isa Vector{TH.RawField}
+    @test length(kv.unknown_fields) == 1500
+    other = TH.decode(bytes, MD.KeyValue)
+    @test kv == other && isequal(kv, other) && hash(kv) == hash(other)
+    @test TH.encode(kv) == bytes
+end
+
+@testset "empty unknown-field vectors are budgeted" begin
+    bytes = TH.encode(MD.StringType())
+    vectorcharge = Parquet._materializedarraybytes(TH.RawField, 0)
+    exact = Parquet._materializedsum(Parquet._MATERIALIZED_OBJECT_BYTES,
+        vectorcharge)
+    @test_throws Parquet.LimitError TH.decode(bytes, MD.StringType;
+        limits=Parquet.Limits(max_materialized_bytes=exact - 1))
+    limits = Parquet.Limits(max_materialized_bytes=exact)
+    budget = Parquet._LiveByteBudget(limits)
+    value = TH.decode(bytes, MD.StringType; limits=limits, budget=budget)
+    @test isempty(value.unknown_fields)
+    @test Parquet._budgetused(budget) == exact
 end
 
 @testset "parquet-testing corpus footers" begin

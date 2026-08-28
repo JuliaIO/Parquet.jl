@@ -6,7 +6,7 @@ mutable struct Table{F<:File,C<:NamedTuple}
     schema::Schema
     columns::C
     rows::Int
-    closed::Bool
+    @atomic closed::Bool
 end
 
 function _tablewritecolumn(name, values::AbstractVector, node::SchemaNode,
@@ -61,6 +61,22 @@ end
 function _writefieldsencoded(table::Table, limits::Limits,
         budget::_LiveByteBudget, encoding, dictionary::Bool)
     return _provenancewritefields(table, limits, budget, encoding, dictionary)
+end
+
+function _writekeyvaluemetadata(table::Table, limits::Limits,
+        budget::_LiveByteBudget)
+    metadata = table.metadata.key_value_metadata
+    metadata === nothing && return nothing
+    _checklimit(:container_elements, length(metadata),
+        limits.max_container_elements)
+    for item in metadata
+        _checklimit(:string_bytes, ncodeunits(item.key),
+            limits.max_string_bytes)
+        item.value === nothing || _checklimit(:string_bytes,
+            ncodeunits(item.value), limits.max_string_bytes)
+    end
+    _reservearray!(budget, Metadata.KeyValue, length(metadata))
+    return copy(metadata)
 end
 
 function _readfilemetadata(file::File, limits::Limits,
@@ -147,137 +163,14 @@ function _tablevalues(node::SchemaNode, values::Vector)
     return _tablevalues(node, values, Limits())
 end
 
-function _islistannotation(element::Metadata.SchemaElement)
-    logical = element.logicalType
-    logical !== nothing && return logical.LIST !== nothing
-    return element.converted_type == Metadata.ConvertedType.LIST
-end
-
-function _optionallistleaf(node::SchemaNode)
-    node.element.type_ === nothing || throw(FormatError(
-        "LIST field $(repr(node.element.name)) must be a group"))
-    _islistannotation(node.element) || throw(FormatError(
-        "nested field $(repr(node.element.name)) is not a supported LIST"))
-    node.element.repetition_type == Metadata.FieldRepetitionType.OPTIONAL ||
-        throw(FormatError("LIST field $(repr(node.element.name)) must be optional"))
-    length(node.children) == 1 || throw(FormatError(
-        "LIST field $(repr(node.element.name)) must have one repeated child"))
-    repeated = only(node.children)
-    repeated.element.type_ === nothing || throw(FormatError(
-        "LIST field $(repr(node.element.name)) has a primitive repeated child"))
-    repeated.element.repetition_type == Metadata.FieldRepetitionType.REPEATED ||
-        throw(FormatError("LIST field $(repr(node.element.name)) child must be repeated"))
-    repeated.element.name == "list" || throw(FormatError(
-        "LIST field $(repr(node.element.name)) must use the canonical child name \"list\""))
-    length(repeated.children) == 1 || throw(FormatError(
-        "LIST field $(repr(node.element.name)) repeated group must have one child"))
-    leaf = only(repeated.children)
-    leaf.element.type_ !== nothing || throw(FormatError(
-        "LIST field $(repr(node.element.name)) element must be primitive"))
-    leaf.element.repetition_type == Metadata.FieldRepetitionType.OPTIONAL ||
-        throw(FormatError("LIST field $(repr(node.element.name)) element must be optional"))
-    leaf.element.name in ("element", "item") || throw(FormatError(
-        "LIST field $(repr(node.element.name)) has unsupported leaf name " *
-        repr(leaf.element.name)))
-    _logicalkind(leaf)
-    _physicaleltype(leaf.element.type_)
-    leaf.max_repetition_level == 1 && leaf.max_definition_level == 3 ||
-        throw(FormatError("LIST field $(repr(node.element.name)) has invalid Dremel levels"))
-    return leaf
-end
-
-function _listtypes(leaf::SchemaNode)
-    physical = _physicaleltype(leaf.element.type_)
-    logical = _logicaleltype(leaf, physical)
-    list = Vector{Union{Missing,logical}}
-    return list, Union{Missing,list}
-end
-
-function _tablefieldcolumn(node::SchemaNode)
-    node.element.type_ !== nothing && return _tablecolumn(node)
-    leaf = _optionallistleaf(node)
-    _, optional = _listtypes(leaf)
-    return Vector{optional}()
-end
-
-function _appendlistelement!(values::Vector, definition::UInt64,
-    dense::AbstractVector, nextvalue::Int)
-    if definition == 2
-        push!(values, missing)
-        return nextvalue
-    end
-    definition == 3 || throw(FormatError(
-        "LIST element has invalid definition level $definition"))
-    nextvalue <= length(dense) || throw(FormatError("LIST leaf stream ends before its values"))
-    push!(values, dense[nextvalue])
-    return nextvalue + 1
-end
-
-function _assembleoptionallists(stream::LeafStream, leaf::SchemaNode, rows::Integer,
-    limits::Limits, budget::_LiveByteBudget)
-    listtype, optionaltype = _listtypes(leaf)
-    _reservearray!(budget, optionaltype, rows)
-    _reserve!(budget, _materializedproduct(rows,
-        _MATERIALIZED_ARRAY_HEADER_BYTES))
-    _reservearray!(budget, eltype(listtype), length(stream); header=false)
-    output = Vector{optionaltype}()
-    sizehint!(output, Int(rows))
-    dense = _tablevalues(leaf, stream.values, limits, budget)
-    nextvalue = 1
-    elementsopen = false
-    for index in eachindex(stream.repetition, stream.definition)
-        repetition = stream.repetition[index]
-        definition = stream.definition[index]
-        if iszero(repetition)
-            if iszero(definition)
-                push!(output, missing)
-                elementsopen = false
-            elseif definition == 1
-                push!(output, listtype())
-                elementsopen = false
-            else
-                values = listtype()
-                nextvalue = _appendlistelement!(values, definition, dense,
-                    nextvalue)
-                push!(output, values)
-                elementsopen = true
-            end
-        else
-            elementsopen || throw(FormatError(
-                "LIST continues after a null or empty list"))
-            values = output[end]
-            ismissing(values) && throw(FormatError("LIST continuation has no list"))
-            nextvalue = _appendlistelement!(values, definition, dense,
-                nextvalue)
-        end
-    end
-    length(output) == rows || throw(FormatError(
-        "LIST leaf stream has $(length(output)) rows but $rows were expected"))
-    nextvalue == length(stream.values) + 1 || throw(FormatError(
-        "LIST leaf stream has unused dense values"))
-    return output
-end
-
-function _assembleoptionallists(stream::LeafStream, leaf::SchemaNode, rows::Integer,
-    limits::Limits)
-    return _assembleoptionallists(stream, leaf, rows, limits,
-        _LiveByteBudget(limits))
-end
-
 function _readtablefield(file::File, metadata::Metadata.FileMetaData, schema::Schema,
     rowindex::Int, node::SchemaNode, rows::Int64, limits::Limits,
     budget::_LiveByteBudget)
-    if node.element.type_ !== nothing
-        values = readcolumn(file, metadata, schema, rowindex, node.column_index;
-            limits=limits, budget=budget)
-        length(values) == rows || throw(FormatError(
-            "flat column $(node.column_index) has $(length(values)) values for $rows rows"))
-        return _tablevalues(node, values, limits, budget)
-    end
-    leaf = _optionallistleaf(node)
-    stream = readleafstream(file, metadata, schema, rowindex, leaf.column_index;
-        expected_rows=rows, limits=limits, budget=budget)
-    return _assembleoptionallists(stream, leaf, rows, limits, budget)
+    values = readcolumn(file, metadata, schema, rowindex, node.column_index;
+        limits=limits, budget=budget)
+    length(values) == rows || throw(FormatError(
+        "flat column $(node.column_index) has $(length(values)) values for $rows rows"))
+    return _tablevalues(node, values, limits, budget)
 end
 
 function _tablenames(schema::Schema, limits::Limits,
@@ -407,11 +300,10 @@ end
 
 function _tablefieldpayloadbaseline(metadata::Metadata.FileMetaData,
     schema::Schema, rowindex::Int, node::SchemaNode)
-    leaf = node.element.type_ === nothing ? _optionallistleaf(node) : node
-    leaf.element.type_ in (Metadata.Type.BYTE_ARRAY,
+    node.element.type_ in (Metadata.Type.BYTE_ARRAY,
         Metadata.Type.FIXED_LEN_BYTE_ARRAY) || return Int64(0)
-    chunk = metadata.row_groups[rowindex].columns[Int(leaf.column_index)]
-    md = _chunkmetadata(chunk, leaf)
+    chunk = metadata.row_groups[rowindex].columns[Int(node.column_index)]
+    md = _chunkmetadata(chunk, node)
     return Int64(md.total_uncompressed_size)
 end
 
@@ -436,25 +328,6 @@ function _reserveprimitivecolumn!(budget::_LiveByteBudget,
     return
 end
 
-function _reservelistcolumn!(budget::_LiveByteBudget,
-    metadata::Metadata.FileMetaData, schema::Schema, node::SchemaNode,
-    rows::Int)
-    leaf = _optionallistleaf(node)
-    listtype, optionaltype = _listtypes(leaf)
-    _reservearray!(budget, optionaltype, rows)
-    entries, payload = _tablechunkmetrics(metadata, schema, leaf)
-    _reserve!(budget, _materializedproduct(rows,
-        _MATERIALIZED_ARRAY_HEADER_BYTES))
-    _reservearray!(budget, eltype(listtype), entries; header=false)
-    if leaf.element.type_ in (Metadata.Type.BYTE_ARRAY,
-            Metadata.Type.FIXED_LEN_BYTE_ARRAY)
-        _reserve!(budget, _materializedproduct(entries,
-            _MATERIALIZED_OBJECT_BYTES))
-        _reserve!(budget, payload)
-    end
-    return
-end
-
 function _tablecolumns(metadata::Metadata.FileMetaData, schema::Schema,
     rows::Int, budget::_LiveByteBudget)
     nodes = schema.root.children
@@ -462,12 +335,8 @@ function _tablecolumns(metadata::Metadata.FileMetaData, schema::Schema,
     columns = Any[]
     sizehint!(columns, length(nodes))
     for node in nodes
-        if node.element.type_ === nothing
-            _reservelistcolumn!(budget, metadata, schema, node, rows)
-        else
-            _reserveprimitivecolumn!(budget, metadata, schema, node, rows)
-        end
-        column = _tablefieldcolumn(node)
+        _reserveprimitivecolumn!(budget, metadata, schema, node, rows)
+        column = _tablecolumn(node)
         sizehint!(column, rows)
         push!(columns, column)
     end
@@ -567,8 +436,7 @@ function Table(input; limits::Limits=Limits())
 end
 
 function close!(table::Table)
-    table.closed && return
-    table.closed = true
+    (@atomicswap table.closed = true) && return
     close!(table.file)
     return
 end

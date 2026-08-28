@@ -102,7 +102,10 @@ function _logicalcolumncanonicaltype(::_TimeLogicalColumnSpec)
 end
 
 function _logicalcolumncanonicaltype(spec::_TimestampLogicalColumnSpec)
-    spec.unit == _TEMPORAL_MILLIS && return Dates.DateTime
+    if spec.unit == _TEMPORAL_MILLIS
+        spec.adjusted || return Dates.DateTime
+        return Timestamp{:millis}
+    end
     spec.unit == _TEMPORAL_MICROS && return Timestamp{:micros}
     return Timestamp{:nanos}
 end

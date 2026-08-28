@@ -51,7 +51,7 @@ end
         @test timekind.is_adjusted_to_utc == adjusted
         @test timestampkind.is_adjusted_to_utc == adjusted
         @test Parquet._temporallogicaleltype(time, Int64) === Time
-        expected = unit === :millis ? DateTime :
+        expected = unit === :millis ? (adjusted ? Parquet.Timestamp{:millis} : DateTime) :
             unit === :micros ? Parquet.Timestamp{:micros} : Parquet.Timestamp{:nanos}
         @test Parquet._temporallogicaleltype(timestamp, Int64) === expected
     end
@@ -76,7 +76,8 @@ end
     legacy = (
         (MD.ConvertedType.TIME_MILLIS, MD.Type.INT32, Time),
         (MD.ConvertedType.TIME_MICROS, MD.Type.INT64, Time),
-        (MD.ConvertedType.TIMESTAMP_MILLIS, MD.Type.INT64, DateTime),
+        (MD.ConvertedType.TIMESTAMP_MILLIS, MD.Type.INT64,
+            Parquet.Timestamp{:millis}),
         (MD.ConvertedType.TIMESTAMP_MICROS, MD.Type.INT64,
             Parquet.Timestamp{:micros}),
         (MD.ConvertedType.INT_8, MD.Type.INT32, Int8),
@@ -259,12 +260,13 @@ end
     @test_throws Parquet.FormatError Parquet._temporallogicalvalue(millis, Int32(0))
     @test_throws ArgumentError Parquet._temporalphysicalvalue(millis, Int64(0))
 
-    for unit in (:micros, :nanos), adjusted in (false, true),
+    for unit in (:millis, :micros, :nanos), adjusted in (false, true),
         ticks in (typemin(Int64), Int64(-1), Int64(0), typemax(Int64))
+        unit === :millis && !adjusted && continue
         element = temporaltesttimestamp(unit, adjusted)
         value = Parquet._temporallogicalvalue(element, ticks)
-        expectedtype = unit === :micros ?
-            Parquet.Timestamp{:micros} : Parquet.Timestamp{:nanos}
+        expectedtype = unit === :millis ? Parquet.Timestamp{:millis} :
+            unit === :micros ? Parquet.Timestamp{:micros} : Parquet.Timestamp{:nanos}
         @test value isa expectedtype
         @test value.ticks == ticks
         @test value.is_adjusted_to_utc == adjusted
@@ -272,6 +274,7 @@ end
         @test Parquet._temporalphysicalvalue(element, value) == ticks
     end
 
+    @test isbitstype(Parquet.Timestamp{:millis})
     @test isbitstype(Parquet.Timestamp{:micros})
     @test isbitstype(Parquet.Timestamp{:nanos})
     first = Parquet.Timestamp(Int64(1), :micros, true)
@@ -280,7 +283,14 @@ end
     @test isequal(first, second)
     @test hash(first) == hash(second)
     @test sprint(show, first) == "Timestamp(1, :micros, true)"
-    @test_throws ArgumentError Parquet.Timestamp(Int64(1), :millis, true)
+    @test sprint(show, Parquet.Timestamp(Int64(2), :millis, true)) ==
+        "Timestamp(2, :millis, true)"
+    @test_throws ArgumentError Parquet.Timestamp(Int64(1), :seconds, true)
+    # millis + adjusted=false is represented as Dates.DateTime, so the type rejects it
+    # at construction with a clear message instead of failing deep in conversion.
+    @test_throws ArgumentError Parquet.Timestamp(Int64(0), :millis, false)
+    @test Parquet.Timestamp(Int64(0), :micros, false) isa Parquet.Timestamp{:micros}
+    @test Parquet.Timestamp(Int64(0), :nanos, false) isa Parquet.Timestamp{:nanos}
     @test_throws ArgumentError Parquet._temporalphysicalvalue(
         temporaltesttimestamp(:micros, true), Parquet.Timestamp(1, :nanos, true))
     @test_throws ArgumentError Parquet._temporalphysicalvalue(

@@ -397,12 +397,21 @@ function pushunknown!(unknown::Vector{RawField}, field::RawField)
     return unknown
 end
 
-function finishunknown(::Nothing)
-    return ()
+function finishunknown(r::Reader, ::Nothing)
+    _readerarray!(r, RawField, 0)
+    return RawField[]
 end
 
-function finishunknown(unknown::Vector{RawField})
-    return Tuple(unknown)
+function finishunknown(::Reader, unknown::Vector{RawField})
+    return unknown
+end
+
+# Preserved fields are stored as `Vector{RawField}`, never `NTuple{N, RawField}`:
+# `N` would be attacker-controlled, and tuple `==`/`isequal`/`hash` specialize per
+# length, so a footer with thousands of unknown fields would force seconds of
+# compilation on the first comparison of decoded metadata.
+function Base.convert(::Type{Vector{RawField}}, value::Tuple{Vararg{RawField}})
+    return collect(RawField, value)
 end
 
 function missingfield(structname::Symbol, field::Symbol)
@@ -820,7 +829,7 @@ end
 
 Re-emit, in encounter order, the preserved fields that originally followed field `lastid`.
 """
-@inline function writeunknownafter!(w::Writer, unknown::Tuple, index::Int,
+@inline function writeunknownafter!(w::Writer, unknown::Vector{RawField}, index::Int,
     lastid::Int16)
     while index <= length(unknown)
         field = unknown[index]
@@ -831,7 +840,7 @@ Re-emit, in encounter order, the preserved fields that originally followed field
     return (lastid, index)
 end
 
-@inline function writeunknownrest!(w::Writer, unknown::Tuple, index::Int,
+@inline function writeunknownrest!(w::Writer, unknown::Vector{RawField}, index::Int,
     lastid::Int16)
     while index <= length(unknown)
         lastid = writeraw!(w, lastid, unknown[index])
@@ -845,12 +854,14 @@ end
 
 Reject a decoded Thrift union with more than one member (known or preserved unknown).
 """
-function checkunion(structname::Symbol, known::Integer, unknown::Tuple)
+function checkunion(structname::Symbol, known::Integer,
+    unknown::Union{Tuple{Vararg{RawField}}, Vector{RawField}})
     known + length(unknown) <= 1 && return
     throw(FormatError("Thrift union $structname has more than one member set"))
 end
 
-function checkunionargs(structname::Symbol, known::Integer, unknown::Tuple)
+function checkunionargs(structname::Symbol, known::Integer,
+    unknown::Union{Tuple{Vararg{RawField}}, Vector{RawField}})
     known + length(unknown) <= 1 && return
     throw(ArgumentError("Thrift union $structname accepts at most one member"))
 end

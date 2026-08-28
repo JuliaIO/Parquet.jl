@@ -200,22 +200,6 @@ end
     end
 end
 
-@testset "optional LIST assembly validation" begin
-    element = Parquet.Metadata.SchemaElement(
-        name="element",
-        type_=Parquet.Metadata.Type.INT32,
-        repetition_type=Parquet.Metadata.FieldRepetitionType.OPTIONAL,
-        converted_type=Parquet.Metadata.ConvertedType.DATE,
-        logicalType=Parquet.Metadata.LogicalType(DATE=Parquet.Metadata.DateType()),
-    )
-    leaf = Parquet.SchemaNode(element, ["days", "list", "element"], Int16(3),
-        Int16(1), Int32(1), Parquet.SchemaNode[])
-    continuation = Parquet.LeafStream(UInt64[0, 1], UInt64[1, 2], Int32[], 1, 3;
-        expected_rows=1)
-    @test_throws Parquet.FormatError Parquet._assembleoptionallists(
-        continuation, leaf, 1, Parquet.Limits())
-end
-
 @testset "flat Tables facade validation" begin
     bytes = Parquet._encodefile((a=Int32[1, 2],))
     file = Parquet.File(bytes)

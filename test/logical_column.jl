@@ -28,7 +28,7 @@ function logicalcolumnunit(unit::LCMD.TimeUnit)
     return nothing
 end
 
-function logicalcolumnconverted(kind::Symbol, unit::Symbol)
+function logicalcolumnconverted(kind::Symbol, unit::Symbol, ::Bool)
     if kind === :time
         unit === :millis && return LCMD.ConvertedType.TIME_MILLIS
         unit === :micros && return LCMD.ConvertedType.TIME_MICROS
@@ -46,14 +46,15 @@ function logicalcolumntime(unit::Symbol)
 end
 
 function logicalcolumntimestamp(unit::Symbol, adjusted::Bool)
-    unit === :millis && return DateTime(2000, 2, 29, 12, 34, 56, 789)
-    ticks = unit === :micros ? Int64(951_827_696_789_123) :
+    unit === :millis && !adjusted && return DateTime(2000, 2, 29, 12, 34, 56, 789)
+    ticks = unit === :millis ? Int64(951_827_696_789) :
+        unit === :micros ? Int64(951_827_696_789_123) :
         Int64(951_827_696_789_123_456)
     return Parquet.Timestamp(ticks, unit, adjusted)
 end
 
-function logicalcolumntimestamptype(unit::Symbol)
-    unit === :millis && return DateTime
+function logicalcolumntimestamptype(unit::Symbol, adjusted::Bool)
+    unit === :millis && return adjusted ? Parquet.Timestamp{:millis} : DateTime
     unit === :micros && return Parquet.Timestamp{:micros}
     return Parquet.Timestamp{:nanos}
 end
@@ -130,7 +131,7 @@ end
         @test element.repetition_type == LCMD.FieldRepetitionType.REQUIRED
         @test element.logicalType.TIME.isAdjustedToUTC == adjusted
         @test logicalcolumnunit(element.logicalType.TIME.unit) === unit
-        @test element.converted_type == logicalcolumnconverted(:time, unit)
+        @test element.converted_type == logicalcolumnconverted(:time, unit, adjusted)
     end
 end
 
@@ -148,14 +149,14 @@ end
         @test element.repetition_type == LCMD.FieldRepetitionType.REQUIRED
         @test element.logicalType.TIMESTAMP.isAdjustedToUTC == adjusted
         @test logicalcolumnunit(element.logicalType.TIMESTAMP.unit) === unit
-        @test element.converted_type == logicalcolumnconverted(:timestamp, unit)
+        @test element.converted_type == logicalcolumnconverted(:timestamp, unit, adjusted)
     end
 end
 
 @testset "LogicalColumn empty and all-null parameterized columns" begin
     for pageversion in (:v1, :v2), unit in (:millis, :micros, :nanos),
         adjusted in (false, true)
-        T = logicalcolumntimestamptype(unit)
+        T = logicalcolumntimestamptype(unit, adjusted)
         emptycolumn = Parquet.LogicalColumn(T[], :timestamp; unit=unit,
             adjusted=adjusted)
         emptybytes = Parquet._encodefile((value=emptycolumn,);

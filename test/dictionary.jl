@@ -43,15 +43,19 @@ end
     values[1][1] = 0xff
     @test values[2] == UInt8[0x01]
     @test_throws Parquet.FormatError Parquet._lookupdictionary(dictionary, UInt64[1])
+    # Dictionary entries deduplicate by exact bits, so +0.0 and -0.0 stay distinct
+    # and two NaN payloads are not collapsed. `_dictionaryentries` is the shared
+    # entry point used by the chunk writer.
     bits = UInt32[0x00000000, 0x80000000, 0x7fc00001, 0x7fc00002]
     floats = reinterpret(Float32, bits)
-    floatplan = Parquet._dictionaryplan(Parquet._writecolumn(:value, repeat(collect(floats), 8)),
-        Parquet.Limits())
-    @test reinterpret(UInt32, floatplan.values) == bits
+    floatvalues, _ = Parquet._dictionaryentries(
+        Parquet._writecolumn(:value, repeat(collect(floats), 8)))
+    @test reinterpret(UInt32, floatvalues) == bits
     raw = Vector{UInt8}[UInt8[1, 2], UInt8[1, 2], UInt8[3], UInt8[1, 2]]
-    rawplan = Parquet._dictionaryplan(Parquet._writecolumn(:value, raw), Parquet.Limits())
-    @test rawplan.values == Vector{UInt8}[UInt8[1, 2], UInt8[3]]
-    @test rawplan.indices == UInt64[0, 0, 1, 0]
+    rawvalues, rawindices = Parquet._dictionaryentries(
+        Parquet._writecolumn(:value, raw))
+    @test rawvalues == Vector{UInt8}[UInt8[1, 2], UInt8[3]]
+    @test rawindices == UInt64[0, 0, 1, 0]
 end
 
 @testset "dictionary V1 decoding" begin

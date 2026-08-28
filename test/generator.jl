@@ -156,6 +156,9 @@ end
     @test choice.one === nothing && choice.two === nothing
     @test length(choice.unknown_fields) == 1 && choice.unknown_fields[1].id == 3
     @test TH.encode(choice) == other
+    mutablechoice = G.Choice(two=Int64(2))
+    push!(mutablechoice.unknown_fields, TH.RawField(3, TH.I32, UInt8[0x02]))
+    @test_throws ArgumentError TH.encode(mutablechoice)
     @test_throws Parquet.FormatError TH.decode(TH.encode(G.Mixed(two=Int64(1), three=Int32(2))), G.Choice)
     @test_throws Parquet.FormatError TH.decode(TH.encode(G.TwoUnknown(three=Int32(1), four=Int32(2))), G.Choice)
     wrapped = G.Everything(flag=false, small=Int8(0), medium=Int16(0), type_=Int32(0), large=Int64(0), real=0.0,

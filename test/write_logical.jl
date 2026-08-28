@@ -65,6 +65,11 @@ end
         Parquet.Timestamp(0, :nanos, false),
         Parquet.Timestamp(1, :nanos, false),
     ]
+    millis = Parquet.Timestamp{:millis}[
+        Parquet.Timestamp(typemin(Int64), :millis, true),
+        Parquet.Timestamp(0, :millis, true),
+        Parquet.Timestamp(typemax(Int64), :millis, true),
+    ]
     input = (
         i8=Int8[-128, 0, 127],
         u8=UInt8[0, 127, 255],
@@ -76,6 +81,7 @@ end
         datetimes=datetimes,
         micros=micros,
         nanos=nanos,
+        millis=millis,
     )
     for pageversion in (:v1, :v2)
         bytes = Parquet._encodefile(input; pageversion=pageversion,
@@ -105,6 +111,10 @@ end
         @test schema[11].logicalType.TIMESTAMP.unit.NANOS !== nothing
         @test !schema[11].logicalType.TIMESTAMP.isAdjustedToUTC
         @test schema[11].converted_type === nothing
+        @test schema[12].logicalType.TIMESTAMP.unit.MILLIS !== nothing
+        @test schema[12].logicalType.TIMESTAMP.isAdjustedToUTC
+        @test schema[12].converted_type ==
+            Parquet.Metadata.ConvertedType.TIMESTAMP_MILLIS
     end
 
     @test_throws ArgumentError Parquet._encodefile(

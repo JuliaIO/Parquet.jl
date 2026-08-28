@@ -48,6 +48,7 @@ struct _NestedSchemaPlan
     root::_NestedStructPlan
     leaves::Vector{_NestedLeafPlan}
     plan_count::Int64
+    depth::Int
 end
 
 mutable struct _NestedPlanBuilder
@@ -56,6 +57,7 @@ mutable struct _NestedPlanBuilder
     count::Int64
     leaves::Vector{_NestedLeafPlan}
     leafmaximum::Int
+    depth::Int
 end
 
 function _nestedemptyrange()
@@ -292,6 +294,7 @@ end
 
 function _nestedcheckdepth(builder::_NestedPlanBuilder, depth::Int)
     _checklimit(:metadata_depth, depth, builder.limits.max_metadata_depth)
+    depth > builder.depth && (builder.depth = depth)
     return
 end
 
@@ -577,11 +580,12 @@ function _nestedplan(schema::Schema; limits::Limits=Limits(),
         sizehint!(leaves, length(schema.leaves))
         _reserveobjects!(budget)
         builder = _NestedPlanBuilder(limits, budget, Int64(0), leaves,
-            length(schema.leaves))
+            length(schema.leaves), 0)
         root = _nestedcompileiterative(builder, rootnode)
         _nestedvalidateleafplans(schema, root, builder.leaves)
         _reserveobjects!(budget)
-        plan = _NestedSchemaPlan(schema, root, builder.leaves, builder.count)
+        plan = _NestedSchemaPlan(schema, root, builder.leaves, builder.count,
+            builder.depth)
         _release!(budget, _MATERIALIZED_OBJECT_BYTES)
         return plan
     catch

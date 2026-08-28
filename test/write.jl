@@ -168,8 +168,8 @@ end
     )
     original = TH.encode(nestedmetadata)
     decoded = TH.decode(original, MD.FileMetaData)
-    @test only(decoded.schema).unknown_fields == (nestedraw,)
-    @test decoded.unknown_fields == (topraw,)
+    @test only(decoded.schema).unknown_fields == [nestedraw]
+    @test decoded.unknown_fields == [topraw]
     @test TH.encode(decoded) == original
     @test boundedfooter(decoded) == original
 

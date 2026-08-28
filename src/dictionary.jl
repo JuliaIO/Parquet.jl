@@ -2,13 +2,6 @@ struct DecodedDictionary{T}
     values::Vector{T}
 end
 
-struct DictionaryPlan{V}
-    values::V
-    indices::Vector{UInt64}
-    dictionary_payload::Vector{UInt8}
-    index_payload::Vector{UInt8}
-end
-
 function _isdictionaryencoding(encoding::Metadata.Encoding.T)
     return encoding == Metadata.Encoding.PLAIN_DICTIONARY ||
         encoding == Metadata.Encoding.RLE_DICTIONARY
@@ -63,13 +56,6 @@ function _lookupdictionary(dictionary::DecodedDictionary{T}, indices::Vector{UIn
         output[index] = _dictionarycopy(dictionary.values[Int(raw) + 1])
     end
     return output
-end
-
-function _decodedictionaryvalues(dictionary, bytes::AbstractVector{UInt8}, count::Int,
-    offset::Int, limits::Limits)
-    dictionary === nothing && throw(FormatError("dictionary-encoded data page has no dictionary page"))
-    indices, position = _decodedictionaryindices(bytes, count, offset, limits)
-    return _lookupdictionary(dictionary, indices), position
 end
 
 function _dictionarykey(value::Float32)
@@ -132,18 +118,4 @@ function _encodedictionaryindices(indices::Vector{UInt64}, bitwidth::Int)
     end
     append!(output, encode_hybrid(indices, bitwidth))
     return output
-end
-
-function _dictionaryplan(column, limits::Limits)
-    values, indices = _dictionaryentries(column)
-    length(values) <= typemax(Int32) || throw(ArgumentError("dictionary exceeds Int32 entries"))
-    dictionary_column = WriteColumn(column.name, values, column.physical,
-        column.type_length, false, column.logical, column.converted)
-    dictionary_payload = _plainpayload(dictionary_column, limits)
-    bitwidth = _dictionarybitwidth(length(values))
-    bitwidth <= 32 || throw(ArgumentError("dictionary index bit width exceeds 32"))
-    index_payload = _encodedictionaryindices(indices, bitwidth)
-    _checklimit(:page_bytes, length(dictionary_payload), limits.max_page_bytes)
-    _checklimit(:page_bytes, length(index_payload), limits.max_page_bytes)
-    return DictionaryPlan(values, indices, dictionary_payload, index_payload)
 end

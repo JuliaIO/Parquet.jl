@@ -88,7 +88,7 @@ function _n5manifestoptionalenum!(output::Vector{UInt8}, value)
     return _n5manifestoptionalinteger!(output, value.value)
 end
 
-function _n5manifestrawfields!(output::Vector{UInt8}, fields::Tuple)
+function _n5manifestrawfields!(output::Vector{UInt8}, fields::Vector{TH.RawField})
     _n5manifestinteger!(output, length(fields))
     for field in fields
         _n5manifestinteger!(output, field.id)
