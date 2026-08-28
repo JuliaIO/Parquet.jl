@@ -121,7 +121,11 @@ end
     @test !Parquet.codecwritable(CC.LZ4) && !Parquet.codecwritable(CC.LZO) && !Parquet.codecwritable(CC.T(42))
     @test Parquet.codecname(CC.ZSTD) == "ZSTD" && Parquet.codecname(CC.T(42)) == "CompressionCodec.T(42)"
     @test Parquet._readbe32(fill(UInt8(0xff), 4), 1) == Int64(typemax(UInt32))
-    @test_throws Parquet.FormatError Parquet.decompress(CC.LZO, UInt8[0x00], 1)
+    # An LZO file is well formed but permanently unsupported, so it is an
+    # unsupported feature rather than an invalid file. An unknown codec stays a
+    # format error, because it can equally mean corruption.
+    @test_throws Parquet.UnsupportedFeatureError Parquet.decompress(CC.LZO,
+        UInt8[0x00], 1)
     @test_throws Parquet.FormatError Parquet.decompress(CC.T(42), UInt8[0x00], 1)
     @test_throws ArgumentError Parquet.compress(CC.LZO, UInt8[0x00])
     @test_throws ArgumentError Parquet.compress(CC.LZ4, UInt8[0x00])

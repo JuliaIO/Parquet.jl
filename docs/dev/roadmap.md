@@ -13,7 +13,7 @@ The stable target is Apache Parquet format 2.13.0. The source IDL is pinned by c
 
 The implementation is pure Julia at the protocol layer. Audited JLL libraries can supply compression and cryptographic primitives. The package does not call C or C++ Parquet libraries. It does not need a native Thrift compiler.
 
-LZO is a stable, nondeprecated codec in the 2.13.0 IDL. The registered LibLZO package and its binary are GPL-2 licensed, so they are not dependencies of this MIT core. The 1.0 format-completeness claim stays blocked until the project has a license-compatible implementation, legal approval for a separate integration, and a verified parquet-java plus hadoop-lzo fixture.
+LZO is a stable, nondeprecated codec in the 2.13.0 IDL, but it is out of scope. The registered LibLZO package and its binary are GPL-2 licensed, so they cannot be dependencies of this MIT core. Rather than block the release on a license-compatible implementation that nobody has asked for, this package reports an LZO file as an unsupported feature and does not claim complete codec coverage. No mainstream implementation offers full spec coverage either; the practical target is interoperability with the implementations people actually use.
 
 ## Public API
 
@@ -39,7 +39,7 @@ is exported.
 
 ### Physical types
 
-Read and write BOOLEAN, INT32, INT64, INT96, FLOAT, DOUBLE, BYTE_ARRAY, and FIXED_LEN_BYTE_ARRAY. INT96 is deprecated and read-only by default. An explicit compatibility option can enable writing if an ecosystem need is proven.
+Read and write BOOLEAN, INT32, INT64, FLOAT, DOUBLE, BYTE_ARRAY, and FIXED_LEN_BYTE_ARRAY. INT96 is deprecated and is not supported in either direction; a file that uses it is reported as an unsupported feature rather than an invalid file.
 
 ### Encodings
 
@@ -47,7 +47,7 @@ Read PLAIN, PLAIN_DICTIONARY, RLE, BIT_PACKED, DELTA_BINARY_PACKED, DELTA_LENGTH
 
 ### Compression
 
-Read and write UNCOMPRESSED, SNAPPY, GZIP, BROTLI, ZSTD, and LZ4_RAW. Read deprecated Hadoop LZ4 and the raw-block fallback found in existing files. GZIP accepts concatenated members. LZO follows the unresolved release gate above.
+Read and write UNCOMPRESSED, SNAPPY, GZIP, BROTLI, ZSTD, and LZ4_RAW. Read deprecated Hadoop LZ4 and the raw-block fallback found in existing files. GZIP accepts concatenated members. LZO is not supported in either direction.
 
 ### Pages and checksums
 
@@ -118,8 +118,8 @@ Datasets support Hive partitioning, schema unification, `_common_metadata`, and 
 The intended core uses Tables, DataAPI, Dates, Mmap, UUIDs, CRC32, GeoFormatTypes,
 ChunkCodecCore, and the JuliaIO chunk-codec bindings for Snappy, zlib, Zstandard,
 LZ4, and Brotli. Their chunk API matches Parquet pages and permits an exact output
-size to be charged before decompression. No LZO dependency is accepted until the
-license gate above is resolved. Parquet-specific wrappers handle Hadoop LZ4 framing
+size to be charged before decompression. No LZO dependency is accepted, because every
+available implementation is GPL-2. Parquet-specific wrappers handle Hadoop LZ4 framing
 and exact-size validation. XXH64, compact varints, and the WKB walker stay in tree.
 
 Extensions provide OpenSSL EVP encryption, cloud byte sources, JSON, BSON, GeoInterface, Arrow, alternate decimal values, and alternate nanosecond date values. The core does not depend on Thrift.jl, Arrow.jl, JSON3.jl, Decimals.jl, CategoricalArrays.jl, SentinelArrays.jl, or a native protocol compiler.

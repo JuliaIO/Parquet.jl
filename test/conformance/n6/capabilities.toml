@@ -316,9 +316,9 @@ scope = "Raw counts in the exact Julia-writer fixtures."
 id = "parquet-jl"
 kind = "implementation-under-test"
 version = "1.0.0-DEV"
-revision = "6b3c1ba5ddf7936276da53f7dcbb0a6fd317004edcb0ffe4064f89c315ee7914"
+revision = "ea75000a8b4505c73efe50476a45dfe427ed5c8f7123fbaf244390f2b26b0c80"
 platforms = ["julia-1.10", "julia-1.12"]
-toolchain_sha256 = ["6f687953e48958fc6596962379691d1c8a1720d3a9ff39c1e3113888e43bd8ae", "9ad38bea81ecace044a4bdef2a0246dee94cb8a44c9420809cc00f9872651c64", "9c4d3173bb9ee79cd52c989bb715fb0642f3774ad5288a4707e69ec47fb841fb"]
+toolchain_sha256 = ["6f687953e48958fc6596962379691d1c8a1720d3a9ff39c1e3113888e43bd8ae", "9ad38bea81ecace044a4bdef2a0246dee94cb8a44c9420809cc00f9872651c64", "4cf7759e22159ab3c6133bcecc3ba94b5857485581e586bf8dad49bc325a3a5e"]
 
 [[authority.claim]]
 capability = "write.type-order"

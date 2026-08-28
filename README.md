@@ -16,8 +16,10 @@ writes these annotations from unambiguous Julia values or tagged package values,
 `Parquet.Table` rewrite preserves the source scalar schema. The first nested slice
 decodes three-level optional lists of supported primitive values and writes canonical
 `optional LIST<optional DATE>` columns. It preserves null lists, empty lists, null
-elements, and present elements. LZO, recursive and legacy nested forms, structs, maps,
-indexes, encryption, Variant, and geospatial data are still in progress.
+elements, and present elements. Recursive and legacy nested forms, structs, maps,
+indexes, encryption, Variant, and geospatial data are still in progress. LZO and INT96
+are not supported and are not planned: every LZO implementation is GPL-2, and INT96 is
+deprecated in the format.
 `NTuple{N,UInt8}` writer columns map to FIXED_LEN_BYTE_ARRAY, and `Parquet.Table`
 preserves their runtime width across later writes.
 

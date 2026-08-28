@@ -33,6 +33,17 @@ An encoding symbol or string applies to all columns. A `Pair`, `NamedTuple`, or
 dictionary supplies exact column-name overrides. Unlisted columns use PLAIN, or use
 adaptive dictionary encoding when `dictionary=true`.
 
+## What this package does not support
+
+Complete coverage of the format is not a goal, so a few parts are deliberately left
+out. Reading one of them reports an unsupported feature rather than an invalid file.
+
+- LZO compression, in either direction. Every available implementation is GPL-2 and
+  this package is MIT.
+- INT96 columns, in either direction. The type is deprecated in the format.
+- Writing the deprecated LZ4 codec or the deprecated BIT_PACKED encoding. Both are
+  still read, because files in the wild use them. New files use `:lz4_raw` and RLE.
+
 ## Statistics
 
 The writer emits row-group statistics and a complete column-order declaration by

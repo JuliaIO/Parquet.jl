@@ -33,9 +33,12 @@ function codecwritable(codec::Metadata.CompressionCodec.T)
     return codecreadable(codec) && codec != Metadata.CompressionCodec.LZ4
 end
 
+# A file that uses LZO is well formed; this package declines to support it, because
+# every available LZO implementation is GPL-2 and this core is MIT. That is a
+# permanent exclusion rather than pending work.
 function _unreadablecodec(codec::Metadata.CompressionCodec.T)
-    codec == Metadata.CompressionCodec.LZO &&
-        throw(FormatError("LZO compression is not supported: no license-compatible LZO implementation is available"))
+    codec == Metadata.CompressionCodec.LZO && throw(UnsupportedFeatureError(
+        "LZO compression is not supported; no license-compatible implementation exists"))
     throw(FormatError("unknown compression codec $(codecname(codec))"))
 end
 

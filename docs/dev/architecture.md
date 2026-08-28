@@ -6,7 +6,7 @@ The detailed support policy and acceptance gates are in [`roadmap.md`](roadmap.m
 
 ## Contract
 
-The stable contract is Apache Parquet format 2.13.0 at peeled source commit `c47e2a66e88943fc46fde1b028a9432f14fdf5c0`. The release tag object is not used as a commit pin. Post-tag items such as ALP remain experimental. The reader accepts all stable encodings and codecs, including deprecated encodings. The writer emits all nondeprecated stable encodings and codecs. LZO read and write support remain a release gate. The GPL-2 LibLZO package is not part of this MIT core; a license-compatible implementation and independent interoperability evidence are still required.
+The stable contract is Apache Parquet format 2.13.0 at peeled source commit `c47e2a66e88943fc46fde1b028a9432f14fdf5c0`. The release tag object is not used as a commit pin. Post-tag items such as ALP remain experimental. The reader accepts the stable encodings and codecs it supports, including deprecated encodings. The writer emits nondeprecated stable encodings and codecs. LZO and INT96 are out of scope in both directions and are not a release gate: the GPL-2 LibLZO package cannot be part of this MIT core, and INT96 is deprecated in the format. Complete format coverage is not claimed.
 
 Every support claim needs four facts:
 

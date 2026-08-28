@@ -150,21 +150,32 @@ request was requested for this handoff.
    The ledger remains conservative: stages 1 through 4 are `in_progress`, and stages
    5 through 8 are `planned`. Promote a row only after its full evidence contract
    passes.
-2. Resolve LZO. The available Julia package and binary are GPL-2. The MIT core still
-   needs a compatible implementation or an approved integration plus parquet-java and
-   hadoop-lzo evidence.
-3. Complete the target-only modules: bloom filters, residual-safe scan pushdown,
+2. Complete the target-only modules: bloom filters, residual-safe scan pushdown,
    modular encryption, Variant, geospatial support, and datasets.
-4. Prove PyArrow and DuckDB source-to-wheel provenance. Their official wheel bytes and
+3. Prove PyArrow and DuckDB source-to-wheel provenance. Their official wheel bytes and
    runtime behavior are verified, but both source entries remain `planned` in the N6
    manifest.
-5. Expand the exact gate beyond macOS 15 ARM64. Run clean Linux, Windows, other macOS,
+4. Expand the exact gate beyond macOS 15 ARM64. Run clean Linux, Windows, other macOS,
    Julia nightly, bounds, reverse-dependency, PkgEval, performance, and allocation
    qualification.
-6. Rebuild and review all current user-facing support statements. `README.md` and some
+5. Rebuild and review all current user-facing support statements. `README.md` and some
    roadmap current-state paragraphs understate later nested, statistics, and index
    slices. Treat tests and frozen evidence as facts until the text is reconciled.
-7. Keep publication and oracle locking disabled until every release gate is complete.
+6. Keep publication and oracle locking disabled until every release gate is complete.
+
+## Out of scope
+
+These are decided, not pending. Do not reopen them without a concrete user need.
+
+- LZO. Every available implementation is GPL-2, so an MIT core cannot depend on one.
+  A file that uses it reports an unsupported feature.
+- INT96. Deprecated in the format and not supported in either direction.
+- Writing the deprecated LZ4 codec and the deprecated BIT_PACKED encoding. Both remain
+  readable, because files in the wild use them; new files use LZ4_RAW and RLE.
+
+Complete coverage of the format is explicitly not a goal. No mainstream implementation
+has it, and the practical target is interoperability with the implementations people
+actually use.
 
 ## Safe continuation order
 

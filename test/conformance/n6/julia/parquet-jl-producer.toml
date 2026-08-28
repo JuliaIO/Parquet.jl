@@ -11,9 +11,9 @@ julia_runtime_tree_sha256 = "273ec71de498a36c77a7e4bb3af4a3f75c338bd1cfe255cab30
 julia_runtime_entry_count = 7180
 julia_runtime_total_bytes = 820750312
 source_composite_algorithm = "parquet-jl-n6-source-composite-v1"
-source_composite_sha256 = "6b3c1ba5ddf7936276da53f7dcbb0a6fd317004edcb0ffe4064f89c315ee7914"
+source_composite_sha256 = "ea75000a8b4505c73efe50476a45dfe427ed5c8f7123fbaf244390f2b26b0c80"
 source_file_count = 38
-source_total_bytes = 1160570
+source_total_bytes = 1160815
 project_file = "Project.toml"
 project_sha256 = "267fbe0fb90440d6de6bf855a971121f665360cd9f7d256a0d9f0d039e2e424a"
 manifest_file = "test/conformance/n6/julia/Manifest.toml"
@@ -265,11 +265,11 @@ sha256 = "94d68fb49a163013c954f53282164e088624875a0f689d402c40cbc496667e61"
 
 [[file]]
 path = "src/codecs.jl"
-sha256 = "f6591d498f7e9f5cbcfbfcd122ab7e5c85738bdf2bad4b1fa4fd021cbb392d3f"
+sha256 = "190441af4a717b25154a45b83dd8418197803442a8d9ca010ae172a1bb30e56d"
 
 [[file]]
 path = "src/column.jl"
-sha256 = "4fa55456e9639e098d68b89fa840108900d2f1cbd2082b4730b6cd3cab473c21"
+sha256 = "8e7c2c87c3e042027ce679caf2b8e11a8e04821fbc501ddd2d6b5419ffa0d93f"
 
 [[file]]
 path = "src/delta.jl"

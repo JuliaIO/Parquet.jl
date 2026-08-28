@@ -9,8 +9,8 @@ function _physicaleltype(type::Metadata.Type.T)
     type == Metadata.Type.DOUBLE && return Float64
     type == Metadata.Type.BYTE_ARRAY && return Vector{UInt8}
     type == Metadata.Type.FIXED_LEN_BYTE_ARRAY && return Vector{UInt8}
-    type == Metadata.Type.INT96 &&
-        throw(UnsupportedFeatureError("INT96 columns are not supported yet"))
+    type == Metadata.Type.INT96 && throw(UnsupportedFeatureError(
+        "INT96 columns are not supported; the type is deprecated in Parquet"))
     throw(FormatError("unknown physical type $type"))
 end
 
