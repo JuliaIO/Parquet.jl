@@ -11,9 +11,9 @@ julia_runtime_tree_sha256 = "273ec71de498a36c77a7e4bb3af4a3f75c338bd1cfe255cab30
 julia_runtime_entry_count = 7180
 julia_runtime_total_bytes = 820750312
 source_composite_algorithm = "parquet-jl-n6-source-composite-v1"
-source_composite_sha256 = "ea75000a8b4505c73efe50476a45dfe427ed5c8f7123fbaf244390f2b26b0c80"
+source_composite_sha256 = "c114cb8d4806d408bca5c587663a2791623090407e6f852b8d564e2d31894a43"
 source_file_count = 38
-source_total_bytes = 1160815
+source_total_bytes = 1161963
 project_file = "Project.toml"
 project_sha256 = "267fbe0fb90440d6de6bf855a971121f665360cd9f7d256a0d9f0d039e2e424a"
 manifest_file = "test/conformance/n6/julia/Manifest.toml"
@@ -249,11 +249,11 @@ total_bytes = 32853
 
 [[file]]
 path = "Project.toml"
-sha256 = "267fbe0fb90440d6de6bf855a971121f665360cd9f7d256a0d9f0d039e2e424a"
+sha256 = "2ff0bd1483e3f39ee5e64848f2a7f2a657635d5564ed9b41f750a9af89515c49"
 
 [[file]]
 path = "src/Parquet.jl"
-sha256 = "33aaba84985447f211fdcd4ea2d50a47d627356474c2180a734a55cf7d93caa9"
+sha256 = "f67ddbd7e5ce8146e737485074ecadb1d5ab3bb8eb644738ef3a6cc1fafe5ae7"
 
 [[file]]
 path = "src/bss.jl"
@@ -293,7 +293,7 @@ sha256 = "99873f8ae59e0af45219174077704cb28c860a22b681c06b85415d3f35d014bc"
 
 [[file]]
 path = "src/logical.jl"
-sha256 = "713875346a5295b38d6c0b68ed165d79f357b156f9e3a2f8c6632526618b224c"
+sha256 = "e21423c598769c96d343a5346ecf75d951485b3d65d29666c853fd8b5d047bcb"
 
 [[file]]
 path = "src/logical_binary.jl"
@@ -305,11 +305,11 @@ sha256 = "619fc9e7381f4dbd5347bc11bdbdc0d1ab7530ba6f1e4a8599a4b78cbd1aafac"
 
 [[file]]
 path = "src/logical_column.jl"
-sha256 = "bacd73f9cbc0981cef3475182ba2a200c4a8ec8063a6691fe06228a184b91c6a"
+sha256 = "3b0d8a33411514e8b6a375db1b4812c31799d675215fb75d1bc8cc1cef6f0782"
 
 [[file]]
 path = "src/logical_decimal.jl"
-sha256 = "b59f3b6a76ef4e7ee3e390afa2fa0a6e091d3ae6541067881a6e785ff693e715"
+sha256 = "4b21c81852fcab7d2d5ea13b4a84feed3a9a358c3d2f2301902c15442e6e3de1"
 
 [[file]]
 path = "src/logical_json.jl"
@@ -365,7 +365,7 @@ sha256 = "85b530c96ee8d52f806e225f55692a1aff852eb2238bb135e0632548468f3e58"
 
 [[file]]
 path = "src/table.jl"
-sha256 = "2ba2989328a546fb48f17dc9cd3a65b836ad250a6b01ba403b930449939b8511"
+sha256 = "45f6b3ae8bc9a08eaeade70fe576cc4706eb62e1738d4a060fcab25ecc89abf6"
 
 [[file]]
 path = "src/thrift.jl"
@@ -373,19 +373,19 @@ sha256 = "ef6cc6baf184886f0cd51a14fa81c7eb12a92190d3d91b5f0882ed43391a0071"
 
 [[file]]
 path = "src/vectors.jl"
-sha256 = "6af4fa94b6633f33a45f50af8560cd6c9bde3213f8c89c6009a0d04e3c1a2e10"
+sha256 = "61d026d43a2238851c4a6066e54cde2316f5ab446616812f91d0425641416f92"
 
 [[file]]
 path = "src/write.jl"
-sha256 = "79ed219be9d3d832af56e67b23535b48bb361c628fecf9f99f977495adca5490"
+sha256 = "643ee1f341a84b573a752fa0a0e3fdb063c56018293421a29c42019d9a3c005f"
 
 [[file]]
 path = "src/write_logical.jl"
-sha256 = "220757c98e62562f6654bf7fadcb19253c44b0318217b66c9753811b1bf63736"
+sha256 = "77981a92be8b93408a076ec8f06c88eb00ba892753efefa61a6a2859450594bf"
 
 [[file]]
 path = "src/write_nested.jl"
-sha256 = "a15ac92645a11bf658d02d0b9488be169dfa25beb7ac3281b63fbbf7946f3e04"
+sha256 = "bb655f821d8ae901e869e8d06b0a9e57311aeb257fab5265a6605f9d52b9e1aa"
 
 [[file]]
 path = "src/write_provenance.jl"
@@ -405,7 +405,7 @@ sha256 = "186cc635d7fcbc19f9acabc0ba9198d837d6eb0fccdd1a431a3137a6a43be565"
 
 [[file]]
 path = "test/conformance/n6/julia/N6ParquetJLHarness.jl"
-sha256 = "e3e0e903e3ecca103eeb5ec2d11aa0ee81c28f4344f48c8bfd1df0eaa5c01370"
+sha256 = "3ddb32d297b3d86def8b2aa26185c6ad931f398ea830e568da334342e7e70a5e"
 
 [[file]]
 path = "test/conformance/n6/julia/bootstrap.jl"
