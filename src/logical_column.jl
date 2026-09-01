@@ -85,6 +85,8 @@ function _logicalcolumnspec(logical, unit, adjusted, precision, scale)
         decimalscale = _logicalcolumnint32(scale, :scale)
         decimalprecision > 0 || throw(ArgumentError(
             "DECIMAL precision must be positive"))
+        decimalprecision <= _DECIMAL_MAX_PRECISION || throw(ArgumentError(
+            "DECIMAL precision must not exceed $_DECIMAL_MAX_PRECISION"))
         0 <= decimalscale <= decimalprecision || throw(ArgumentError(
             "DECIMAL scale must be between zero and precision"))
         return _DecimalLogicalColumnSpec(decimalprecision, decimalscale)
@@ -110,8 +112,8 @@ function _logicalcolumncanonicaltype(spec::_TimestampLogicalColumnSpec)
     return Timestamp{:nanos}
 end
 
-function _logicalcolumncanonicaltype(::_DecimalLogicalColumnSpec)
-    return Decimal
+function _logicalcolumncanonicaltype(spec::_DecimalLogicalColumnSpec)
+    return _decimaltype(spec.precision, spec.scale)
 end
 
 function _validatelogicalcolumnvaluetype(::_EnumLogicalColumnSpec, value_type::Type)
@@ -132,10 +134,14 @@ function _validatelogicalcolumnvaluetype(spec::_TimestampLogicalColumnSpec,
         "require $expected values or missing"))
 end
 
-function _validatelogicalcolumnvaluetype(::_DecimalLogicalColumnSpec,
+function _validatelogicalcolumnvaluetype(spec::_DecimalLogicalColumnSpec,
     value_type::Type)
-    value_type == Decimal && return
-    throw(ArgumentError("DECIMAL logical columns require Decimal values or missing"))
+    value_type <: Decimal && isconcretetype(value_type) || throw(ArgumentError(
+        "DECIMAL logical columns require concrete Decimals.Decimal values or missing"))
+    Decimals.scale(value_type) == spec.scale || throw(ArgumentError(
+        "DECIMAL logical column requires scale $(spec.scale), got " *
+        "$(Decimals.scale(value_type))"))
+    return
 end
 
 function _logicalcolumneltype(values::AbstractVector, spec::_ScalarLogicalColumnSpec)

@@ -1016,10 +1016,6 @@ function _snapshotmapkey(value::Missing)
     return missing
 end
 
-function _snapshotmapkey(value::Decimal)
-    return copy(value)
-end
-
 function _snapshotmapkey(value::JSONValue)
     return copy(value)
 end

@@ -315,13 +315,22 @@ function _reservewritenormalization!(budget::_LiveByteBudget,
         payload = _materializedsum(payload, bytes)
     end
     _reserve!(budget, _materializedsum(objects, payload))
-    if values isa LogicalColumn && values.spec isa _DecimalLogicalColumnSpec &&
-            values.spec.precision > 18
-        width = _decimalwritewidth(values.spec.precision, limits)
+    precision = _writedecimalprecision(values, value_type)
+    if precision !== nothing && precision > 18
+        width = _decimalwritewidth(precision, limits)
         _reserve!(budget, _materializedproduct(count,
             _materializedsum(_MATERIALIZED_ARRAY_HEADER_BYTES, width)))
     end
     return
+end
+
+# DECIMAL columns above INT64 precision normalize to one byte array per value.
+function _writedecimalprecision(values::AbstractVector, value_type::Type)
+    values isa LogicalColumn && values.spec isa _DecimalLogicalColumnSpec &&
+        return values.spec.precision
+    value_type <: Decimal && isconcretetype(value_type) &&
+        return Int32(Base.precision(value_type))
+    return nothing
 end
 
 function _writecolumnnamebytes(name::Symbol)
@@ -520,13 +529,6 @@ function _writerowretain!(budget::_LiveByteBudget, value, limits::Limits,
         _checklimit(:string_bytes, bytes, limits.max_string_bytes)
         charge = _materializedsum(
             _materializedproduct(3, _MATERIALIZED_OBJECT_BYTES), bytes)
-        _reserve!(budget, charge)
-        return charge
-    elseif value isa Decimal
-        bytes = Int64(_twoscomplementwidth(value.unscaled))
-        _checklimit(:decimal_bytes, bytes, limits.max_decimal_bytes)
-        charge = _materializedsum(
-            _materializedproduct(2, _MATERIALIZED_OBJECT_BYTES), bytes)
         _reserve!(budget, charge)
         return charge
     elseif value isa AbstractString

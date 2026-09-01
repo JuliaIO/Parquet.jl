@@ -1,5 +1,12 @@
 using Parquet
+using Decimals
 using Test
+
+# Wrap a raw unscaled coefficient at (precision, scale) in its storage tier.
+function pqdecimal(precision::Integer, scale::Integer, unscaled::Integer)
+    storage = Parquet._decimalstorage(precision)
+    return reinterpret(Parquet._decimaltype(precision, scale), storage(unscaled))
+end
 
 include("api.jl")
 include("limits.jl")

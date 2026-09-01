@@ -1841,11 +1841,11 @@ end
     payloaderror = n5hassertprivatefailure((x=payload,))
     @test occursin("occurrence", sprint(showerror, payloaderror))
 
-    decimals = N5HSequenceVector([
-        Parquet.Decimal(9, 1), Parquet.Decimal(9, 1),
-        Parquet.Decimal(99, 2)], 0)
-    decimalerror = n5hassertprivatefailure((x=decimals,))
-    @test occursin("occurrence", sprint(showerror, decimalerror))
+    # `Decimal{P,S,T}` fixes scale, precision, and physical width in the element
+    # type, so an unstable DECIMAL source cannot change the leaf shape at all.
+    decimals = N5HSequenceVector(Decimal32{1}[
+        pqdecimal(9, 1, 9), pqdecimal(9, 1, 9), pqdecimal(9, 1, 99)], 0)
+    Parquet._writefields((x=decimals,), Parquet.Limits())
 
     timestamps = N5HSequenceVector([
         Parquet.Timestamp(Int64(1), :micros, false),
@@ -2227,8 +2227,7 @@ end
     @test Parquet._budgetused(budget) == 64
     Parquet._release!(budget, 64)
 
-    aggregate = Parquet._NestedWriteLeafAggregate(false, nothing, nothing,
-        Int32(1))
+    aggregate = Parquet._NestedWriteLeafAggregate(false, nothing)
     shape = Parquet._NestedWriteLeafShape("key", Vector{UInt8}, false,
         nothing, Int32(2), aggregate)
     limits = Parquet.Limits(max_materialized_bytes=100_000,
@@ -2257,7 +2256,7 @@ end
     @test Parquet._budgetused(budget) == 64
     Parquet._release!(budget, 64)
 
-    decimal = Parquet.Decimal(1234567890123456789, 0)
+    decimal = pqdecimal(19, 0, 1234567890123456789)
     limits = Parquet.Limits(max_materialized_bytes=100_000,
         max_decimal_bytes=9)
     budget = Parquet._LiveByteBudget(limits)
@@ -2291,8 +2290,8 @@ end
     Parquet._reserve!(budget, 64)
     trace = Parquet._nestedwritetrace(budget)
     snapshot = Parquet._nestedwritetracekey!(trace,
-        Parquet.Decimal(12, 0), nothing, limits)
-    @test snapshot.value == Parquet.Decimal(12, 0)
+        pqdecimal(9, 0, 12), nothing, limits)
+    @test snapshot.value === pqdecimal(9, 0, 12)
     Parquet._nestedwritetracerelease!(trace)
     @test Parquet._budgetused(budget) == 64
     Parquet._release!(budget, 64)
@@ -2490,9 +2489,13 @@ end
         close(table)
     end
 
-    decimal = Parquet.Decimal(12, 0)
+    decimal = pqdecimal(9, 0, 12)
+    # An isbits DECIMAL key cannot be mutated behind a captured snapshot, so the
+    # authoritative comparison only has to reject a source that returns a
+    # different value on the emit pass.
+    @test isbitstype(typeof(decimal))
     decimalmap = Parquet.MapVector(Int32[0, 1],
-        Parquet.Decimal[decimal], Int32[1])
+        Decimal32{0}[decimal], Int32[1])
     fields, rows = Parquet._writefields((m=decimalmap,), Parquet.Limits())
     @test rows == 1
     element = fields[1].schema[3]
@@ -2500,18 +2503,17 @@ end
     Parquet._reserve!(budget, 64)
     trace = Parquet._nestedwritetrace(budget)
     expected = Parquet._nestedwritetracekey!(trace, decimal, nothing, limits)
-    physical = try
-        Base.GMP.MPZ.set!(decimal.unscaled, BigInt(13))
-        Parquet._nestedwritenormalizekeyphysical(element, decimal, limits)
-    finally
-        Base.GMP.MPZ.set!(decimal.unscaled, BigInt(12))
-    end
     context = Parquet._NestedWriteEmitContext(
         Parquet._NestedWriteLeafBuilder[], Parquet._NestedWriteLeafCount[],
         limits, nothing, trace)
+    matching = Parquet._nestedwritenormalizekeyphysical(element, decimal, limits)
+    @test Parquet._nestedwritekeyphysicalequal(expected, matching, element,
+        context)
+    physical = Parquet._nestedwritenormalizekeyphysical(element,
+        pqdecimal(9, 0, 13), limits)
     @test !Parquet._nestedwritekeyphysicalequal(expected, physical, element,
         context)
-    @test decimal == Parquet.Decimal(12, 0)
+    @test decimal === pqdecimal(9, 0, 12)
     Parquet._nestedwritetracerelease!(trace)
     @test Parquet._budgetused(budget) == 64
     Parquet._release!(budget, 64)

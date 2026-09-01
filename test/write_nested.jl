@@ -116,10 +116,6 @@ function wnfreshbson(width::Int)
     return Parquet.BSONValue(bytes)
 end
 
-function wnfreshdecimal(width::Int)
-    return Parquet.Decimal(big(1) << (8 * width), 0)
-end
-
 struct WNSchemaLessRows{T}
     values::Vector{T}
 end
@@ -896,8 +892,8 @@ end
             Union{Missing,Parquet.Timestamp{:nanos}}[
                 Parquet.Timestamp(7, :nanos, false),
             ], :timestamp; unit=:nanos, adjusted=false),
-        Parquet.LogicalColumn(Union{Missing,Parquet.Decimal}[
-            Parquet.Decimal(12345, 4),
+        Parquet.LogicalColumn(Union{Missing,Decimal{20,4,Int128}}[
+            pqdecimal(20, 4, 12345),
         ], :decimal; precision=20, scale=4),
     )
     present = (logicals=Parquet.ListVector(
@@ -920,7 +916,7 @@ end
         @test value["enum"] == "alpha"
         @test value["time"] == Time(0)
         @test value["timestamp"] == Parquet.Timestamp(7, :nanos, false)
-        @test value["decimal"] == Parquet.Decimal(12345, 4)
+        @test value["decimal"] === pqdecimal(20, 4, 12345)
     finally
         close(table)
     end
@@ -1094,7 +1090,6 @@ end
     for (type, maker) in (
             (Parquet.JSONValue, wnfreshjson),
             (Parquet.BSONValue, wnfreshbson),
-            (Parquet.Decimal, wnfreshdecimal),
         )
         fresh = WNFreshPayloadRows{type,typeof(maker)}(
             Ref(0), 20, 100_000, maker)
@@ -1349,18 +1344,24 @@ end
     # Inferring the leaf schema is the reason a traceless scan exists, so check that
     # it still aggregates rather than merely completing.
     limits = Parquet.Limits(max_materialized_bytes=1_000_000_000)
-    function wnmapaggregate(source)
+    function wnmapvalueshape(source)
         budget = Parquet._LiveByteBudget(limits)
         shape = Parquet._nestedwriteshape("value", eltype(source), source,
             limits, budget)
         Parquet._nestedwritescanaggregates!(Parquet._NestedWriteShape[shape],
             AbstractVector[source], length(source), limits, nothing)
-        return shape.value.aggregate
+        return shape.value
     end
-    decimals = Dict{String,Parquet.Decimal}[
-        Dict("k" => Parquet.Decimal(Int128(1234), Int32(2)))]
-    decimal = wnmapaggregate(decimals)
-    @test decimal.seen && decimal.precision == 4 && decimal.scale == Int32(2)
+    function wnmapaggregate(source)
+        return wnmapvalueshape(source).aggregate
+    end
+    # DECIMAL precision and scale come from `Decimal{P,S,T}`, not from a scan.
+    decimals = Dict{String,Decimal{20,2,Int128}}[
+        Dict("k" => pqdecimal(20, 2, 1234))]
+    decimalelement = Parquet._nestedwriteleafelement(wnmapvalueshape(decimals),
+        limits)
+    @test decimalelement.precision == 20 && decimalelement.scale == 2
+    @test decimalelement.type_ == Parquet.Metadata.Type.FIXED_LEN_BYTE_ARRAY
     stamps = Dict{String,Parquet.Timestamp{:micros}}[
         Dict("k" => Parquet.Timestamp(Int64(5), :micros, true))]
     stamp = wnmapaggregate(stamps)

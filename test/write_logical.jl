@@ -186,17 +186,17 @@ end
 end
 
 @testset "DECIMAL writer inference and round trips" begin
-    small = Union{Missing,Parquet.Decimal}[
-        Parquet.Decimal(12345, 2), missing, Parquet.Decimal(-99999, 2)]
-    medium = Parquet.Decimal[
-        Parquet.Decimal(123456789012345678, 6),
-        Parquet.Decimal(-1, 6),
-        Parquet.Decimal(0, 6),
+    small = Union{Missing,Decimal{5,2,Int32}}[
+        pqdecimal(5, 2, 12345), missing, pqdecimal(5, 2, -99999)]
+    medium = Decimal64{6}[
+        pqdecimal(18, 6, 123456789012345678),
+        pqdecimal(18, 6, -1),
+        pqdecimal(18, 6, 0),
     ]
-    wide = Parquet.Decimal[
-        Parquet.Decimal(big"12345678901234567890", 4),
-        Parquet.Decimal(big"-12345678901234567890", 4),
-        Parquet.Decimal(0, 4),
+    wide = Decimal{20,4,Int128}[
+        pqdecimal(20, 4, big"12345678901234567890"),
+        pqdecimal(20, 4, big"-12345678901234567890"),
+        pqdecimal(20, 4, 0),
     ]
     input = (; small, medium, wide)
     for pageversion in (:v1, :v2)
@@ -227,12 +227,125 @@ end
             Parquet.Metadata.ConvertedType.DECIMAL, metadata.schema[2:end])
     end
 
+    # `Decimal{P,S,T}` carries the annotation, so empty and all-null columns write.
+    for values in (Decimal{7,3,Int32}[],
+            Union{Missing,Decimal{7,3,Int32}}[missing, missing])
+        file = Parquet.File(Parquet._encodefile((; value=values)))
+        metadata = Parquet.Thrift.decode(file.footer.bytes,
+            Parquet.Metadata.FileMetaData)
+        close(file)
+        @test metadata.schema[2].type_ == Parquet.Metadata.Type.INT32
+        @test metadata.schema[2].precision == 7
+        @test metadata.schema[2].scale == 3
+        @test metadata.schema[2].logicalType.DECIMAL.precision == 7
+        @test metadata.schema[2].logicalType.DECIMAL.scale == 3
+    end
+
+    # An abstract element type carries no precision or scale.
+    @test_throws ArgumentError Parquet._encodefile((value=Decimal[],))
     @test_throws ArgumentError Parquet._encodefile(
-        (value=Parquet.Decimal[],))
+        (value=Union{Missing,Decimal}[missing],))
     @test_throws ArgumentError Parquet._encodefile(
-        (value=Union{Missing,Parquet.Decimal}[missing],))
-    @test_throws ArgumentError Parquet._encodefile(
-        (value=[Parquet.Decimal(1, 1), Parquet.Decimal(1, 2)],))
+        (value=Decimal[pqdecimal(9, 1, 1), pqdecimal(9, 2, 1)],))
+    # Julia promotion rescales mixed-scale literals to one exact column type.
+    @test [pqdecimal(9, 1, 1), pqdecimal(9, 2, 1)] isa Vector{Decimal{10,2,Int64}}
+end
+
+@testset "DECIMAL storage tiers, encodings, and nulls" begin
+    tiers = (
+        (9, 2, Int32, Parquet.Metadata.Type.INT32, nothing,
+            (-1, 0, 1, 999_999_999, -999_999_999, 128, -129)),
+        (18, 0, Int64, Parquet.Metadata.Type.INT64, nothing,
+            (-1, 0, 1, big(10)^18 - 1, -(big(10)^18 - 1), 255, -256)),
+        (38, 4, Int128, Parquet.Metadata.Type.FIXED_LEN_BYTE_ARRAY, 16,
+            (-1, 0, 1, big(10)^38 - 1, -(big(10)^38 - 1), 128, -129)),
+        (76, 10, Decimals.Int256, Parquet.Metadata.Type.FIXED_LEN_BYTE_ARRAY, 32,
+            (-1, 0, 1, big(10)^76 - 1, -(big(10)^76 - 1), 32768, -32769)),
+        (20, 20, Int128, Parquet.Metadata.Type.FIXED_LEN_BYTE_ARRAY, 9,
+            (-1, 0, 1, big(10)^20 - 1, -(big(10)^20 - 1))),
+    )
+    for (precision, scale, storage, physical, width, unscaled) in tiers
+        D = Decimal{precision,scale,storage}
+        values = D[pqdecimal(precision, scale, value) for value in unscaled]
+        optional = Union{Missing,D}[isodd(index) ? missing : values[index]
+            for index in eachindex(values)]
+        # A repeated column exercises the dictionary and delta paths.
+        repeated = repeat(values, 8)
+        encodings = physical == Parquet.Metadata.Type.FIXED_LEN_BYTE_ARRAY ?
+            (:plain, :dictionary, :delta_byte_array, :byte_stream_split) :
+            (:plain, :dictionary, :delta_binary_packed)
+        columns = (; value=repeat(values, 8), optional=repeat(optional, 8),
+            repeated)
+        for pageversion in (:v1, :v2), encoding in encodings
+            bytes = Parquet._encodefile(columns; pageversion=pageversion,
+                encoding=encoding, statistics=true)
+            table = Parquet.Table(bytes)
+            @test eltype(table.columns.value) === D
+            @test table.columns.value == columns.value
+            @test isequal(table.columns.optional, columns.optional)
+            @test eltype(table.columns.optional) === Union{Missing,D}
+            @test table.columns.repeated == repeated
+            close(table)
+        end
+        file = Parquet.File(Parquet._encodefile(columns))
+        metadata = Parquet.Thrift.decode(file.footer.bytes,
+            Parquet.Metadata.FileMetaData)
+        close(file)
+        element = metadata.schema[2]
+        @test element.type_ == physical
+        @test element.type_length == (width === nothing ? nothing : Int32(width))
+        @test element.precision == Int32(precision)
+        @test element.scale == Int32(scale)
+        @test element.logicalType.DECIMAL.precision == Int32(precision)
+        @test element.logicalType.DECIMAL.scale == Int32(scale)
+        @test element.converted_type == Parquet.Metadata.ConvertedType.DECIMAL
+    end
+end
+
+@testset "DECIMAL BYTE_ARRAY and legacy annotation reads" begin
+    # The writer never emits BYTE_ARRAY DECIMAL, so build one by annotating a
+    # minimal-length big-endian column, exactly as other implementations write it.
+    unscaled = Int128[0, 1, -1, 127, -128, 128, -129, big(10)^19, -big(10)^19]
+    raw = Vector{UInt8}[Parquet._decimalbytes(value,
+        Parquet._twoscomplementwidth(value)) for value in unscaled]
+    D = Decimal{20,3,Int128}
+    expected = D[reinterpret(D, value) for value in unscaled]
+    modern = Parquet.Metadata.LogicalType(
+        DECIMAL=Parquet.Metadata.DecimalType(precision=Int32(20), scale=Int32(3)))
+    for (logical, converted, declared) in (
+            (modern, Parquet.Metadata.ConvertedType.DECIMAL, true),
+            (nothing, Parquet.Metadata.ConvertedType.DECIMAL, true))
+        bytes = rewritelogicalschema(Parquet._encodefile((value=raw,))) do element
+            return withlogical(element; logical=logical, converted=converted,
+                precision=declared ? Int32(20) : nothing,
+                scale=declared ? Int32(3) : nothing)
+        end
+        table = Parquet.Table(bytes)
+        @test eltype(table.columns.value) === D
+        @test table.columns.value == expected
+        close(table)
+    end
+
+    # A BYTE_ARRAY value wider than the storage tier must be pure sign extension.
+    overwide = Vector{UInt8}[vcat(fill(0x00, 20), UInt8[0x01]),
+        vcat(fill(0xff, 20), UInt8[0xff])]
+    bytes = rewritelogicalschema(Parquet._encodefile((value=overwide,))) do element
+        return withlogical(element; logical=modern,
+            converted=Parquet.Metadata.ConvertedType.DECIMAL,
+            precision=Int32(20), scale=Int32(3))
+    end
+    table = Parquet.Table(bytes)
+    @test table.columns.value == D[reinterpret(D, Int128(1)),
+        reinterpret(D, Int128(-1))]
+    close(table)
+
+    corrupt = Vector{UInt8}[vcat(UInt8[0x01], fill(0x00, 20))]
+    bytes = rewritelogicalschema(Parquet._encodefile((value=corrupt,))) do element
+        return withlogical(element; logical=modern,
+            converted=Parquet.Metadata.ConvertedType.DECIMAL,
+            precision=Int32(20), scale=Int32(3))
+    end
+    @test_throws Parquet.FormatError Parquet.Table(bytes)
 end
 
 @testset "schema-bearing Table exact logical rewrite" begin
@@ -284,7 +397,7 @@ end
     @test metadata.schema[2].converted_type == Parquet.Metadata.ConvertedType.TIME_MICROS
 
     decimalbytes = Parquet._encodefile(
-        (value=Parquet.Decimal[Parquet.Decimal(12345, 2)],))
+        (value=Decimal32{2}[pqdecimal(9, 2, 12345)],))
     decimalbytes = rewritelogicalschema(decimalbytes) do element
         logical = Parquet.Metadata.LogicalType(
             DECIMAL=Parquet.Metadata.DecimalType(scale=Int32(2), precision=Int32(9)))

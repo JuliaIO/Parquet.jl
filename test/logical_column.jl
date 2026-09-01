@@ -87,10 +87,10 @@ end
 
     time1 = Parquet.LogicalColumn(Time[], :time; unit=:millis, adjusted=false)
     time2 = Parquet.LogicalColumn(Time[], :time; unit=:nanos, adjusted=true)
-    decimal1 = Parquet.LogicalColumn(Parquet.Decimal[], :decimal;
+    decimal1 = Parquet.LogicalColumn(Decimal32{0}[], :decimal;
         precision=9, scale=0)
-    decimal2 = Parquet.LogicalColumn(Parquet.Decimal[], :decimal;
-        precision=20, scale=4)
+    decimal2 = Parquet.LogicalColumn(Decimal32{0}[], :decimal;
+        precision=8, scale=0)
     @test typeof(time1) === typeof(time2)
     @test typeof(decimal1) === typeof(decimal2)
     typedtime = Parquet.LogicalColumn(Time[Time(0)], :time; unit=:nanos,
@@ -183,13 +183,13 @@ end
     end
 
     for pageversion in (:v1, :v2)
-        emptycolumn = Parquet.LogicalColumn(Parquet.Decimal[], :decimal;
+        emptycolumn = Parquet.LogicalColumn(Decimal{20,4,Int128}[], :decimal;
             precision=20, scale=4)
         emptybytes = Parquet._encodefile((value=emptycolumn,);
             pageversion=pageversion, encoding=:plain)
         emptyvalues = logicalcolumnvalues(emptybytes)
         @test isempty(emptyvalues)
-        @test eltype(emptyvalues) === Parquet.Decimal
+        @test eltype(emptyvalues) === Decimal{20,4,Int128}
         emptyelement = logicalcolumnmetadata(emptybytes).schema[2]
         @test emptyelement.repetition_type == LCMD.FieldRepetitionType.REQUIRED
         @test emptyelement.precision == 20
@@ -201,8 +201,8 @@ end
             pageversion=pageversion, encoding=:plain)
         nullvalues = logicalcolumnvalues(nullbytes)
         @test isequal(nullvalues,
-            Union{Missing,Parquet.Decimal}[missing, missing])
-        @test eltype(nullvalues) === Union{Missing,Parquet.Decimal}
+            Union{Missing,Decimal{20,4,Int128}}[missing, missing])
+        @test eltype(nullvalues) === Union{Missing,Decimal{20,4,Int128}}
         nullelement = logicalcolumnmetadata(nullbytes).schema[2]
         @test nullelement.repetition_type == LCMD.FieldRepetitionType.OPTIONAL
         @test nullelement.logicalType.DECIMAL.precision == 20
@@ -216,17 +216,17 @@ end
 @testset "LogicalColumn DECIMAL storage boundaries" begin
     input = (
         p9=Parquet.LogicalColumn(
-            Parquet.Decimal[Parquet.Decimal(999_999_999, 2)], :decimal;
+            Decimal32{2}[pqdecimal(9, 2, 999_999_999)], :decimal;
             precision=9, scale=2),
         p10=Parquet.LogicalColumn(
-            Parquet.Decimal[Parquet.Decimal(9_999_999_999, 2)], :decimal;
+            Decimal{10,2,Int64}[pqdecimal(10, 2, 9_999_999_999)], :decimal;
             precision=10, scale=2),
         p18=Parquet.LogicalColumn(
-            Parquet.Decimal[Parquet.Decimal(big"999999999999999999", 2)], :decimal;
+            Decimal64{2}[pqdecimal(18, 2, big"999999999999999999")], :decimal;
             precision=18, scale=2),
         p19=Parquet.LogicalColumn(
-            Parquet.Decimal[Parquet.Decimal(big"9999999999999999999", 2)], :decimal;
-            precision=19, scale=2),
+            Decimal{19,2,Int128}[pqdecimal(19, 2, big"9999999999999999999")],
+            :decimal; precision=19, scale=2),
     )
     for pageversion in (:v1, :v2)
         bytes = Parquet._encodefile(input; pageversion=pageversion, encoding=:plain)
@@ -261,7 +261,7 @@ end
             Parquet.Timestamp(index, :micros, false) for index in Int64(1):Int64(64)
         ], :timestamp; unit=:micros, adjusted=false),
         decimal=Parquet.LogicalColumn(fill(
-            Parquet.Decimal(big"1234567890123456789", 2), 64), :decimal;
+            pqdecimal(19, 2, big"1234567890123456789"), 64), :decimal;
             precision=19, scale=2),
     )
     policy = (enum=:dictionary, time=:delta_binary_packed,
@@ -309,18 +309,21 @@ end
     @test_throws ArgumentError LC(DateTime[], :timestamp; unit=:millis,
         adjusted=false, scale=0)
 
-    @test_throws ArgumentError LC(Parquet.Decimal[], :decimal)
-    @test_throws ArgumentError LC(Parquet.Decimal[], :decimal; precision=1)
-    @test_throws ArgumentError LC(Parquet.Decimal[], :decimal; precision=true, scale=0)
-    @test_throws ArgumentError LC(Parquet.Decimal[], :decimal; precision=1, scale=false)
-    @test_throws ArgumentError LC(Parquet.Decimal[], :decimal; precision=0, scale=0)
-    @test_throws ArgumentError LC(Parquet.Decimal[], :decimal; precision=1, scale=-1)
-    @test_throws ArgumentError LC(Parquet.Decimal[], :decimal; precision=1, scale=2)
-    @test_throws ArgumentError LC(Parquet.Decimal[], :decimal;
+    @test_throws ArgumentError LC(Decimal32{0}[], :decimal)
+    @test_throws ArgumentError LC(Decimal32{0}[], :decimal; precision=1)
+    @test_throws ArgumentError LC(Decimal32{0}[], :decimal; precision=true, scale=0)
+    @test_throws ArgumentError LC(Decimal32{0}[], :decimal; precision=1, scale=false)
+    @test_throws ArgumentError LC(Decimal32{0}[], :decimal; precision=0, scale=0)
+    @test_throws ArgumentError LC(Decimal32{0}[], :decimal; precision=1, scale=-1)
+    @test_throws ArgumentError LC(Decimal32{0}[], :decimal; precision=1, scale=2)
+    @test_throws ArgumentError LC(Decimal32{0}[], :decimal;
         precision=Int64(typemax(Int32)) + 1, scale=0)
     @test_throws ArgumentError LC(Int[], :decimal; precision=9, scale=0)
-    @test_throws ArgumentError LC(Parquet.Decimal[], :decimal; precision=9,
+    @test_throws ArgumentError LC(Decimal32{0}[], :decimal; precision=9,
         scale=0, adjusted=false)
+    @test_throws ArgumentError LC(Decimal[], :decimal; precision=9, scale=0)
+    @test_throws ArgumentError LC(Decimal32{1}[], :decimal; precision=9, scale=0)
+    @test_throws ArgumentError LC(Decimal32{0}[], :decimal; precision=77, scale=0)
 end
 
 @testset "LogicalColumn write-time value validation" begin
@@ -338,12 +341,12 @@ end
     timestampvalues[1] = Parquet.Timestamp(0, :micros, false)
     @test_throws ArgumentError Parquet._encodefile((value=timestamp,))
 
-    wrongscale = Parquet.LogicalColumn(
-        Parquet.Decimal[Parquet.Decimal(1, 3)], :decimal; precision=9, scale=2)
+    # `Decimal{P,S,T}` carries the scale, so a mismatch is a construction error.
+    @test_throws ArgumentError Parquet.LogicalColumn(
+        Decimal32{3}[pqdecimal(9, 3, 1)], :decimal; precision=9, scale=2)
     excessdigits = Parquet.LogicalColumn(
-        Parquet.Decimal[Parquet.Decimal(1_000_000_000, 2)], :decimal;
+        Decimal64{2}[pqdecimal(18, 2, 1_000_000_000)], :decimal;
         precision=9, scale=2)
-    @test_throws ArgumentError Parquet._encodefile((value=wrongscale,))
     @test_throws ArgumentError Parquet._encodefile((value=excessdigits,))
 
     invalid = String(UInt8[0xff])
@@ -351,7 +354,7 @@ end
     badenum = Parquet.LogicalColumn(String[invalid], :enum)
     @test_throws ArgumentError Parquet._encodefile((value=badenum,))
 
-    wideempty = Parquet.LogicalColumn(Parquet.Decimal[], :decimal;
+    wideempty = Parquet.LogicalColumn(Decimal{19,2,Int128}[], :decimal;
         precision=19, scale=2)
     limits = Parquet.Limits(max_decimal_bytes=8)
     @test_throws Parquet.LimitError Parquet._encodefile((value=wideempty,);

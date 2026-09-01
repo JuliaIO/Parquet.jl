@@ -150,8 +150,6 @@ function _tablevalues(node::SchemaNode, values::Vector, limits::Limits,
     outputtype = Missing <: eltype(values) ? Union{Missing,logical} : logical
     _reservearray!(budget, outputtype, length(values))
     _reserve!(budget, _tablelogicalpayloadbytes(values))
-    kind === :decimal && _reserveobjects!(budget,
-        count(!ismissing, values))
     return _logicalvalues(node, values; limits=limits)
 end
 
@@ -324,7 +322,6 @@ function _reserveprimitivecolumn!(budget::_LiveByteBudget,
             _MATERIALIZED_OBJECT_BYTES))
         _reserve!(budget, payload)
     end
-    _logicalkind(node) === :decimal && _reserveobjects!(budget, rows)
     return
 end
 

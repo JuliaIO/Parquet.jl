@@ -27,6 +27,8 @@ Every support claim needs four facts:
 - `logical.jl`, `logical_temporal.jl`, `logical_binary.jl`,
   `logical_decimal.jl`, `logical_json.jl`, and `logical_bson.jl`: validated
   physical-to-logical scalar conversion and bounded embedded-document syntax.
+  `logical_decimal.jl` maps DECIMAL to the isbits `Decimals.Decimal{P,S,T}` and
+  converts big-endian two's complement to machine integers without a bignum.
 - `dremel.jl` and `vectors.jl`: nested assembly and owned or borrowed vectors.
 - `read.jl` and `scan.jl`: bounded parallel decode and residual-safe pushdown.
 - `write.jl`, `write_logical.jl`, and `logical_column.jl`: schema-aware row-group,

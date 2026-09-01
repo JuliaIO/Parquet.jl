@@ -168,15 +168,14 @@ end
             Parquet.Timestamp(-1, :nanos, false),
             Parquet.Timestamp(1, :nanos, false),
         ],
-        decimal32=Parquet.Decimal[
-            Parquet.Decimal(-12, 1), Parquet.Decimal(34, 1)],
-        decimal64=Parquet.Decimal[
-            Parquet.Decimal(-12_345_678_901, 1),
-            Parquet.Decimal(12_345_678_902, 1),
+        decimal32=Decimal32{1}[pqdecimal(9, 1, -12), pqdecimal(9, 1, 34)],
+        decimal64=Decimal64{1}[
+            pqdecimal(18, 1, -12_345_678_901),
+            pqdecimal(18, 1, 12_345_678_902),
         ],
-        decimalfixed=Parquet.Decimal[
-            Parquet.Decimal(big"-12345678901234567890", 1),
-            Parquet.Decimal(big"12345678901234567891", 1),
+        decimalfixed=Decimal128{1}[
+            pqdecimal(38, 1, big"-12345678901234567890"),
+            pqdecimal(38, 1, big"12345678901234567891"),
         ],
         uuid=UUID[
             UUID("00112233-4455-6677-8899-aabbccddeeff"),

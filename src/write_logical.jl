@@ -271,27 +271,13 @@ function _temporalwriteelement(name, values::AbstractVector, value_type::Type,
     return nothing
 end
 
-function _decimalwriteparameters(values::AbstractVector)
-    scale = nothing
-    precision = 1
-    for value in values
-        ismissing(value) && continue
-        value isa Decimal || throw(ArgumentError(
-            "DECIMAL columns must contain Decimal values or missing"))
-        if scale === nothing
-            scale = value.scale
-        else
-            value.scale == scale || throw(ArgumentError(
-                "all values in a DECIMAL column must have the same scale"))
-        end
-        precision = max(precision, _decimaldigits(value.unscaled))
-    end
-    scale === nothing && throw(ArgumentError(
-        "cannot infer DECIMAL scale from an empty or all-null column"))
-    precision = max(precision, Int(scale))
-    precision <= typemax(Int32) || throw(ArgumentError(
-        "DECIMAL precision exceeds Int32"))
-    return Int32(precision), scale
+# `Decimal{P,S,T}` carries the complete annotation, so an empty or all-null column
+# still has a schema.
+function _decimalwriteparameters(value_type::Type)
+    isconcretetype(value_type) || throw(ArgumentError(
+        "DECIMAL columns require a concrete Decimals.Decimal{P,S,T} element type, " *
+        "got $value_type"))
+    return Int32(Base.precision(value_type)), Int32(Decimals.scale(value_type))
 end
 
 function _decimalwritewidth(precision::Int32, limits::Limits)
@@ -311,9 +297,9 @@ function _decimalwritewidth(precision::Int32, limits::Limits)
     return Int32(width)
 end
 
-function _decimalwriteelement(name, values::AbstractVector, optional::Bool,
+function _decimalwriteelement(name, value_type::Type, optional::Bool,
     limits::Limits)
-    precision, scale = _decimalwriteparameters(values)
+    precision, scale = _decimalwriteparameters(value_type)
     if precision <= 9
         physical = Metadata.Type.INT32
         width = nothing
@@ -337,8 +323,8 @@ function _logicalwritecolumn(name, values::AbstractVector, value_type::Type,
     element = _temporalwriteelement(name, values, value_type, optional)
     element = if element !== nothing
         element
-    elseif value_type == Decimal
-        _decimalwriteelement(name, values, optional, limits)
+    elseif value_type <: Decimal
+        _decimalwriteelement(name, value_type, optional, limits)
     else
         _binarywriteelement(name, value_type, optional)
     end

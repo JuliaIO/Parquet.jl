@@ -62,8 +62,9 @@ The rewrite added these working layers:
 - Documenter documentation and CI workflows.
 
 The package has no exports. The actual public declaration is in `src/Parquet.jl`.
-The current public names are `BSONValue`, `Decimal`, `File`, `Interval`, `JSONValue`,
-`Limits`, `LogicalColumn`, `Table`, `Timestamp`, `close!`, and `write`.
+The current public names are `BSONValue`, `File`, `Interval`, `JSONValue`, `Limits`,
+`LogicalColumn`, `Table`, `Timestamp`, `close!`, and `write`. DECIMAL values are
+`Decimals.Decimal`, owned by Decimals.jl rather than by this package.
 
 The public API and complete feature descriptions in `docs/dev/roadmap.md` are target
 design. They are not proof that the corresponding module exists. For example,
@@ -162,6 +163,11 @@ request was requested for this handoff.
    roadmap current-state paragraphs understate later nested, statistics, and index
    slices. Treat tests and frozen evidence as facts until the text is reconciled.
 6. Keep publication and oracle locking disabled until every release gate is complete.
+7. Register Decimals.jl. The DECIMAL slice depends on it, and until it is in the
+   General registry a resolved environment needs `Pkg.develop`. The exact N6 external
+   gate cannot run in that state: `producer_gate.jl` requires `Parquet` to be the only
+   path dependency in `test/conformance/n6/julia/Manifest.toml`. The N6 static lanes,
+   which check the pinned source and evidence digests, do run and are current.
 
 ## Out of scope
 

@@ -73,9 +73,11 @@ Parquet schema. It can select ENUM, TIME, TIMESTAMP, or DECIMAL metadata. It als
 supplies a schema for empty and all-null columns.
 
 `Parquet.JSONValue` and `Parquet.BSONValue` preserve encoded documents. They validate
-their input without building an object tree. `Parquet.Decimal`, `Parquet.Timestamp`,
-and `Parquet.Interval` preserve exact Parquet values that have no single matching
-Julia standard-library type.
+their input without building an object tree. `Parquet.Timestamp` and
+`Parquet.Interval` preserve exact Parquet values that have no single matching
+Julia standard-library type. DECIMAL columns use `Decimals.Decimal{P,S,T}`, whose
+precision and scale live in the type, so an empty or all-null decimal column still
+carries its complete annotation.
 
 ### Annotations that a read and write cycle does not preserve
 

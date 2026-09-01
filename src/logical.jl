@@ -57,7 +57,7 @@ function _logicaleltype(element::Metadata.SchemaElement, physical::Type)
         return _temporaljuliatype(kind)
     logical = _binarylogicaleltype(kind, physical)
     logical === nothing || return logical
-    logical = _decimallogicaleltype(kind)
+    logical = _decimallogicaleltype(kind, element)
     logical === nothing || return logical
     return physical
 end
@@ -174,7 +174,10 @@ function _logicalvalues(element::Metadata.SchemaElement, values::AbstractVector;
     kind = _logicalkind(element)
     kind === nothing && return values
     _checklimit(:container_elements, length(values), limits.max_container_elements)
-    kind === :decimal && _preflightdecimalconversion(element, limits)
+    if kind === :decimal
+        _preflightdecimalconversion(element, limits)
+        return _decimallogicalvalues(element, values, limits)
+    end
     physical = _physicaleltype(element.type_)
     T = _logicaleltype(element, physical)
     output = _convertedvector(T, values)
@@ -193,7 +196,10 @@ function _physicalvalues(element::Metadata.SchemaElement, values::AbstractVector
     kind = _logicalkind(element)
     kind === nothing && return values
     _checklimit(:container_elements, length(values), limits.max_container_elements)
-    kind === :decimal && _preflightdecimalconversion(element, limits)
+    if kind === :decimal
+        _preflightdecimalconversion(element, limits)
+        return _decimalphysicalvalues(element, values, limits)
+    end
     T = _physicaleltype(element.type_)
     output = _convertedvector(T, values)
     for (index, value) in enumerate(values)

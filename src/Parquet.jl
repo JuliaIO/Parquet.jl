@@ -2,6 +2,8 @@ module Parquet
 
 using Mmap
 import CRC32
+import Decimals
+using Decimals: Decimal
 
 include("errors.jl")
 include("thrift.jl")
@@ -41,7 +43,7 @@ include("write_splitting.jl")
 include("page_index.jl")
 
 if VERSION >= v"1.11"
-    Core.eval(@__MODULE__, Expr(:public, :BSONValue, :Decimal, :File, :Interval,
+    Core.eval(@__MODULE__, Expr(:public, :BSONValue, :File, :Interval,
         :JSONValue, :Limits, :LogicalColumn, :Table, :Timestamp, :close!, :write))
 end
 

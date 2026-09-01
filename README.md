@@ -57,6 +57,15 @@ syntax. `Parquet.BSONValue` validates the
 bounded and do not build an object tree. Binary DECIMAL conversion has its own
 `Limits.max_decimal_bytes` resource bound.
 
+DECIMAL columns are [Decimals.jl](https://github.com/quinnj/Decimals.jl) values.
+`DECIMAL(precision, scale)` reads as `Decimals.Decimal{precision,scale,T}`, an isbits
+fixed-scale decimal whose storage `T` is the narrowest signed integer holding
+`10^precision - 1`: `Int32`, `Int64`, `Int128`, or `BitIntegers.Int256` for precision
+up to 9, 18, 38, or 76. A decimal column is therefore a dense `Vector` with no
+per-value heap object. Writing such a column selects INT32, INT64, or the minimal
+FIXED_LEN_BYTE_ARRAY width from the same precision, and emits both the DECIMAL
+logical type and the legacy converted type. Precision above 76 is not supported.
+
 ## Target
 
 - Apache Parquet format 2.13.0 is the stable contract.

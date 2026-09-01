@@ -286,8 +286,8 @@ function wpcustomschemafile()
         Union{Missing,String}[],
         Union{Missing,String}["alpha", missing],
     ]
-    amounts = Union{Missing,Parquet.Decimal}[
-        Parquet.Decimal(123, 2), missing, Parquet.Decimal(-4, 2)]
+    amounts = Union{Missing,Decimal32{2}}[
+        pqdecimal(9, 2, 123), missing, pqdecimal(9, 2, -4)]
     decimal = Parquet.LogicalColumn(amounts, :decimal; precision=9, scale=2)
     bytes = Parquet._encodefile((; labels, amount=decimal))
     metadata = wpmetadata(bytes)

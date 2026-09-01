@@ -1,6 +1,7 @@
 module N6ParquetJLHarness
 
 using Dates
+using Decimals
 using Parquet
 using SHA
 using TOML
@@ -266,8 +267,9 @@ function _logicalvalue(value)
     value isa Parquet.Interval && return Dict{String,Any}(
         "days" => string(value.days), "milliseconds" => string(value.milliseconds),
         "months" => string(value.months))
-    value isa Parquet.Decimal && return Dict{String,Any}(
-        "scale" => string(value.scale), "unscaled" => string(value.unscaled))
+    value isa Decimal && return Dict{String,Any}(
+        "scale" => string(Decimals.scale(value)),
+        "unscaled" => string(Decimals.unscaled(value)))
     value isa Date && return Dict{String,Any}(
         "date_days" => string(Dates.value(value)))
     value isa DateTime && return Dict{String,Any}(
@@ -358,6 +360,10 @@ function _writerbytes(table; statistics::Bool=true, limit::Int64=4096,
     return bytes
 end
 
+function _decimal32(unscaled::Integer)
+    return reinterpret(Decimal32{2}, Int32(unscaled))
+end
+
 function _typeordertable(seed::Int64)
     stream = SeedStream(seed)
     marker = Int32(seedbyte!(stream))
@@ -368,10 +374,10 @@ function _typeordertable(seed::Int64)
         UInt8[0x7f, 0x00], UInt8[0x80],
     ]
     text = Union{Missing,String}["z", missing, "a", "aa", "a\0b", "zz"]
-    decimals = Union{Missing,Parquet.Decimal}[
-        Parquet.Decimal(-90001, 2), missing, Parquet.Decimal(0, 2),
-        Parquet.Decimal(12345, 2), Parquet.Decimal(-1, 2),
-        Parquet.Decimal(99999, 2),
+    decimals = Union{Missing,Decimal32{2}}[
+        _decimal32(-90001), missing, _decimal32(0),
+        _decimal32(12345), _decimal32(-1),
+        _decimal32(99999),
     ]
     decimal = Parquet.LogicalColumn(decimals, :decimal; precision=9, scale=2)
     dates = Union{Missing,Date}[

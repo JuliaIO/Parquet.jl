@@ -8,17 +8,24 @@ using UUIDs
     if !isfile(fixture)
         @info "parquet-testing corpus not found; skipping logical fixtures" corpus
     else
-        expecteddecimal = Parquet.Decimal[
-            Parquet.Decimal(100 * index, 2) for index in 1:24
-        ]
-        for name in (
-                "int32_decimal.parquet",
-                "int64_decimal.parquet",
-                "byte_array_decimal.parquet",
-                "fixed_length_decimal.parquet",
-                "fixed_length_decimal_legacy.parquet")
+        # Every corpus file holds 1.00 through 24.00 at scale 2, but each one
+        # declares its own precision and physical encoding.
+        expectedunscaled = [100 * index for index in 1:24]
+        for (name, physical) in (
+                ("int32_decimal.parquet", Parquet.Metadata.Type.INT32),
+                ("int64_decimal.parquet", Parquet.Metadata.Type.INT64),
+                ("byte_array_decimal.parquet", Parquet.Metadata.Type.BYTE_ARRAY),
+                ("fixed_length_decimal.parquet",
+                    Parquet.Metadata.Type.FIXED_LEN_BYTE_ARRAY),
+                ("fixed_length_decimal_legacy.parquet",
+                    Parquet.Metadata.Type.FIXED_LEN_BYTE_ARRAY))
             table = Parquet.Table(joinpath(data, name))
-            @test table.columns.value == expecteddecimal
+            values = table.columns.value
+            D = Base.nonmissingtype(eltype(values))
+            @test D <: Decimal
+            @test Decimals.scale(D) == 2
+            @test [Decimals.unscaled(value) for value in values] == expectedunscaled
+            @test only(table.schema.leaves).element.type_ == physical
             close(table)
         end
 

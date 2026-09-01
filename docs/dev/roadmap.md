@@ -29,9 +29,9 @@ Parquet.close!(object)
 ```
 
 Scalar schema and value helpers are also public through the package namespace:
-`Parquet.LogicalColumn`, `Parquet.Timestamp`, `Parquet.Decimal`,
-`Parquet.JSONValue`, `Parquet.BSONValue`, and `Parquet.Interval`. None of these names
-is exported.
+`Parquet.LogicalColumn`, `Parquet.Timestamp`, `Parquet.JSONValue`,
+`Parquet.BSONValue`, and `Parquet.Interval`. None of these names is exported.
+DECIMAL values are `Decimals.Decimal`, which Decimals.jl owns.
 
 `File` provides metadata, schema, row groups, statistics, bloom filters, and page indexes. `Table` and `Dataset` implement Tables.jl. Old `read_parquet` and `write_parquet` entry points remain as documented compatibility shims. Removed cursor APIs return actionable migration errors.
 
@@ -122,7 +122,7 @@ size to be charged before decompression. No LZO dependency is accepted, because 
 available implementation is GPL-2. Parquet-specific wrappers handle Hadoop LZ4 framing
 and exact-size validation. XXH64, compact varints, and the WKB walker stay in tree.
 
-Extensions provide OpenSSL EVP encryption, cloud byte sources, JSON, BSON, GeoInterface, Arrow, alternate decimal values, and alternate nanosecond date values. The core does not depend on Thrift.jl, Arrow.jl, JSON3.jl, Decimals.jl, CategoricalArrays.jl, SentinelArrays.jl, or a native protocol compiler.
+Extensions provide OpenSSL EVP encryption, cloud byte sources, JSON, BSON, GeoInterface, Arrow, and alternate nanosecond date values. The core depends on Decimals.jl for exact DECIMAL values, because an isbits fixed-scale decimal is the only representation that keeps a decimal column dense. It does not depend on Thrift.jl, Arrow.jl, JSON3.jl, CategoricalArrays.jl, SentinelArrays.jl, or a native protocol compiler.
 
 ## Stages and gates
 
@@ -171,8 +171,8 @@ physical type and preserves an unknown modern annotation as physical data. INTEG
 uses the matching signed or unsigned Julia integer type. DATE uses `Dates.Date`. TIME
 uses `Dates.Time`. Millisecond TIMESTAMP uses `Dates.DateTime`, while microsecond and
 nanosecond values use `Parquet.Timestamp` to retain exact ticks and the UTC-adjustment
-flag. DECIMAL uses `Parquet.Decimal`, UUID uses `UUIDs.UUID`, and FLOAT16 uses
-`Float16`. ENUM uses `String`. JSON, BSON, and INTERVAL use tagged package values so
+flag. DECIMAL uses `Decimals.Decimal{P,S,T}` with the storage tier chosen by
+precision, UUID uses `UUIDs.UUID`, and FLOAT16 uses `Float16`. ENUM uses `String`. JSON, BSON, and INTERVAL use tagged package values so
 their Parquet identity is not lost.
 
 High-level writes infer the unambiguous scalar schema. Plain `Dates.Time` writes
@@ -197,7 +197,7 @@ ENUM; use `Parquet.LogicalColumn` when ENUM is intended. Core validates JSON aga
 [RFC 8259](https://www.rfc-editor.org/info/rfc8259/) and BSON against the
 [BSON 1.1 document grammar](https://bsonspec.org/spec.html) without building object
 trees. Parsed JSON and BSON object models stay in extensions. Embedded decimal byte
-values have a separate `Limits.max_decimal_bytes` bound before BigInt conversion.
+values have a separate `Limits.max_decimal_bytes` bound before conversion.
 
 #### First vertical slice: optional lists of optional dates
 

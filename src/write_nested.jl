@@ -5,8 +5,6 @@ abstract type _NestedWriteShape end
 mutable struct _NestedWriteLeafAggregate
     seen::Bool
     adjusted::Union{Nothing,Bool}
-    scale::Union{Nothing,Int32}
-    precision::Int32
 end
 
 struct _NestedWriteLeafShape <: _NestedWriteShape
@@ -939,25 +937,22 @@ function _nestedwritekeyvalidatedcount(value, shape,
     return
 end
 
-function _nestedwritekeydecimalpreflight(shape, value::Decimal,
-        limits::Limits)
-    digits = _decimaldigits(value.unscaled)
-    digits <= typemax(Int32) || throw(ArgumentError(
-        "DECIMAL MAP-key precision exceeds Int32"))
-    precision = max(Int32(1), Int32(digits), value.scale)
+function _nestedwritekeydecimalpreflight(shape, value::Decimal{P,S},
+        limits::Limits) where {P,S}
+    unscaled = Decimals.unscaled(value)
+    precision = Int32(P)
     if shape isa _NestedWriteLeafShape &&
             shape.explicit isa _DecimalLogicalColumnSpec
         spec = shape.explicit
-        value.scale == spec.scale || throw(ArgumentError(
-            "DECIMAL MAP key requires scale $(spec.scale), got $(value.scale)"))
-        _checkdecimalvalue(value.unscaled, spec.precision, shape.name,
-            ArgumentError)
+        S == spec.scale || throw(ArgumentError(
+            "DECIMAL MAP key requires scale $(spec.scale), got $S"))
+        _checkdecimalvalue(unscaled, spec.precision, shape.name, ArgumentError)
         precision = spec.precision
     end
     precision > 18 || return
     width = _decimalwritewidth(precision, limits)
     _checklimit(:decimal_bytes, width, limits.max_decimal_bytes)
-    _twoscomplementwidth(value.unscaled) <= width || throw(ArgumentError(
+    _twoscomplementwidth(unscaled) <= width || throw(ArgumentError(
         "DECIMAL MAP key does not fit its declared byte width"))
     return
 end
@@ -1147,20 +1142,6 @@ function _nestedwritekeysnapshotnode(value::BSONValue,
     bytes = _nestedwritekeybytes(state.source, trace, state)
     return _NestedWriteKeySnapshot(_NESTED_WRITE_KEY_BYTES, BSONValue,
         1, length(bytes), bytes, nothing, _NESTED_WRITE_EMPTY_KEYS)
-end
-
-function _nestedwritekeysnapshotnode(value::Decimal,
-        trace::_NestedWriteTrace, ::Limits,
-        ::Union{Nothing,_NestedWriteShape}, ::Int,
-        ::Nothing, ::Nothing)
-    _nestedwritekeynode!(trace)
-    bits = ndigits(value.unscaled; base=2)
-    payload = cld(bits, 8)
-    charge = _materializedsum(_MATERIALIZED_OBJECT_BYTES,
-        _materializedarraybytes(UInt8, payload))
-    _nestedwritetracereserve!(trace, charge)
-    return _NestedWriteKeySnapshot(_NESTED_WRITE_KEY_SCALAR, Decimal, 1, 1,
-        copy(value), nothing, _NESTED_WRITE_EMPTY_KEYS)
 end
 
 function _nestedwritekeysnapshotnode(value::Tuple, trace::_NestedWriteTrace,
@@ -2106,8 +2087,8 @@ function _nestedwriteoccurrencepayload(value)
     return Int64(0)
 end
 
-function _nestedwriteoccurrencelogical(value::Decimal)
-    return Int64(value.scale), Int64(_decimaldigits(value.unscaled))
+function _nestedwriteoccurrencelogical(value::Decimal{P,S}) where {P,S}
+    return Int64(S), Int64(P)
 end
 
 function _nestedwriteoccurrencelogical(value::Timestamp)
@@ -4036,8 +4017,9 @@ function _nestedwriteisscalar(value_type::Type)
     value_type === Missing && return true
     value_type in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32,
         UInt64, Float16, Float32, Float64, Dates.Date, Dates.Time,
-        Dates.DateTime, Decimal, UUIDs.UUID, JSONValue, BSONValue, Interval) &&
+        Dates.DateTime, UUIDs.UUID, JSONValue, BSONValue, Interval) &&
         return true
+    value_type <: Decimal && return isconcretetype(value_type)
     value_type <: Timestamp && return true
     value_type <: AbstractString && return true
     value_type <: AbstractVector{UInt8} && return true
@@ -4048,7 +4030,7 @@ function _nestedwriteleafshape(name::String, value_type::Type, optional::Bool,
         budget::_LiveByteBudget; explicit=nothing, fixed_width=nothing,
         source_snapshot=nothing)
     _reserveobjects!(budget, 2)
-    aggregate = _NestedWriteLeafAggregate(false, nothing, nothing, Int32(1))
+    aggregate = _NestedWriteLeafAggregate(false, nothing)
     return _NestedWriteLeafShape(name, value_type, optional, explicit,
         fixed_width, aggregate, source_snapshot)
 end
@@ -4408,21 +4390,7 @@ function _nestedwritescanleaf!(shape::_NestedWriteLeafShape, value, trace,
     _nestedwritecheckvalue(shape, value)
     shape.explicit === nothing || return
     aggregate = shape.aggregate
-    if shape.value_type == Decimal
-        decimal = value::Decimal
-        if aggregate.scale === nothing
-            aggregate.scale = decimal.scale
-        elseif aggregate.scale != decimal.scale
-            throw(ArgumentError("all values in DECIMAL field $(repr(shape.name)) " *
-                "must use the same scale"))
-        end
-        digits = _decimaldigits(decimal.unscaled)
-        digits <= typemax(Int32) || throw(ArgumentError(
-            "DECIMAL precision exceeds Int32"))
-        aggregate.precision = max(aggregate.precision, Int32(digits),
-            decimal.scale)
-        aggregate.seen = true
-    elseif shape.value_type <: Timestamp
+    if shape.value_type <: Timestamp
         timestamp = value::Timestamp
         if aggregate.adjusted === nothing
             aggregate.adjusted = timestamp.is_adjusted_to_utc
@@ -4825,12 +4793,7 @@ end
 
 function _nestedwritedecimalelement(shape::_NestedWriteLeafShape,
         limits::Limits)
-    aggregate = shape.aggregate
-    aggregate.seen || throw(ArgumentError(
-        "cannot infer DECIMAL precision and scale for empty or all-null field " *
-        "$(repr(shape.name)); use Parquet.LogicalColumn"))
-    precision = aggregate.precision
-    scale = something(aggregate.scale)
+    precision, scale = _decimalwriteparameters(shape.value_type)
     if precision <= 9
         physical = Metadata.Type.INT32
         width = nothing
@@ -4880,7 +4843,7 @@ function _nestedwriteleafelement(shape::_NestedWriteLeafShape,
             converted=Metadata.ConvertedType.TIMESTAMP_MILLIS)
     elseif value_type <: Timestamp
         return _nestedwritetimestampelement(shape)
-    elseif value_type == Decimal
+    elseif value_type <: Decimal
         return _nestedwritedecimalelement(shape, limits)
     end
     binary = _binarywriteelement(shape.name, value_type, shape.optional)
@@ -5197,22 +5160,23 @@ function _nestedwritedecimalpayload(element::Metadata.SchemaElement, value,
     value isa Decimal || throw(ArgumentError(
         "DECIMAL field $(repr(element.name)) contains a non-Decimal value"))
     precision, scale = something(_decimalparameters(element))
-    value.scale == scale || throw(ArgumentError(
+    Decimals.scale(value) == scale || throw(ArgumentError(
         "DECIMAL field $(repr(element.name)) requires scale $scale, got " *
-        "$(value.scale)"))
-    _checkdecimalvalue(value.unscaled, precision, element.name, ArgumentError)
+        "$(Decimals.scale(value))"))
+    unscaled = Decimals.unscaled(value)
+    _checkdecimalvalue(unscaled, precision, element.name, ArgumentError)
     physical = element.type_
     if physical == Metadata.Type.INT32
-        typemin(Int32) <= value.unscaled <= typemax(Int32) || throw(ArgumentError(
+        typemin(Int32) <= unscaled <= typemax(Int32) || throw(ArgumentError(
             "DECIMAL value does not fit in INT32"))
         return Int64(0)
     elseif physical == Metadata.Type.INT64
-        typemin(Int64) <= value.unscaled <= typemax(Int64) || throw(ArgumentError(
+        typemin(Int64) <= unscaled <= typemax(Int64) || throw(ArgumentError(
             "DECIMAL value does not fit in INT64"))
         return Int64(0)
     end
     width = physical == Metadata.Type.FIXED_LEN_BYTE_ARRAY ?
-        Int(element.type_length) : _twoscomplementwidth(value.unscaled)
+        Int(element.type_length) : _twoscomplementwidth(unscaled)
     _checklimit(:decimal_bytes, width, limits.max_decimal_bytes)
     _checklimit(:string_bytes, width, limits.max_string_bytes)
     return Int64(width)
@@ -5539,7 +5503,7 @@ function _nestedwritekeyphysicalequal(expected::_NestedWriteKeySnapshot,
         physical isa AbstractVector{UInt8} || return false
         return _nestedwritekeybytesequal(expected.value, physical)
     end
-    expected.source_type === Decimal || return true
+    expected.source_type <: Decimal || return true
     trace = context.trace
     trace === nothing && throw(AssertionError(
         "authoritative MAP-key comparison requires a writer trace"))
