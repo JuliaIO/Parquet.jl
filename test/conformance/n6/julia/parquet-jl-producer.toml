@@ -11,11 +11,11 @@ julia_runtime_tree_sha256 = "273ec71de498a36c77a7e4bb3af4a3f75c338bd1cfe255cab30
 julia_runtime_entry_count = 7180
 julia_runtime_total_bytes = 820750312
 source_composite_algorithm = "parquet-jl-n6-source-composite-v1"
-source_composite_sha256 = "c114cb8d4806d408bca5c587663a2791623090407e6f852b8d564e2d31894a43"
+source_composite_sha256 = "eb09164ed5265b932e73cb6e7362237268d7261ba307177f7f5ccede8dd72811"
 source_file_count = 38
 source_total_bytes = 1161963
 project_file = "Project.toml"
-project_sha256 = "267fbe0fb90440d6de6bf855a971121f665360cd9f7d256a0d9f0d039e2e424a"
+project_sha256 = "3ae31f55a8b44d036e00354294774c66d52a59671fc765155712d49092f7b64d"
 manifest_file = "test/conformance/n6/julia/Manifest.toml"
 manifest_sha256 = "186cc635d7fcbc19f9acabc0ba9198d837d6eb0fccdd1a431a3137a6a43be565"
 harness_file = "test/conformance/n6/julia/N6ParquetJLHarness.jl"
@@ -249,7 +249,7 @@ total_bytes = 32853
 
 [[file]]
 path = "Project.toml"
-sha256 = "2ff0bd1483e3f39ee5e64848f2a7f2a657635d5564ed9b41f750a9af89515c49"
+sha256 = "3ae31f55a8b44d036e00354294774c66d52a59671fc765155712d49092f7b64d"
 
 [[file]]
 path = "src/Parquet.jl"
