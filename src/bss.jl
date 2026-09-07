@@ -47,7 +47,8 @@ function decode_byte_stream_split(::Type{T}, bytes::AbstractVector{UInt8}, count
     offset::Integer=1, limits::Limits=Limits()) where {T<:Union{Int32,Int64,Float32,Float64}}
     count >= 0 || throw(ArgumentError("value count must be nonnegative"))
     _checklimit(:container_elements, count, limits.max_container_elements)
-    _checkbytes(count, sizeof(T), limits)
+    total = _checkbytes(count, sizeof(T), limits)
+    _requirebytes(bytes, Int(offset), total)
     output = Vector{T}(undef, _structural(count))
     position = decode_byte_stream_split!(output, bytes; offset=offset)
     return output, position

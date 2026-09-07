@@ -17,6 +17,15 @@ function bssbits(values::AbstractVector{T}) where {T}
     return reinterpret(Parquet._splitbits(T), values)
 end
 
+function bssdecodeerror(::Type{T}, bytes, count; offset=1) where {T}
+    return try
+        Parquet.decode_byte_stream_split(T, bytes, count; offset=offset)
+        nothing
+    catch err
+        err
+    end
+end
+
 # Uncompressed V1 data page of a column chunk: (bytes after the RLE definition levels, value count, chunk metadata).
 function bssfixturepage(path::String, column::Int)
     file = Parquet.File(path)
@@ -121,6 +130,20 @@ end
     @test_throws F Parquet.decode_byte_stream_split_fixed(UInt8[], typemax(Int) ÷ 2, 4; limits=unbounded)
     @test_throws F Parquet.decode_byte_stream_split_fixed(UInt8[], 4, typemax(Int) ÷ 2; limits=unbounded)
     @test_throws L Parquet.decode_byte_stream_split_fixed(UInt8[], 0, big(typemax(Int64)) + 1)
+end
+
+@testset "BYTE_STREAM_SPLIT validates input before allocation" begin
+    # A value count can be within both limits while its payload is absent.
+    # Rejection must not allocate the advertised multi-megabyte output.
+    bytes = UInt8[]
+    for T in (Int32, Int64, Float32, Float64)
+        @test bssdecodeerror(T, bytes, 1_000_000) isa Parquet.FormatError
+        @test @allocated(bssdecodeerror(T, bytes, 1_000_000)) < 64 * 1024
+        @test bssdecodeerror(T, bytes, 1_000_000; offset=0) isa BoundsError
+        @test @allocated(bssdecodeerror(T, bytes, 1_000_000; offset=0)) < 64 * 1024
+        @test bssdecodeerror(T, bytes, 1;
+            offset=Int128(typemin(Int)) - 1) isa InexactError
+    end
 end
 
 @testset "BYTE_STREAM_SPLIT gzip corpus fixture" begin
