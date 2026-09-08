@@ -137,7 +137,7 @@ end
     @test Tables.istable(typeof(table))
     @test Tables.columnaccess(typeof(table))
     @test Tables.columnnames(table) == (:id, :flag, :score, :name, :label)
-    @test Tables.schema(table).types == (Int64, Bool, Union{Missing,Float64}, String, Union{Missing,String})
+    @test Tables.schema(table).types == (Int64, Bool, Union{Missing,Float64}, Parquet.DataStrings.DataString, Union{Missing,Parquet.DataStrings.DataString})
     columns = Tables.columntable(table)
     @test columns.id == input.id
     @test columns.flag == input.flag

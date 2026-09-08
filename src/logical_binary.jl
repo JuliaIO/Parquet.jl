@@ -351,6 +351,7 @@ function _binaryphysicalvalue(kind::Symbol, element::Metadata.SchemaElement, val
             throw(ArgumentError("BSON column $(repr(element.name)) contains an untagged value"))
         return _taggedphysicalvalue(value, limits)
     elseif kind === :interval
+        value isa Durations.Duration && (value = Interval(value))
         value isa Interval ||
             throw(ArgumentError("INTERVAL column $(repr(element.name)) contains " *
                 "a non-Interval value"))
@@ -425,4 +426,12 @@ end
 function _binaryphysicalvalues(node::SchemaNode, values::AbstractVector;
     limits::Limits=Limits())
     return _binaryphysicalvalues(node.element, values; limits=limits)
+end
+
+function Interval(value::Durations.Duration)
+    iszero(rem(value.nanoseconds, 1_000_000)) || throw(ArgumentError("Parquet INTERVAL requires exact milliseconds"))
+    return Interval(value.months, value.days, div(value.nanoseconds, 1_000_000))
+end
+function Durations.Duration(value::Interval)
+    return Durations.Duration(value.months, value.days, Int64(value.milliseconds) * 1_000_000)
 end

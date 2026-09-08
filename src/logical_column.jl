@@ -134,7 +134,7 @@ end
 
 function _validatelogicalcolumnvaluetype(::_DecimalLogicalColumnSpec,
     value_type::Type)
-    value_type == Decimal && return
+    value_type <: Union{Decimal,DataDecimals.AbstractDecimal} && return
     throw(ArgumentError("DECIMAL logical columns require Decimal values or missing"))
 end
 

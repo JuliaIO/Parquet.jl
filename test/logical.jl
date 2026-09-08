@@ -22,7 +22,7 @@ end
         logical=datetype, converted=MD.ConvertedType.UTF8)
     @test Parquet._logicalkind(modernstring) === :string
     @test Parquet._logicalkind(moderndate) === :date
-    @test Parquet._logicaleltype(modernstring, Vector{UInt8}) === String
+    @test Parquet._logicaleltype(modernstring, Vector{UInt8}) === Parquet.DataStrings.DataString
     @test Parquet._logicaleltype(moderndate, Int32) === Date
 
     node = Parquet.SchemaNode(moderndate, ["value"], Int16(1), Int16(0),
@@ -120,7 +120,7 @@ end
 
     optionalbytes = Union{Missing,Vector{UInt8}}[UInt8[0xce, 0xba], missing]
     optionalstrings = Parquet._logicalvalues(stringtype, optionalbytes)
-    @test optionalstrings isa Vector{Union{Missing,String}}
+    @test optionalstrings isa Vector{Union{Missing,Parquet.DataStrings.DataString}}
     @test isequal(optionalstrings, Union{Missing,String}["κ", missing])
     @test isequal(Parquet._physicalvalues(stringtype, optionalstrings), optionalbytes)
 

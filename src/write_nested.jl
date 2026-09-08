@@ -4038,6 +4038,7 @@ function _nestedwriteisscalar(value_type::Type)
         UInt64, Float16, Float32, Float64, Dates.Date, Dates.Time,
         Dates.DateTime, Decimal, UUIDs.UUID, JSONValue, BSONValue, Interval) &&
         return true
+    value_type <: Union{DataDecimals.AbstractDecimal,Durations.Duration} && return true
     value_type <: Timestamp && return true
     value_type <: AbstractString && return true
     value_type <: AbstractVector{UInt8} && return true
@@ -4049,6 +4050,11 @@ function _nestedwriteleafshape(name::String, value_type::Type, optional::Bool,
         source_snapshot=nothing)
     _reserveobjects!(budget, 2)
     aggregate = _NestedWriteLeafAggregate(false, nothing, nothing, Int32(1))
+    if value_type <: DataDecimals.Decimal
+        aggregate.seen = true
+        aggregate.scale = Int32(DataDecimals.scale(value_type))
+        aggregate.precision = Int32(precision(value_type))
+    end
     return _NestedWriteLeafShape(name, value_type, optional, explicit,
         fixed_width, aggregate, source_snapshot)
 end
@@ -4408,8 +4414,8 @@ function _nestedwritescanleaf!(shape::_NestedWriteLeafShape, value, trace,
     _nestedwritecheckvalue(shape, value)
     shape.explicit === nothing || return
     aggregate = shape.aggregate
-    if shape.value_type == Decimal
-        decimal = value::Decimal
+    if shape.value_type <: Union{Decimal,DataDecimals.AbstractDecimal}
+        decimal = value isa DataDecimals.AbstractDecimal ? Decimal(BigInt(DataDecimals.unscaled(value)), DataDecimals.scale(value)) : value::Decimal
         if aggregate.scale === nothing
             aggregate.scale = decimal.scale
         elseif aggregate.scale != decimal.scale
@@ -4880,7 +4886,7 @@ function _nestedwriteleafelement(shape::_NestedWriteLeafShape,
             converted=Metadata.ConvertedType.TIMESTAMP_MILLIS)
     elseif value_type <: Timestamp
         return _nestedwritetimestampelement(shape)
-    elseif value_type == Decimal
+    elseif value_type <: Union{Decimal,DataDecimals.AbstractDecimal}
         return _nestedwritedecimalelement(shape, limits)
     end
     binary = _binarywriteelement(shape.name, value_type, shape.optional)
@@ -5194,6 +5200,7 @@ end
 
 function _nestedwritedecimalpayload(element::Metadata.SchemaElement, value,
         limits::Limits)
+    value isa DataDecimals.AbstractDecimal && (value = Decimal(BigInt(DataDecimals.unscaled(value)), DataDecimals.scale(value)))
     value isa Decimal || throw(ArgumentError(
         "DECIMAL field $(repr(element.name)) contains a non-Decimal value"))
     precision, scale = something(_decimalparameters(element))
@@ -5247,6 +5254,7 @@ function _nestedwritebinarypayload(kind::Symbol,
         _validatebson(value.bytes, limits, ArgumentError)
         return Int64(length(value.bytes))
     elseif kind === :interval
+        value isa Durations.Duration && (value = Interval(value))
         value isa Interval || throw(ArgumentError(
             "INTERVAL field $(repr(element.name)) contains a non-Interval value"))
         return Int64(12)

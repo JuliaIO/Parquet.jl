@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "21e5d41e6d5d8aec2a154e411441d1ef11d4e969"
+project_hash = "764cf30a405d7a9237b273bc9d793ff00b82d7aa"
 
 [[deps.Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
@@ -54,6 +54,29 @@ git-tree-sha1 = "abe83f3a2f1b857aac70ef8b269080af17764bbe"
 uuid = "9a962f9c-6df0-11e9-0e5d-c546b8b5ee8a"
 version = "1.16.0"
 
+[[deps.DataDecimals]]
+deps = ["Random"]
+git-tree-sha1 = "422ea02632877ba53f4368013e1df6cf4f73c2a2"
+uuid = "3e2245cb-6932-498d-a7cf-39d39de8bde3"
+version = "1.0.0"
+
+    [deps.DataDecimals.extensions]
+    DataDecimalsJSONExt = "JSON"
+    DataDecimalsLinearAlgebraExt = "LinearAlgebra"
+    DataDecimalsParsersExt = "Parsers"
+    DataDecimalsPrintfExt = "Printf"
+
+    [deps.DataDecimals.weakdeps]
+    JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+    LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+    Parsers = "69de0a69-1ddd-5017-9359-2bf0b02dc9f0"
+    Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+
+[[deps.DataStrings]]
+git-tree-sha1 = "a59701e6c1daf0d46a2bd2aa5db8171177152602"
+uuid = "48204bd6-5611-42ea-b167-fc1d713f9be2"
+version = "1.0.0"
+
 [[deps.DataValueInterfaces]]
 git-tree-sha1 = "bfc1187b79289637fa0ef6d4436ebdfe6905cbd6"
 uuid = "e2d170a0-9d28-54be-80f0-106bbe20a464"
@@ -63,6 +86,12 @@ version = "1.0.0"
 deps = ["Printf"]
 uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
 version = "1.11.0"
+
+[[deps.Durations]]
+deps = ["Dates"]
+git-tree-sha1 = "86bac037c37e7a75b1d0326a142b207395109cd9"
+uuid = "41ac09f5-0a95-4810-aa18-c88bf48ee130"
+version = "1.0.0"
 
 [[deps.IteratorInterfaceExtensions]]
 git-tree-sha1 = "a3f24677c21f5bbe9d2a714f95dcd58337fb2856"
@@ -95,7 +124,7 @@ uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 version = "2.0.1"
 
 [[deps.Parquet]]
-deps = ["CRC32", "ChunkCodecCore", "ChunkCodecLibBrotli", "ChunkCodecLibLz4", "ChunkCodecLibSnappy", "ChunkCodecLibZlib", "ChunkCodecLibZstd", "DataAPI", "Dates", "Mmap", "Tables", "UUIDs"]
+deps = ["CRC32", "ChunkCodecCore", "ChunkCodecLibBrotli", "ChunkCodecLibLz4", "ChunkCodecLibSnappy", "ChunkCodecLibZlib", "ChunkCodecLibZstd", "DataAPI", "DataDecimals", "DataStrings", "Dates", "Durations", "Mmap", "Tables", "UUIDs"]
 path = "."
 uuid = "626c502c-15b0-58ad-a749-f091afb673ae"
 version = "1.0.0-DEV"

@@ -189,7 +189,7 @@ end
             pageversion=pageversion, encoding=:plain)
         emptyvalues = logicalcolumnvalues(emptybytes)
         @test isempty(emptyvalues)
-        @test eltype(emptyvalues) === Parquet.Decimal
+        @test eltype(emptyvalues) === Parquet.DataDecimals.Decimal{20,4,Int128}
         emptyelement = logicalcolumnmetadata(emptybytes).schema[2]
         @test emptyelement.repetition_type == LCMD.FieldRepetitionType.REQUIRED
         @test emptyelement.precision == 20
@@ -202,7 +202,7 @@ end
         nullvalues = logicalcolumnvalues(nullbytes)
         @test isequal(nullvalues,
             Union{Missing,Parquet.Decimal}[missing, missing])
-        @test eltype(nullvalues) === Union{Missing,Parquet.Decimal}
+        @test eltype(nullvalues) === Union{Missing,Parquet.DataDecimals.Decimal{20,4,Int128}}
         nullelement = logicalcolumnmetadata(nullbytes).schema[2]
         @test nullelement.repetition_type == LCMD.FieldRepetitionType.OPTIONAL
         @test nullelement.logicalType.DECIMAL.precision == 20
@@ -231,7 +231,7 @@ end
     for pageversion in (:v1, :v2)
         bytes = Parquet._encodefile(input; pageversion=pageversion, encoding=:plain)
         for name in keys(input)
-            @test logicalcolumnvalues(bytes, name) == collect(getproperty(input, name))
+            @test logicalcolumnvalues(bytes, name) == decimalexpected(collect(getproperty(input, name)))
         end
         elements = Dict(element.name => element for element in
             logicalcolumnmetadata(bytes).schema[2:end])
@@ -270,7 +270,7 @@ end
         bytes = Parquet._encodefile(input; pageversion=pageversion,
             encoding=policy)
         for name in keys(input)
-            @test logicalcolumnvalues(bytes, name) == collect(getproperty(input, name))
+            @test logicalcolumnvalues(bytes, name) == decimalexpected(collect(getproperty(input, name)))
         end
         chunks = logicalcolumnmetadata(bytes).row_groups[1].columns
         @test LCMD.Encoding.RLE_DICTIONARY in chunks[1].meta_data.encodings

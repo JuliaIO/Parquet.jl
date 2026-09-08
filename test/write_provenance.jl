@@ -5,11 +5,11 @@ const WPTH = Parquet.Thrift
 const WRITE_PROVENANCE_CORPUS = get(ENV, "PARQUET_TESTING_DIR",
     joinpath(@__DIR__, "parquet-testing"))
 
-struct WPNullKeyVector <: AbstractVector{String}
-    values::Vector{String}
+struct WPNullKeyVector{T} <: AbstractVector{T}
+    values::Vector{T}
 end
 
-function Base.IndexStyle(::Type{WPNullKeyVector})
+function Base.IndexStyle(::Type{<:WPNullKeyVector})
     return IndexLinear()
 end
 

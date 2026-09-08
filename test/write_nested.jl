@@ -920,7 +920,7 @@ end
         @test value["enum"] == "alpha"
         @test value["time"] == Time(0)
         @test value["timestamp"] == Parquet.Timestamp(7, :nanos, false)
-        @test value["decimal"] == Parquet.Decimal(12345, 4)
+        @test value["decimal"] == decimalexpected(Parquet.Decimal(12345, 4))
     finally
         close(table)
     end

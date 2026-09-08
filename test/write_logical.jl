@@ -204,9 +204,9 @@ end
             encoding=(small=:delta_binary_packed, medium=:delta_binary_packed,
                 wide=:delta_byte_array))
         table = Parquet.Table(bytes)
-        @test isequal(table.columns.small, small)
-        @test table.columns.medium == medium
-        @test table.columns.wide == wide
+        @test isequal(table.columns.small, decimalexpected(small))
+        @test table.columns.medium == decimalexpected(medium)
+        @test table.columns.wide == decimalexpected(wide)
         close(table)
 
         file = Parquet.File(bytes)

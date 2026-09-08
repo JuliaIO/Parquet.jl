@@ -210,10 +210,13 @@ function _fromparquetdecimal(element::Metadata.SchemaElement, value, limits::Lim
         _fromtwoscomplement(value)
     end
     _checkdecimalvalue(unscaled, precision, element.name, FormatError)
-    return Decimal(unscaled, scale)
+    D = _decimalhost(element)
+    D === Decimal && return Decimal(unscaled, scale)
+    return reinterpret(D, unscaled)
 end
 
 function _toparquetdecimal(element::Metadata.SchemaElement, value, limits::Limits)
+    value isa DataDecimals.AbstractDecimal && (value = Decimal(BigInt(DataDecimals.unscaled(value)), DataDecimals.scale(value)))
     value isa Decimal || throw(ArgumentError(
         "DECIMAL column $(repr(element.name)) contains a non-Decimal value"))
     precision, scale = something(_decimalparameters(element))
@@ -251,4 +254,11 @@ function _decimalphysicalvalue(kind::Symbol, element::Metadata.SchemaElement, va
     kind === :decimal || return nothing
     ismissing(value) && return missing
     return _toparquetdecimal(element, value, limits)
+end
+
+function _decimalhost(element::Metadata.SchemaElement)
+    p, s = something(_decimalparameters(element))
+    p <= 76 || return Decimal
+    T = p <= 9 ? Int32 : p <= 18 ? Int64 : p <= 38 ? Int128 : DataDecimals.Int256
+    return DataDecimals.Decimal{Int(p),Int(s),T}
 end

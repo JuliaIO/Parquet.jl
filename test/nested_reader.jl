@@ -69,7 +69,7 @@ end
     @test result[2]["day"] === missing
     @test eltype(result.children[2]) == Union{Missing,Parquet.StructValue}
     @test result.children[2].ranks == Int32[0, 1, 1, 2]
-    @test eltype(result.children[2].children[1]) == String
+    @test eltype(result.children[2].children[1]) == Parquet.DataStrings.DataString
 
     empty = Parquet._assemblenested(plan, Parquet.LeafStream[
         nrstream(plan, 1, Int[], Int[], Int32[]; rows=0),
@@ -564,7 +564,7 @@ end
     @test allnull[1]["record"]["day"] === missing
     @test allnull[1]["record"]["name"] === missing
     @test eltype(allnull.children[1].children[1]) == Union{Missing,Dates.Date}
-    @test eltype(allnull.children[1].children[2]) == Union{Missing,String}
+    @test eltype(allnull.children[1].children[2]) == Union{Missing,Parquet.DataStrings.DataString}
 end
 
 @testset "nested reader metadata depth 128" begin

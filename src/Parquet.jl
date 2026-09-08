@@ -1,5 +1,7 @@
 module Parquet
 
+import DataDecimals, DataStrings, Durations
+
 using Mmap
 import CRC32
 

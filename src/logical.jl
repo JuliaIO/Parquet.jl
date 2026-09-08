@@ -51,13 +51,13 @@ end
 function _logicaleltype(element::Metadata.SchemaElement, physical::Type)
     kind = _logicalkind(element)
     kind === nothing && return physical
-    kind === :string && return String
+    kind === :string && return DataStrings.DataString
     kind === :date && return Dates.Date
     kind isa Union{_TimeLogicalKind,_TimestampLogicalKind,_IntegerLogicalKind} &&
         return _temporaljuliatype(kind)
     logical = _binarylogicaleltype(kind, physical)
     logical === nothing || return logical
-    logical = _decimallogicaleltype(kind)
+    logical = kind === :decimal ? _decimalhost(element) : nothing
     logical === nothing || return logical
     return physical
 end
@@ -91,7 +91,7 @@ end
 function _fromparquetstring(value::AbstractVector{UInt8}, limits::Limits)
     _checklimit(:string_bytes, length(value), limits.max_string_bytes)
     isvalid(String, value) || throw(FormatError("STRING value contains invalid UTF-8"))
-    return String(copy(value))
+    return DataStrings.DataString(String(copy(value)))
 end
 
 function _toparquetstring(value::AbstractString, limits::Limits)

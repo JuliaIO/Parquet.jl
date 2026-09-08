@@ -66,7 +66,7 @@ function _n5samevalidity(expected::BitVector, actual)
 end
 
 function _n5expectedleafbase(expected::N5ExpectedLeafVector)
-    expected.logical === :string && return String
+    expected.logical === :string && return Parquet.DataStrings.DataString
     expected.physical == MD.Type.BOOLEAN && return Bool
     expected.physical == MD.Type.INT32 && return Int32
     expected.physical == MD.Type.INT64 && return Int64

@@ -4,7 +4,7 @@ status = "preproduction"
 plan_file = "docs/dev/n6-statistics-plan.md"
 plan_sha256 = "15adf34af765a3300d8a49ced73532ed02b7e4edee5764453c58e53fcf12c304"
 capabilities_file = "test/conformance/n6/capabilities.toml"
-capabilities_sha256 = "50f1db2361e63fca0be49790da5bce7104ece3fa606551e713352bec7b07a419"
+capabilities_sha256 = "618cb06584f96e91ad3e4d7c4a88c0bbe8113102284effc69a3cc24f4631752d"
 fixture_manifest_file = "test/conformance/n6/fixtures.toml"
 fixture_manifest_sha256 = "670b2b1cbc0755eaa61c4638d4dc78a5ec12808c80cff56368ba40ba483e9c25"
 corpus_manifest_file = "test/conformance/n6/corpus-files.sha256"
@@ -12,12 +12,12 @@ corpus_manifest_sha256 = "10c5e8fc52bd1d675401fd417c790e45d8103a84e636e42adec203
 evidence_schema_file = "test/conformance/n6/evidence.schema.json"
 evidence_schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e31"
 artifact_manifest_file = "test/conformance/n6/artifacts.sha256"
-artifact_manifest_sha256 = "f681a5402a3ff9905248799a41a85bd81fa86b11b6e89b4d57c6dc8a81850d0b"
+artifact_manifest_sha256 = "320e402a2f782410a7ec7b0ef87d411086c23cc9a5ee35e6d890c6ba0005ea89"
 model_producer_descriptor_file = "test/conformance/n6/normalizers/model-producer.toml"
 model_producer_descriptor_sha256 = "876e7382758b94c895e57769e8fb52216ac626394ff4026dee00f92812db7f3c"
 parquet_jl_producer_descriptor_file = "test/conformance/n6/julia/parquet-jl-producer.toml"
-parquet_jl_producer_descriptor_sha256 = "4cf7759e22159ab3c6133bcecc3ba94b5857485581e586bf8dad49bc325a3a5e"
-parquet_jl_source_composite_sha256 = "ea75000a8b4505c73efe50476a45dfe427ed5c8f7123fbaf244390f2b26b0c80"
+parquet_jl_producer_descriptor_sha256 = "8a873d827d84bcae1697b40ee8684ec08e4bd78bec99527b4163ecc43a1fa231"
+parquet_jl_source_composite_sha256 = "69780a5df13fd16916b01960ebb9f8d0631762c2f1727aa3f350a178d1663e37"
 supported_platforms = ["macos-15-arm64"]
 publication_authorized = false
 oracle_lock_authorized = false
@@ -172,7 +172,7 @@ version = "parquet-jl-1.0.0-DEV_julia-1.12.6"
 platform = "macos-15-arm64"
 scope = "Exact Parquet.jl source, manifest, private dependency depot, native artifacts, bootstrap, and N6 harness."
 artifacts = [
-  { name = "parquet-jl-producer.toml", sha256 = "4cf7759e22159ab3c6133bcecc3ba94b5857485581e586bf8dad49bc325a3a5e" },
+  { name = "parquet-jl-producer.toml", sha256 = "8a873d827d84bcae1697b40ee8684ec08e4bd78bec99527b4163ecc43a1fa231" },
 ]
 
 [[toolchain]]
@@ -353,7 +353,7 @@ scope = "Normalized raw wire facts for the exact 12-file Parquet.jl generated co
 id = "normalized-parquet-jl"
 status = "verified"
 authority = "parquet-jl"
-toolchain_sha256 = "4cf7759e22159ab3c6133bcecc3ba94b5857485581e586bf8dad49bc325a3a5e"
+toolchain_sha256 = "8a873d827d84bcae1697b40ee8684ec08e4bd78bec99527b4163ecc43a1fa231"
 file = "test/conformance/n6/evidence/parquet-jl.normalized.jsonl"
 format = "normalized-jsonl"
 storage = "checked-in"
@@ -362,7 +362,7 @@ schema_sha256 = "5e2b4968d854a3da166b381a48efbd92bbc77d54b91d442736d3154736431e3
 fixture_manifest_file = "test/conformance/n6/fixtures.toml"
 case_count = 12
 record_count = 96
-sha256 = "61ac2835f42591fe3beb187b84232eaac11d3373c1e89194ff5cb940e810a963"
+sha256 = "6149462a498de2311949b52852a5808c1bee4d0e164b5ff299953907e4e8acd5"
 scope = "Exact generated Julia writer and reader evidence."
 
 [[frozen_evidence]]

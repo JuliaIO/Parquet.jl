@@ -124,3 +124,17 @@ removed region terminate the process, and no bounds check can prevent that.
 borrowed and a mapped path is not copied, so neither is charged. An `IO` source is
 copied and is charged. A source type supplied by another package owns its own storage,
 so bytes it allocates are not charged here.
+
+## Shared data values
+
+Strings decode to `DataStrings.DataString`. DECIMAL columns with precision up to
+76 decode to fixed-scale `DataDecimals.Decimal` values. Wider decimals retain
+`Parquet.Decimal`, whose coefficient is a `BigInt`. The writer accepts shared
+fixed-scale and per-value-scale decimals. A fixed-scale type supplies the schema
+for empty and all-null columns too.
+
+`Durations.Duration` can be written as INTERVAL when its components are nonnegative,
+its time component is an exact number of milliseconds, and each wire component
+fits UInt32. Read results retain `Parquet.Interval` because its unsigned range
+exceeds Durations' signed month/day range. Convert with `Durations.Duration(x)`;
+values outside the shared range throw instead of wrapping.

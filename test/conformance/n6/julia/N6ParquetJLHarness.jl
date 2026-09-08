@@ -266,6 +266,9 @@ function _logicalvalue(value)
     value isa Parquet.Interval && return Dict{String,Any}(
         "days" => string(value.days), "milliseconds" => string(value.milliseconds),
         "months" => string(value.months))
+    value isa Parquet.DataDecimals.AbstractDecimal && return Dict{String,Any}(
+        "scale" => string(Parquet.DataDecimals.scale(value)),
+        "unscaled" => string(Parquet.DataDecimals.unscaled(value)))
     value isa Parquet.Decimal && return Dict{String,Any}(
         "scale" => string(value.scale), "unscaled" => string(value.unscaled))
     value isa Date && return Dict{String,Any}(

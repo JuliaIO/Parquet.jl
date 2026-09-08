@@ -170,7 +170,7 @@ function _binarywriteelement(name, value_type::Type, optional::Bool)
         return _logicalwriteelement(name, Metadata.Type.BYTE_ARRAY, optional;
             logical=Metadata.LogicalType(BSON=Metadata.BsonType()),
             converted=Metadata.ConvertedType.BSON)
-    elseif value_type == Interval
+    elseif value_type <: Union{Interval,Durations.Duration}
         return _logicalwriteelement(name, Metadata.Type.FIXED_LEN_BYTE_ARRAY, optional;
             width=Int32(12), converted=Metadata.ConvertedType.INTERVAL)
     end
@@ -272,10 +272,13 @@ function _temporalwriteelement(name, values::AbstractVector, value_type::Type,
 end
 
 function _decimalwriteparameters(values::AbstractVector)
+    D = Base.nonmissingtype(eltype(values))
+    D <: DataDecimals.Decimal && return (Int32(Base.precision(D)), Int32(DataDecimals.scale(D)))
     scale = nothing
     precision = 1
     for value in values
         ismissing(value) && continue
+        value isa DataDecimals.AbstractDecimal && (value = Decimal(BigInt(DataDecimals.unscaled(value)), DataDecimals.scale(value)))
         value isa Decimal || throw(ArgumentError(
             "DECIMAL columns must contain Decimal values or missing"))
         if scale === nothing
@@ -337,7 +340,7 @@ function _logicalwritecolumn(name, values::AbstractVector, value_type::Type,
     element = _temporalwriteelement(name, values, value_type, optional)
     element = if element !== nothing
         element
-    elseif value_type == Decimal
+    elseif value_type <: Union{Decimal,DataDecimals.AbstractDecimal}
         _decimalwriteelement(name, values, optional, limits)
     else
         _binarywriteelement(name, value_type, optional)

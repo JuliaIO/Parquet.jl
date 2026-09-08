@@ -1,6 +1,11 @@
 using Test
 
 const DMD = Parquet.Metadata
+# Compare exact values independently of the read column's fixed precision.
+decimalexpected(x::Parquet.Decimal) = Parquet.DataDecimals.DecimalValue{Parquet.DataDecimals.Int256}(x.unscaled, x.scale)
+decimalexpected(x::Missing) = missing
+decimalexpected(x) = x
+decimalexpected(x::AbstractVector) = map(decimalexpected, x)
 
 struct DecimalConversionProbe{T} <: AbstractVector{T}
     length::Int
@@ -95,7 +100,7 @@ end
     )
     for (bytes, unscaled) in cases
         value = Parquet._fromparquetdecimal(element, bytes, Parquet.Limits())
-        @test value == Parquet.Decimal(unscaled, 4)
+        @test value == decimalexpected(Parquet.Decimal(unscaled, 4))
         @test Parquet._toparquetdecimal(element, value, Parquet.Limits()) == bytes
     end
     for (unscaled, width) in (
@@ -152,7 +157,7 @@ end
                 Parquet.Decimal(123456789012345678, 6)),
             (fixed, UInt8[0xff, 0xff, 0xcf, 0xc7], Parquet.Decimal(-12345, 2)))
         decoded = Parquet._fromparquetdecimal(element, raw, Parquet.Limits())
-        @test decoded == expected
+        @test decoded == decimalexpected(expected)
         @test Parquet._toparquetdecimal(element, decoded, Parquet.Limits()) == raw
     end
     @test Parquet._toparquetdecimal(fixed, Parquet.Decimal(128, 2), Parquet.Limits()) ==
@@ -207,7 +212,7 @@ end
         fixed, Parquet.Decimal(1, 2), decimal_limits)
     exact = Parquet.Limits(max_decimal_bytes=2, max_string_bytes=2)
     @test Parquet._fromparquetdecimal(element, UInt8[0x00, 0x80], exact) ==
-        Parquet.Decimal(128, 2)
+        decimalexpected(Parquet.Decimal(128, 2))
     @test Parquet._toparquetdecimal(element, Parquet.Decimal(128, 2), exact) ==
         UInt8[0x00, 0x80]
 
@@ -261,7 +266,7 @@ end
     exactlimits = Parquet.Limits(max_decimal_bytes=9, max_string_bytes=9)
     raw = UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]
     logical = Parquet._logicalvalues(element, Vector{UInt8}[raw]; limits=exactlimits)
-    @test logical == Parquet.Decimal[Parquet.Decimal(1, 2)]
+    @test logical == [decimalexpected(Parquet.Decimal(1, 2))]
     @test Parquet._physicalvalues(element, logical; limits=exactlimits) ==
         Vector{UInt8}[raw]
 end
