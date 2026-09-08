@@ -8,8 +8,8 @@ using UUIDs
     if !isfile(fixture)
         @info "parquet-testing corpus not found; skipping logical fixtures" corpus
     else
-        expecteddecimal = Parquet.Decimal[
-            Parquet.Decimal(100 * index, 2) for index in 1:24
+        expecteddecimal = Parquet.DataDecimals.Decimal64{2}[
+            Parquet.DataDecimals.Decimal64{2}(index) for index in 1:24
         ]
         for name in (
                 "int32_decimal.parquet",

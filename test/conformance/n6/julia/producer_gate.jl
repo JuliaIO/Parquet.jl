@@ -161,8 +161,8 @@ function validate_parquet_jl_descriptor(manifest, capabilities, snapshots)
     @test descriptor["package_version"] == "1.0.0-DEV"
     @test descriptor["julia_version"] == "1.12.6"
     @test descriptor["platform"] == "macos-15-arm64"
-    @test descriptor["julia_runtime_entry_count"] == 7180
-    @test descriptor["julia_runtime_total_bytes"] == 820750312
+    @test descriptor["julia_runtime_entry_count"] == 7124
+    @test descriptor["julia_runtime_total_bytes"] == 818749783
     @test descriptor["source_composite_algorithm"] ==
         PARQUET_JL_SOURCE_COMPOSITE_ALGORITHM
     for (file_key, hash_key) in (("project_file", "project_sha256"),

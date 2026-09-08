@@ -27,7 +27,7 @@ sha256 = "2468012b4536136c9737629842bb37424d65c82dbc0c0303b74d2612f69afb23"
 
 [[file]]
 path = "test/conformance/n6/normalizers/normalize_model.py"
-sha256 = "51932b834d4c38147dc3452c615f09d45cbbc03b6bf69e2327dcdf9508a63296"
+sha256 = "57341fee23b482b60e5656a990f8e3ae31194fe51b9cc9e34937f08e921f5a1d"
 
 [[file]]
 path = "test/conformance/n6/normalizers/normalize_raw.py"

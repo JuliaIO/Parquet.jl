@@ -244,3 +244,17 @@ network and does not write to the input cache.
 
 No file here authorizes an oracle image publication, a repository
 `oracles.lock`, a frozen N5 evidence change, pruning, or a release claim.
+
+The Julia 1.12.6 runtime pin comes from the pristine official macOS arm64 archive
+`julia-1.12.6-macaarch64.tar.gz` (SHA-256
+`277d82fbd2eda99d0963b3e41f3dc979d7486f181399f8430fb637318ccd6a31`).
+It contains 7,124 runtime entries totaling 818,749,783 regular-file bytes.
+Local coverage output must not be included when establishing a runtime pin.
+The gate still rejects any added or changed runtime file.
+
+For the shared-value migration, Julia producer and independent-model evidence was
+regenerated. The external oracle observations retain their original producer
+identities and unchanged observation bytes. Their control and upstream digests
+were updated after checking that generated fixture bytes and normalized raw
+observations were unchanged. This metadata update does not assert a new execution
+of the external oracle processes; the full external gate remains a separate check.

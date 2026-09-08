@@ -69,7 +69,7 @@ ALLOWED_JULIA_TOOLCHAINS = {
         "executable":
             "9ad38bea81ecace044a4bdef2a0246dee94cb8a44c9420809cc00f9872651c64",
         "runtime_tree":
-            "273ec71de498a36c77a7e4bb3af4a3f75c338bd1cfe255cab30805b6a2cda76e",
+            "64bea40b05399d9e0bbdf242aff9c27cde36835129a660d5f51f1cade58a0e36",
     },
 }
 JULIA_RUNTIME_MAX_ENTRIES = 10_000
