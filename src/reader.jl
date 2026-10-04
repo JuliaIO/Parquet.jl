@@ -43,11 +43,10 @@ end
 
 Represents a Parquet file at `path` open for reading. Options to map logical types can be provided via `map_logical_types`.
 
-`map_logical_types` can be one of:
-
-- `false`: no mapping is done (default)
-- `true`: default mappings are attempted on all columns (bytearray => String, int96 => DateTime)
-- A user supplied dict mapping column names to a tuple of type and a converter function
+`map_logical_types` is a dictionary mapping column-name paths, such as `["name"]`,
+or Parquet physical type identifiers to a tuple `(type, converter)`.
+Recognized String, INT96 timestamp, and decimal annotations are converted
+automatically when no column override is supplied.
 
 Returns a `Parquet.File` type that keeps a handle to the open file and the file metadata and also holds a LRU cache of raw bytes of the pages read.
 """
