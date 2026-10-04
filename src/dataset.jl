@@ -10,7 +10,7 @@ These options if provided are passed along while reading each parquet file in th
 - `filter`: Filter function that takes the path to partitioned file and returns boolean to indicate whether to include the partition while loading. All partitions are loaded by default.
 - `batchsize`: Maximum number of rows to read in each batch (default: row count of first row group). Applied to each file in the partition.
 - `use_threads`: Whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
-- `column_generator`: Function to generate a partitioned column when not found in the partitioned table. Parameters provided to the function: table, column index, length of column to generate. Default implementation determines column values from the table path.
+- `column_generator`: Function called for a column present in the dataset schema but absent from a partition's data file. Receives the table, column index, and requested column length. The default determines values from the file path.
 - `map_logical_types`: Dictionary of logical type overrides, as accepted by `Parquet.File`. The overrides apply when discovering the dataset schema and reading every partition.
 
 One can easily convert the returned object to any Tables.jl compatible table e.g. DataFrames.DataFrame via
@@ -34,7 +34,7 @@ struct Dataset <: Tables.AbstractColumns
     function Dataset(path;
             filter::Function=(path)->true,
             batchsize::Union{Nothing,Signed}=nothing,
-            column_generator::Function=column_generator,
+            column_generator::Function=dataset_column_generator,
             map_logical_types::Dict=TLogicalTypeMap(),
             use_threads::Bool=(nthreads() > 1))
 
@@ -43,7 +43,7 @@ struct Dataset <: Tables.AbstractColumns
         sch = dataset_schema(string(path); map_logical_types=typemap)
         ncols = length(sch.names)
         lookup = Dict{Symbol, Int}(nm => i for (i, nm) in enumerate(sch.names))
-        kwargs = (batchsize=batchsize, use_threads=use_threads, column_generator=dataset_column_generator)
+        kwargs = (batchsize=batchsize, use_threads=use_threads, column_generator=column_generator)
         new(path, filter, ncols, kwargs, typemap, sch, lookup, AbstractVector[], Table[])
     end
 end
