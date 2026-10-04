@@ -1,0 +1,17 @@
+# Conformance fixtures, evidence, and artifact manifests are content hashed, so a
+# CRLF checkout would change their digests and break the gates. Keep every text file
+# LF in the working tree on all platforms, and never translate the binary fixtures.
+* text=auto eol=lf
+*.parquet -text
+*.parq -text
+test/datasets/**/_common_metadata -text
+
+# Machine-generated and reproducible from their inputs, so collapse them by default
+# in review. Regenerate rather than edit: the metadata types come from
+# `julia thrift/generate.jl`, and the evidence records from the N6 producer harness.
+src/metadata/parquet.jl linguist-generated=true
+test/conformance/n6/evidence/*.jsonl linguist-generated=true
+
+# These frozen N6 artifacts include a pinned terminal blank line.
+test/conformance/n6/oracles/parquet-java/check.sh whitespace=-blank-at-eof
+test/conformance/n6/oracles/raw-java/.gitignore whitespace=-blank-at-eof

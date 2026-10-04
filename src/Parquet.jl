@@ -1,52 +1,50 @@
 module Parquet
 
-using Thrift
-using Snappy
-using CodecZlib
-using CodecZstd
-using Dates
-using Decimals
+import DataDecimals, DataStrings, Durations
+
 using Mmap
-using Base.Threads
-using SentinelArrays
+import CRC32
 
-if VERSION < v"1.3"
-    using Missings: nonmissingtype
-end
-
-if VERSION < v"1.5"
-    Base.signed(::Type{UInt16}) = Int16
-    Base.signed(::Type{UInt32}) = Int32
-    Base.signed(::Type{UInt64}) = Int64
-    Base.signed(::Type{UInt128}) = Int128
-end
-
-const PARQUET_JL_VERSION = v"0.7.0"
-
-const _use_mmap = Ref(true)
-
-function use_mmap(b::Bool)
-    _use_mmap[] = b
-end
-
-import Base: show, open, close, values, eltype, length
-
-export is_par_file, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
-export schema
-export logical_timestamp, logical_string
-export RecordCursor, BatchedColumnsCursor
-export write_parquet, read_parquet
-
-# package code goes here
-include("PAR2/PAR2.jl")
-using .PAR2
-include("codec.jl")
+include("errors.jl")
+include("thrift.jl")
+include("metadata/parquet.jl")
 include("schema.jl")
-include("reader.jl")
-include("cursor.jl")
-include("writer.jl")
-include("simple_reader.jl")
-include("dataset.jl")
-include("show.jl")
+include("nested_schema.jl")
+include("logical.jl")
+include("logical_temporal.jl")
+include("logical_json.jl")
+include("logical_bson.jl")
+include("logical_binary.jl")
+include("logical_decimal.jl")
+include("statistics.jl")
+include("vectors.jl")
+include("dremel.jl")
+include("source.jl")
+include("footer.jl")
+include("plain.jl")
+include("rle.jl")
+include("delta.jl")
+include("bss.jl")
+include("checksum.jl")
+include("page.jl")
+include("codecs.jl")
+include("dictionary.jl")
+include("column.jl")
+include("nested_reader.jl")
+include("nested_table.jl")
+include("write.jl")
+include("write_statistics.jl")
+include("write_logical.jl")
+include("logical_column.jl")
+include("write_nested.jl")
+include("table.jl")
+include("write_provenance.jl")
+include("write_splitting.jl")
+include("page_index.jl")
 
-end # module
+if VERSION >= v"1.11"
+    Core.eval(@__MODULE__, Expr(:public, :BSONValue, :Decimal, :File, :Interval,
+        :JSONValue, :Limits, :LogicalColumn, :Table, :Timestamp, :close!, :write))
+end
+
+end

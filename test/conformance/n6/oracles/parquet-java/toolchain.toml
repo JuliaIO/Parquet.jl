@@ -1,0 +1,108 @@
+descriptor_version = 1
+status = "verified"
+producer = "parquet-java"
+producer_version = "1.17.1"
+source_revision = "78a8d3230eb4769db93de5f2f2e18363c04cae81"
+platform = "macos-15-arm64"
+python_version = "3.12.8"
+python_distribution_url = "https://github.com/astral-sh/python-build-standalone/releases/download/20250115/cpython-3.12.8%2B20250115-aarch64-apple-darwin-install_only_stripped.tar.gz"
+python_distribution_sha256 = "dfb8a4c87116538717105ef3dec3668ae07590a5b5532109fec3ccad90be2fbc"
+python_tree_policy = "extract-strip-site-packages-bytecode-v1"
+python_executable_sha256 = "d6b64f766d3b08326aa10cdb37c9d922e3af38b57ec07caa28b894e5fccf6e69"
+python_tree_sha256 = "e3b7dcdffba67f605b0fa3318656387e8d4265d34531c2bdbc43d3aba4a033ec"
+java_vendor = "Eclipse-Adoptium-Temurin"
+java_version = "21.0.8+9"
+java_executable_sha256 = "0045ae168ee132bbf469a26fb17dac6d1dee431c9b7826474f3b6ee574a997c9"
+javac_executable_sha256 = "7be7937fc6bae0ca89f0866f9ce94fc40a935dfb87806d3c701eca3402cfb90a"
+java_release_sha256 = "8e98b265f9a6fd3db04d2535108497897e87f1b3821270cf10ffa937463dc2ee"
+jdk_tree_sha256 = "7ffead12e2614843ffcc77e36d1bd142b921d91381d4ef12827c32c54369d209"
+hadoop_version = "3.3.0"
+harness_main = "org.julialang.parquet.n6.java.AuditMain"
+harness_jar_file = "test/conformance/n6/oracles/parquet-java/build/artifacts/parquet-java-n6-harness.jar"
+harness_jar_sha256 = "7d6de1067e4e01de65f5868c8643f4a68fe4ff6afc50759716d685bd7b9e764c"
+harness_jar_size = 9408
+
+[[artifact]]
+id = "parquet-cli-runtime"
+file = "test/conformance/n6/oracles/parquet-java/build/artifacts/parquet-cli-1.17.1-runtime.jar"
+url = "https://repo.maven.apache.org/maven2/org/apache/parquet/parquet-cli/1.17.1/parquet-cli-1.17.1-runtime.jar"
+sha256 = "d0173051493c506a298c691e555a41a682a405895fd0c8cc429a7e1cb1fcc711"
+size = 50072122
+
+[[artifact]]
+id = "hadoop-client-api"
+file = "test/conformance/n6/oracles/parquet-java/build/artifacts/hadoop-client-api-3.3.0.jar"
+url = "https://repo.maven.apache.org/maven2/org/apache/hadoop/hadoop-client-api/3.3.0/hadoop-client-api-3.3.0.jar"
+sha256 = "d549ba6d131fd6c8e5d42a78dab5c790950edd6258523dedc556b537ca6654aa"
+size = 19207034
+
+[[artifact]]
+id = "hadoop-client-runtime"
+file = "test/conformance/n6/oracles/parquet-java/build/artifacts/hadoop-client-runtime-3.3.0.jar"
+url = "https://repo.maven.apache.org/maven2/org/apache/hadoop/hadoop-client-runtime/3.3.0/hadoop-client-runtime-3.3.0.jar"
+sha256 = "2ba23f1e1dbb03e73600a41fcb187ad2626529684ed226085a91b0a0d6d67ee5"
+size = 27255121
+
+[[source]]
+file = "parquet-common/src/main/java/org/apache/parquet/VersionParser.java"
+sha256 = "a8c54497632bbfacd2da1d52fcf83e3ee6c7e4c0134048c4649bd50055866c87"
+
+[[source]]
+file = "parquet-common/src/main/java/org/apache/parquet/SemanticVersion.java"
+sha256 = "1344e06d6644c9b8d027d03d3e8a595fc60f029eef5e6156b63248a4ee346dc7"
+
+[[source]]
+file = "parquet-common/src/main/java/org/apache/parquet/io/LocalInputFile.java"
+sha256 = "3112f6c7e9f5eb6f0c90d15638f8c7e3c20f004cfc9dd1e9572801453aebcad6"
+
+[[source]]
+file = "parquet-column/src/main/java/org/apache/parquet/CorruptStatistics.java"
+sha256 = "258cb4a4b5f6b6a846c51ebf13d868fe4907ee3c8dfa6e5e73484e927564d1cd"
+
+[[source]]
+file = "parquet-column/src/main/java/org/apache/parquet/example/data/Group.java"
+sha256 = "12cda259d85654fa49d195b948b0faddbb9229f070e0cdda6521d42b3e282907"
+
+[[source]]
+file = "parquet-hadoop/src/main/java/org/apache/parquet/hadoop/ParquetReader.java"
+sha256 = "ce64a167e397014f475c4538692cb6c4ce93331a976af78dec4a204803e6eb0e"
+
+[[source]]
+file = "parquet-hadoop/src/main/java/org/apache/parquet/hadoop/ParquetFileReader.java"
+sha256 = "85f46c06cf3d1b65512031fcb850879372533e377680c2a9389dd421257b63d8"
+
+[[source]]
+file = "parquet-hadoop/src/main/java/org/apache/parquet/hadoop/example/GroupReadSupport.java"
+sha256 = "71a18e14d2bc8afd78c817f2456a9f77a34b1b5e176156bc58bdd857ecdfd535"
+
+[[source]]
+file = "parquet-hadoop/src/main/java/org/apache/parquet/format/converter/ParquetMetadataConverter.java"
+sha256 = "45ce3aa85aaca19f9aa0195be6b6a490994d3747d1c4160fb05d15be3db9998b"
+
+[[wrapper]]
+path = "test/conformance/n6/harnesses/common.py"
+sha256 = "8b48613a795deed37089f6dbfca8eb6ed18062ebfd907a4606c91ef3308776ad"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/parquet-java/build.sh"
+sha256 = "26023ade8fc0bd16433c2ac91ae8a64285e7c8fac68f8f818a7e788a63859973"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/parquet-java/check.sh"
+sha256 = "1b7a43e1d9c57784551fbc9decad07581a0cd9282a09939b457007cf83ad65e3"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/parquet-java/run.py"
+sha256 = "8cd6aa7e8efadf11a916e549330a6b3bd44a025d53f8cc55c3ecc82c15dcc85d"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/parquet-java/run.sh"
+sha256 = "68e2573a1636ca5424f3418f80221bd8af4fc660a985d58acbc1c464f197cf92"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/parquet-java/runtests.py"
+sha256 = "9f671343988d078752140f231cb81a8ea01b24fa164cb0a3671770e13361cd0d"
+
+[[wrapper]]
+path = "test/conformance/n6/oracles/parquet-java/src/org/julialang/parquet/n6/java/AuditMain.java"
+sha256 = "8be45f063510bbd04f95115e8572eb4cff40914b35f5f2334452edb3f423e60a"

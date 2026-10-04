@@ -1,0 +1,394 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://julialang.github.io/Parquet.jl/conformance/n6/evidence.schema.json",
+  "title": "Parquet.jl N6 normalized statistics evidence",
+  "oneOf": [
+    { "$ref": "#/$defs/run" },
+    { "$ref": "#/$defs/file" },
+    { "$ref": "#/$defs/columnStatistics" },
+    { "$ref": "#/$defs/caseResult" }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "caseId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    },
+    "capabilityId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)+$"
+    },
+    "relativePath": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)[A-Za-z0-9._+@=-]+(?:/[A-Za-z0-9._+@=-]+)*$"
+    },
+    "hexBytes": {
+      "type": ["string", "null"],
+      "pattern": "^(?:[0-9a-f]{2})*$"
+    },
+    "canonicalInt64": {
+      "type": "string",
+      "pattern": "^(?:0|-?[1-9][0-9]*)$"
+    },
+    "nullableInt64": {
+      "oneOf": [
+        { "$ref": "#/$defs/canonicalInt64" },
+        { "type": "null" }
+      ]
+    },
+    "physicalType": {
+      "enum": [
+        "BOOLEAN",
+        "INT32",
+        "INT64",
+        "INT96",
+        "FLOAT",
+        "DOUBLE",
+        "BYTE_ARRAY",
+        "FIXED_LEN_BYTE_ARRAY"
+      ]
+    },
+    "logicalType": {
+      "enum": [
+        "NONE",
+        "STRING",
+        "MAP",
+        "LIST",
+        "ENUM",
+        "DECIMAL",
+        "DATE",
+        "TIME",
+        "TIMESTAMP",
+        "INTEGER",
+        "UNKNOWN",
+        "JSON",
+        "BSON",
+        "UUID",
+        "FLOAT16",
+        "INTERVAL",
+        "VARIANT",
+        "GEOMETRY",
+        "GEOGRAPHY"
+      ]
+    },
+    "convertedType": {
+      "enum": [
+        "UTF8",
+        "MAP",
+        "MAP_KEY_VALUE",
+        "LIST",
+        "ENUM",
+        "DECIMAL",
+        "DATE",
+        "TIME_MILLIS",
+        "TIME_MICROS",
+        "TIMESTAMP_MILLIS",
+        "TIMESTAMP_MICROS",
+        "UINT_8",
+        "UINT_16",
+        "UINT_32",
+        "UINT_64",
+        "INT_8",
+        "INT_16",
+        "INT_32",
+        "INT_64",
+        "JSON",
+        "BSON",
+        "INTERVAL",
+        null
+      ]
+    },
+    "leafSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "physical_type",
+        "logical_type",
+        "converted_type",
+        "type_length",
+        "precision",
+        "scale",
+        "bit_width",
+        "is_signed",
+        "time_unit",
+        "is_adjusted_to_utc",
+        "crs",
+        "geography_algorithm"
+      ],
+      "properties": {
+        "physical_type": { "$ref": "#/$defs/physicalType" },
+        "logical_type": { "$ref": "#/$defs/logicalType" },
+        "converted_type": { "$ref": "#/$defs/convertedType" },
+        "type_length": {
+          "type": ["integer", "null"],
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "precision": { "type": ["integer", "null"], "minimum": 1 },
+        "scale": { "type": ["integer", "null"], "minimum": 0 },
+        "bit_width": { "enum": [8, 16, 32, 64, null] },
+        "is_signed": { "type": ["boolean", "null"] },
+        "time_unit": { "enum": ["MILLIS", "MICROS", "NANOS", null] },
+        "is_adjusted_to_utc": { "type": ["boolean", "null"] },
+        "crs": {
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            { "type": "null" }
+          ]
+        },
+        "geography_algorithm": {
+          "enum": ["SPHERICAL", "VINCENTY", "THOMAS", "ANDOYER", "KARNEY", null]
+        }
+      }
+    },
+    "columnOrder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "field_id", "wire_type", "header_hex"],
+      "properties": {
+        "state": {
+          "enum": [
+            "ABSENT",
+            "TYPE_ORDER",
+            "IEEE_754_TOTAL_ORDER",
+            "UNKNOWN",
+            "WRONG_TYPE",
+            "EMPTY"
+          ]
+        },
+        "field_id": {
+          "oneOf": [
+            { "type": "integer", "minimum": -32768, "maximum": 32767 },
+            { "type": "null" }
+          ]
+        },
+        "wire_type": {
+          "oneOf": [
+            { "type": "integer", "minimum": 0, "maximum": 16 },
+            { "type": "null" }
+          ]
+        },
+        "header_hex": {
+          "oneOf": [
+            { "type": "string", "pattern": "^(?:[0-9a-f]{2})+$" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "upstreamEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "file", "sha256"],
+      "properties": {
+        "evidence_id": { "$ref": "#/$defs/caseId" },
+        "file": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record",
+        "schema_version",
+        "evidence_id",
+        "producer",
+        "producer_version",
+        "source_revision",
+        "plan_sha256",
+        "capabilities_sha256",
+        "fixture_manifest_sha256",
+        "corpus_manifest_sha256",
+        "evidence_schema_sha256",
+        "toolchain_sha256",
+        "unsupported_cases"
+      ],
+      "properties": {
+        "record": { "const": "run" },
+        "schema_version": { "const": 2 },
+        "evidence_id": { "$ref": "#/$defs/caseId" },
+        "producer": { "type": "string", "minLength": 1 },
+        "producer_version": { "type": "string", "minLength": 1 },
+        "source_revision": { "type": "string", "minLength": 1 },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "capabilities_sha256": { "$ref": "#/$defs/sha256" },
+        "fixture_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "corpus_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "evidence_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "toolchain_sha256": { "$ref": "#/$defs/sha256" },
+        "unsupported_cases": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/caseId" },
+          "uniqueItems": true
+        },
+        "upstream_evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/upstreamEvidence" },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record",
+        "schema_version",
+        "case_id",
+        "file",
+        "sha256",
+        "size",
+        "footer_length",
+        "row_group_count",
+        "leaf_count",
+        "column_order_count",
+        "created_by_present",
+        "created_by"
+      ],
+      "properties": {
+        "record": { "const": "file" },
+        "schema_version": { "const": 2 },
+        "case_id": { "$ref": "#/$defs/caseId" },
+        "file": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 12 },
+        "footer_length": { "type": "integer", "minimum": 1 },
+        "row_group_count": { "type": "integer", "minimum": 0 },
+        "leaf_count": { "type": "integer", "minimum": 0 },
+        "column_order_count": { "type": ["integer", "null"], "minimum": 0 },
+        "created_by_present": { "type": "boolean" },
+        "created_by": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "created_by_present": { "const": false } } },
+          "then": { "properties": { "created_by": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "created_by_present": { "const": true } } },
+          "then": { "properties": { "created_by": { "type": "string" } } }
+        }
+      ]
+    },
+    "columnStatistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record",
+        "schema_version",
+        "case_id",
+        "file",
+        "row_group",
+        "leaf",
+        "path",
+        "leaf_schema",
+        "column_order",
+        "num_values",
+        "has_statistics",
+        "deprecated_min_hex",
+        "deprecated_max_hex",
+        "min_value_hex",
+        "max_value_hex",
+        "is_min_value_exact",
+        "is_max_value_exact",
+        "null_count",
+        "distinct_count",
+        "nan_count",
+        "unknown_statistics_field_ids"
+      ],
+      "properties": {
+        "record": { "const": "column_statistics" },
+        "schema_version": { "const": 2 },
+        "case_id": { "$ref": "#/$defs/caseId" },
+        "file": { "$ref": "#/$defs/relativePath" },
+        "row_group": { "type": "integer", "minimum": 0 },
+        "leaf": { "type": "integer", "minimum": 0 },
+        "path": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "leaf_schema": { "$ref": "#/$defs/leafSchema" },
+        "column_order": { "$ref": "#/$defs/columnOrder" },
+        "num_values": { "$ref": "#/$defs/canonicalInt64" },
+        "has_statistics": { "type": "boolean" },
+        "deprecated_min_hex": { "$ref": "#/$defs/hexBytes" },
+        "deprecated_max_hex": { "$ref": "#/$defs/hexBytes" },
+        "min_value_hex": { "$ref": "#/$defs/hexBytes" },
+        "max_value_hex": { "$ref": "#/$defs/hexBytes" },
+        "is_min_value_exact": { "type": ["boolean", "null"] },
+        "is_max_value_exact": { "type": ["boolean", "null"] },
+        "null_count": { "$ref": "#/$defs/nullableInt64" },
+        "distinct_count": { "$ref": "#/$defs/nullableInt64" },
+        "nan_count": { "$ref": "#/$defs/nullableInt64" },
+        "unknown_statistics_field_ids": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": -32768, "maximum": 32767 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "caseResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record",
+        "schema_version",
+        "case_id",
+        "capability_id",
+        "digest_contract",
+        "status",
+        "expected_sha256",
+        "actual_sha256",
+        "detail"
+      ],
+      "properties": {
+        "record": { "const": "case_result" },
+        "schema_version": { "const": 2 },
+        "case_id": { "$ref": "#/$defs/caseId" },
+        "capability_id": { "$ref": "#/$defs/capabilityId" },
+        "digest_contract": { "$ref": "#/$defs/caseId" },
+        "status": { "enum": ["PASS", "FAIL", "UNSUPPORTED"] },
+        "expected_sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "actual_sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "detail": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "PASS" } } },
+          "then": {
+            "properties": {
+              "expected_sha256": { "$ref": "#/$defs/sha256" },
+              "actual_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "UNSUPPORTED" } } },
+          "then": {
+            "properties": {
+              "expected_sha256": { "type": "null" },
+              "actual_sha256": { "type": "null" },
+              "detail": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

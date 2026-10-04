@@ -1,233 +1,77 @@
-# Parquet
+# Parquet.jl
 
-[![CI](https://github.com/JuliaIO/Parquet.jl/actions/workflows/ci.yaml/badge.svg)](https://github.com/JuliaIO/Parquet.jl/actions/workflows/ci.yaml)
-[![codecov](https://codecov.io/gh/JuliaIO/Parquet.jl/graph/badge.svg?token=qchPEYSd5Q)](https://codecov.io/gh/JuliaIO/Parquet.jl)
+Parquet.jl is being rebuilt as a pure-Julia implementation of the Apache Parquet format.
 
-
-See also alternatives: [Parquet2.jl](https://gitlab.com/ExpandingMan/Parquet2.jl); We suggest also considering [DuckDB.jl](https://github.com/duckdb/duckdb) which is backed by a mature and well-maintained C++ library and has query support (see also [QuackIO.jl](https://github.com/JuliaAPlavin/QuackIO.jl) for a simple convenience wrapper of this).
-
-## Reader
-
-A [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet) or dataset can be loaded using the `read_parquet` function. A parquet dataset is a directory with multiple parquet files, each of which is a partition belonging to the dataset.
-
-`read_parquet(path; kwargs...)` returns a `Parquet.Table` or `Parquet.Dataset`, which is the table contained in the parquet file or dataset in an Tables.jl compatible format.
-
-Options:
-- `rows`: The row range to iterate through, all rows by default. Applicable only when reading a single file.
-- `filter`: Filter function to apply while loading only a subset of partitions from a dataset. The path to the partition is provided as a parameter.
-- `batchsize`: Maximum number of rows to read in each batch (default: row count of first row group). Applied only when reading a single file, and to each file when reading a dataset.
-- `use_threads`: Whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
-- `column_generator`: Function called for a column present in the table's schema but absent from its data file. Receives the table, column index, and requested column length. For datasets, the default determines values from the file path.
-
-The returned object is a Tables.jl compatible Table and can be converted to other forms, e.g. a `DataFrames.DataFrame` via
-
-```julia
-using Parquet, DataFrames
-df = DataFrame(read_parquet(path))
-```
-
-Partitions in a parquet file or dataset can also be iterated over using an iterator returned by the `Tables.partitions` method.
+The `rewrite/1.0` branch is development work. It is not ready for data use. The
+current foundation contains bounded byte sources, footer framing, a pure-Julia
+Compact Protocol runtime, generated 2.13.0 metadata types, schema-tree and level
+validation, and bounded encoding kernels. The current vertical slice reads flat Data
+Page V1 and V2 files with PLAIN, dictionary, delta, Boolean RLE, and BYTE_STREAM_SPLIT
+values. It writes every stable nondeprecated flat value encoding through
+`Parquet.Table` and `Parquet.write`, including a name-based per-column policy. It
+supports UNCOMPRESSED, SNAPPY, GZIP, BROTLI, ZSTD, and LZ4_RAW pages, plus deprecated
+Hadoop and raw-block LZ4 input. The Stage 4 scalar layer reads STRING, ENUM, UUID, JSON,
+BSON, DATE, TIME, TIMESTAMP, INTEGER, DECIMAL, FLOAT16, INTERVAL, and UNKNOWN values. It
+writes these annotations from unambiguous Julia values or tagged package values, and a
+`Parquet.Table` rewrite preserves the source scalar schema and file key-value
+metadata. The nested implementation reads and writes recursive structs, lists, and
+maps, including null containers, empty containers, and null elements. The reader also
+handles the legacy list and map layouts covered by the pinned Apache corpus. The
+writer emits row-group statistics and offset indexes by default; the reader checks
+page-index declarations and offset-index contents. Scan pushdown, datasets, bloom
+filters, encryption, Variant, and geospatial modules remain target work. LZO and INT96
+are not supported and are not planned: every LZO implementation is GPL-2, and INT96 is
+deprecated in the format.
+`NTuple{N,UInt8}` writer columns map to FIXED_LEN_BYTE_ARRAY, and `Parquet.Table`
+preserves their runtime width across later writes.
 
 ```julia
-using Parquet, DataFrames
-for partition in Tables.partitions(read_parquet(path))
-    df = DataFrame(partition)
-    ...
-end
+Parquet.write("output.parquet", table; codec=:zstd, dictionary=true,
+    encoding=(id=:delta_binary_packed, measurement=:byte_stream_split),
+    pageversion=:v2, statistics=true)
 ```
 
-### Lower Level Reader
+An `encoding` Symbol or string applies to every column. A `Pair`, `NamedTuple`, or
+dictionary supplies exact column-name overrides. Unlisted columns remain PLAIN, or
+use adaptive dictionary encoding when `dictionary=true`. Use `:dictionary` for an
+adaptive dictionary override on one column.
 
-Load a [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet). Only metadata is read initially, data is loaded in chunks on demand. (Note: [ParquetFiles.jl](https://github.com/queryverse/ParquetFiles.jl) also provides load support for Parquet files under the FileIO.jl package.)
+The writer emits row-group statistics by default. Set `statistics=false` to omit
+them. `Parquet.Limits(max_statistics_value_bytes=4096)` limits each raw minimum or
+maximum value before the writer copies it into file metadata. Counts and column
+order remain available when a bound is too large to emit.
 
-`Parquet.File` represents a Parquet file at `path` open for reading.
-
-```
-Parquet.File(path) => Parquet.File
-```
-
-`Parquet.File` keeps a handle to the open file and the file metadata and also holds a weakly referenced cache of page data read. If the parquet file references other files in its metadata, they will be opened as and when required for reading and closed when they are not needed anymore.
-
-The `close` method closes the reader, releases open files and makes cached internal data structures available for GC. A `Parquet.File` instance must not be used once closed.
+Use `Parquet.LogicalColumn` when the Julia element type does not contain the complete
+Parquet schema. It can select ENUM, a TIME or TIMESTAMP unit and UTC flag, or DECIMAL
+precision and scale. It also supplies a schema for empty and all-null columns.
 
 ```julia
-julia> using Parquet
+using Dates
 
-julia> filename = "customer.impala.parquet";
-
-julia> parquetfile = Parquet.File(filename)
-Parquet file: customer.impala.parquet
-    version: 1
-    nrows: 150000
-    created by: impala version 1.2-INTERNAL (build a462ec42e550c75fccbff98c720f37f3ee9d55a3)
-    cached: 0 column chunks
+values = Union{Missing,Dates.Time}[missing, Dates.Time(12)]
+time = Parquet.LogicalColumn(values, :time; unit=:micros, adjusted=false)
+Parquet.write("time.parquet", (; time))
 ```
 
-Examine the schema.
+`Parquet.JSONValue` validates [RFC 8259](https://www.rfc-editor.org/info/rfc8259/)
+syntax. `Parquet.BSONValue` validates the
+[BSON 1.1 document grammar](https://bsonspec.org/spec.html). Both validators are
+bounded and do not build an object tree. Binary DECIMAL conversion has its own
+`Limits.max_decimal_bytes` resource bound.
 
-```julia
-julia> nrows(parquetfile)
-150000
+## Target
 
-julia> ncols(parquetfile)
-8
+- Apache Parquet format 2.13.0 is the stable contract.
+- Post-2.13 features such as ALP remain experimental until they are released.
+- The reader will accept all stable encodings and codecs, including deprecated input.
+- The writer will emit all nondeprecated stable encodings and codecs.
+- The core will not depend on Arrow.jl or a native Thrift compiler.
+- The public API will remain small and namespaced under `Parquet`.
 
-julia> colnames(parquetfile)
-8-element Array{Array{String,1},1}:
- ["c_custkey"]
- ["c_name"]
- ["c_address"]
- ["c_nationkey"]
- ["c_phone"]
- ["c_acctbal"]
- ["c_mktsegment"]
- ["c_comment"]
+Support is complete only after valid read coverage, valid write coverage when applicable, malformed-input coverage, and confirmation by an independent Parquet implementation.
 
-julia> schema(parquetfile)
-Schema:
-    schema {
-      optional INT64 c_custkey
-      optional BYTE_ARRAY c_name
-      optional BYTE_ARRAY c_address
-      optional INT32 c_nationkey
-      optional BYTE_ARRAY c_phone
-      optional DOUBLE c_acctbal
-      optional BYTE_ARRAY c_mktsegment
-      optional BYTE_ARRAY c_comment
-    }
-```
+See [the development architecture](docs/dev/architecture.md) and [the machine-readable feature ledger](test/conformance/features.toml).
 
-The reader performs logical type conversions automatically for String (from byte arrays), decimals (from fixed length byte arrays) and DateTime (from Int96). It depends on the converted type being populated correctly in the file metadata to detect such conversions. To take care of files where such metadata is not populated, an optional `map_logical_types` argument can be provided while opening the parquet file. The `map_logical_types` value must map column names to a tuple of return type and converter functon. Return types of String and DateTime are supported as of now, and default implementations for them are included in the package.
+## License
 
-```julia
-julia> mapping = Dict(["column_name"] => (String, Parquet.logical_string));
-
-julia> parquetfile = Parquet.File("filename"; map_logical_types=mapping);
-```
-
-The reader will interpret logical types based on the `map_logical_types` provided. The following logical type mapping methods are available in the Parquet package.
-
-- `logical_timestamp(v; offset=Dates.Second(0))`: Applicable for timestamps that are `INT96` values. This converts the data read as `Int128` types to `DateTime` types. The encoded time of day starts at midnight; `offset` is applied after decoding.
-- `logical_string(v)`: Applicable for strings that are `BYTE_ARRAY` values. Without this, they are represented in a `Vector{UInt8}` type. With this they are converted to `String` types.
-- `logical_decimal(v, precision, scale; use_float=true)`: Applicable for reading decimals from `FIXED_LEN_BYTE_ARRAY`, `INT64`, or `INT32` values. This converts the data read as those types to `Integer`, `Float64` or `Decimal` of the given precision and scale, depending on the options provided.
-
-Variants of these methods or custom methods can also be applied by caller.
-
-### BatchedColumnsCursor
-
-Create cursor to iterate over batches of column values. Each iteration returns a named tuple of column names with batch of column values. Files with nested schemas can not be read with this cursor.
-
-```julia
-BatchedColumnsCursor(parquetfile::Parquet.File; kwargs...)
-```
-
-Cursor options:
-- `rows`: the row range to iterate through, all rows by default.
-- `batchsize`: maximum number of rows to read in each batch (default: row count of first row group).
-- `reusebuffer`: boolean to indicate whether to reuse the buffers with every iteration; if each iteration processes the batch and does not need to refer to the same data buffer again, then setting this to `true` reduces GC pressure and can help significantly while processing large files.
-- `use_threads`: whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
-
-Example:
-
-```julia
-julia> typemap = Dict(["c_name"]=>(String,Parquet.logical_string), ["c_address"]=>(String,Parquet.logical_string));
-
-julia> parquetfile = Parquet.File("customer.impala.parquet"; map_logical_types=typemap);
-
-julia> cc = BatchedColumnsCursor(parquetfile)
-Batched Columns Cursor on customer.impala.parquet
-    rows: 1:150000
-    batches: 1
-    cols: c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment
-
-julia> batchvals, state = iterate(cc);
-
-julia> propertynames(batchvals)
-(:c_custkey, :c_name, :c_address, :c_nationkey, :c_phone, :c_acctbal, :c_mktsegment, :c_comment)
-
-julia> length(batchvals.c_name)
-150000
-
-julia> batchvals.c_name[1:5]
-5-element Array{Union{Missing, String},1}:
- "Customer#000000001"
- "Customer#000000002"
- "Customer#000000003"
- "Customer#000000004"
- "Customer#000000005"
-```
-
-### RecordCursor
-
-Create cursor to iterate over records. In parallel mode, multiple remote cursors can be created and iterated on in parallel.
-
-```julia
-RecordCursor(parquetfile::Parquet.File; kwargs...)
-```
-
-Cursor options:
-- `rows`: the row range to iterate through, all rows by default.
-- `colnames`: the column names to retrieve; all by default
-
-Example:
-
-```julia
-julia> typemap = Dict(["c_name"]=>(String,Parquet.logical_string), ["c_address"]=>(String,Parquet.logical_string));
-
-julia> parquetfile = Parquet.File("customer.impala.parquet"; map_logical_types=typemap);
-
-julia> rc = RecordCursor(parquetfile)
-Record Cursor on customer.impala.parquet
-    rows: 1:150000
-    cols: c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment
-
-julia> records = collect(rc);
-
-julia> length(records)
-150000
-
-julia> first_record = first(records);
-
-julia> isa(first_record, NamedTuple)
-true
-
-julia> propertynames(first_record)
-(:c_custkey, :c_name, :c_address, :c_nationkey, :c_phone, :c_acctbal, :c_mktsegment, :c_comment)
-
-julia> first_record.c_custkey
-1
-
-julia> first_record.c_name
-"Customer#000000001"
-
-julia> first_record.c_address
-"IVhzIApeRb ot,c,E"
-```
-
-## Writer
-
-You can write any Tables.jl column-accessible table that contains columns of these types and their union with `Missing`: `Int32`, `Int64`, `String`, `Bool`, `Float32`, `Float64`.
-
-However, `CategoricalArray`s are not yet supported. Furthermore, these types are not yet supported: `Int96`, `Int128`, `Date`, and `DateTime`.
-
-### Writer Example
-
-```julia
-tbl = (
-    int32 = Int32.(1:1000),
-    int64 = Int64.(1:1000),
-    float32 = Float32.(1:1000),
-    float64 = Float64.(1:1000),
-    bool = rand(Bool, 1000),
-    string = [randstring(8) for i in 1:1000],
-    int32m = rand([missing, 1:100...], 1000),
-    int64m = rand([missing, 1:100...], 1000),
-    float32m = rand([missing, Float32.(1:100)...], 1000),
-    float64m = rand([missing, Float64.(1:100)...], 1000),
-    boolm = rand([missing, true, false], 1000),
-    stringm = rand([missing, "abc", "def", "ghi"], 1000)
-)
-
-file = tempname()*".parquet"
-write_parquet(file, tbl)
-```
+Parquet.jl is available under the MIT license.

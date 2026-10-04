@@ -1,0 +1,523 @@
+matrix_version = 2
+plan_sha256 = "15adf34af765a3300d8a49ced73532ed02b7e4edee5764453c58e53fcf12c304"
+fixture_manifest = "fixtures.toml"
+unsupported_is_pass = false
+statuses = ["verified", "planned", "unsupported", "not_assessed"]
+
+[[capability]]
+id = "wire.column-order.type"
+kind = "wire"
+
+[[capability]]
+id = "wire.column-order.ieee"
+kind = "wire"
+
+[[capability]]
+id = "wire.column-order.empty"
+kind = "wire"
+
+[[capability]]
+id = "wire.statistics.deprecated-bounds"
+kind = "wire"
+
+[[capability]]
+id = "wire.statistics.modern-bounds"
+kind = "wire"
+
+[[capability]]
+id = "wire.statistics.exactness"
+kind = "wire"
+
+[[capability]]
+id = "wire.statistics.counts"
+kind = "wire"
+
+[[capability]]
+id = "wire.statistics.nan-count"
+kind = "wire"
+
+[[capability]]
+id = "semantic.type-order"
+kind = "semantic"
+
+[[capability]]
+id = "semantic.ieee-total-order"
+kind = "semantic"
+
+[[capability]]
+id = "semantic.logical-order"
+kind = "semantic"
+
+[[capability]]
+id = "semantic.count-state"
+kind = "semantic"
+
+[[capability]]
+id = "semantic.producer-trust"
+kind = "semantic"
+
+[[capability]]
+id = "read.logical-values"
+kind = "runtime"
+
+[[capability]]
+id = "read.statistics-metadata"
+kind = "runtime"
+
+[[capability]]
+id = "read.parquet-metadata-view"
+kind = "runtime"
+
+[[capability]]
+id = "write.type-order"
+kind = "runtime"
+
+[[capability]]
+id = "write.statistics-disabled"
+kind = "runtime"
+
+[[capability]]
+id = "write.statistics-limit"
+kind = "runtime"
+
+[[capability]]
+id = "read.no-pruning"
+kind = "runtime"
+
+[[capability]]
+id = "compat.legacy-statistics"
+kind = "compatibility"
+
+[[authority]]
+id = "parquet-format"
+kind = "normative-specification"
+version = "2.13.0"
+revision = "c47e2a66e88943fc46fde1b028a9432f14fdf5c0"
+platforms = ["source"]
+toolchain_sha256 = []
+
+[[authority.claim]]
+capability = "semantic.type-order"
+status = "verified"
+cases = ["atomic-bound-family", "plain-bound-decoding"]
+scope = "Pinned IDL and LogicalTypes.md rules only."
+
+[[authority.claim]]
+capability = "semantic.ieee-total-order"
+status = "verified"
+cases = ["ieee-total-order", "float16-exhaustive"]
+scope = "Pinned Parquet 2.13 ColumnOrder member and statistics rules only."
+
+[[authority.claim]]
+capability = "wire.statistics.nan-count"
+status = "verified"
+cases = ["count-state-machine", "ieee-total-order"]
+scope = "Pinned field 9 definition only; no runtime claim."
+
+[[authority]]
+id = "parquet-testing"
+kind = "apache-corpus"
+version = "snapshot"
+revision = "09f3cdbde45302f0f0c689c950e465e98a9df960"
+platforms = ["data"]
+toolchain_sha256 = []
+
+[[authority.claim]]
+capability = "wire.statistics.modern-bounds"
+status = "verified"
+cases = ["apache-binary", "apache-binary-truncated-min-max", "apache-bson", "apache-fixed-length-byte-array", "apache-float16-nonzeros-and-nans", "apache-float16-zeros-and-nans", "apache-floating-orders-nan-count", "apache-int32-with-null-pages", "apache-int96-timestamp-order", "apache-json", "apache-nan-in-stats", "apache-rle-boolean-encoding"]
+scope = "Only the exact files in fixtures.toml."
+
+[[authority.claim]]
+capability = "wire.statistics.deprecated-bounds"
+status = "verified"
+cases = ["apache-fixed-length-decimal", "apache-fixed-length-decimal-legacy", "apache-float16-nonzeros-and-nans", "apache-float16-zeros-and-nans", "apache-floating-orders-nan-count", "apache-int32-decimal", "apache-int32-with-null-pages", "apache-int64-decimal", "apache-nan-in-stats", "apache-rle-boolean-encoding"]
+scope = "Only the exact files in fixtures.toml."
+
+[[authority.claim]]
+capability = "wire.statistics.exactness"
+status = "verified"
+cases = ["apache-binary-truncated-min-max"]
+scope = "Modern bound exactness fields in one pinned fixture."
+
+[[authority.claim]]
+capability = "wire.statistics.nan-count"
+status = "verified"
+cases = ["apache-floating-orders-nan-count"]
+scope = "Field 9 presence in one pinned fixture."
+
+[[authority.claim]]
+capability = "wire.column-order.ieee"
+status = "verified"
+cases = ["apache-floating-orders-nan-count"]
+scope = "IEEE order member presence in one pinned fixture."
+
+[[authority]]
+id = "n6-independent-model"
+kind = "test-owned-independent-semantics"
+version = "1"
+revision = "edd828a992b801f147b14fe9f52560d8080e20167b1e16129e501acb97a03aa4"
+platforms = ["julia-1.10", "julia-1.12"]
+toolchain_sha256 = ["6f687953e48958fc6596962379691d1c8a1720d3a9ff39c1e3113888e43bd8ae", "c784c03af8ab52e48aa6f57ce8aa06a3c9160671054301ab6c3dfebf2e582525", "9ad38bea81ecace044a4bdef2a0246dee94cb8a44c9420809cc00f9872651c64", "64bea40b05399d9e0bbdf242aff9c27cde36835129a660d5f51f1cade58a0e36"]
+
+[[authority.claim]]
+capability = "semantic.type-order"
+status = "verified"
+cases = ["plain-bound-decoding", "atomic-bound-family", "type-order-float"]
+scope = "Independent metadata-like values; no Parquet.jl import."
+
+[[authority.claim]]
+capability = "semantic.ieee-total-order"
+status = "verified"
+cases = ["ieee-total-order", "float16-exhaustive", "independent-extrema"]
+scope = "Raw-bit Float16, Float32, and Float64 model."
+
+[[authority.claim]]
+capability = "semantic.logical-order"
+status = "verified"
+cases = ["logical-bound-validity", "decimal-order"]
+scope = "Already validated leaf schemas only."
+
+[[authority.claim]]
+capability = "semantic.count-state"
+status = "verified"
+cases = ["count-state-machine", "atomic-bound-family"]
+scope = "Independent count and bound-family state machine."
+
+[[authority.claim]]
+capability = "semantic.producer-trust"
+status = "verified"
+cases = ["producer-parquet-251", "producer-old-order"]
+scope = "Pinned parquet-java and Arrow C++ policies."
+
+[[authority.claim]]
+capability = "semantic.logical-order"
+status = "verified"
+cases = ["apache-binary", "apache-bson", "apache-byte-array-decimal", "apache-fixed-length-byte-array", "apache-fixed-length-decimal", "apache-fixed-length-decimal-legacy", "apache-float16-nonzeros-and-nans", "apache-float16-zeros-and-nans", "apache-int32-decimal", "apache-int64-decimal", "apache-json"]
+scope = "Frozen combination with normalized raw leaf metadata."
+
+[[authority.claim]]
+capability = "semantic.type-order"
+status = "verified"
+cases = ["apache-float16-nonzeros-and-nans", "apache-float16-zeros-and-nans", "apache-floating-orders-nan-count", "apache-int32-with-null-pages", "apache-nan-in-stats", "apache-rle-boolean-encoding"]
+scope = "Frozen combination with normalized raw statistics."
+
+[[authority.claim]]
+capability = "semantic.ieee-total-order"
+status = "verified"
+cases = ["apache-floating-orders-nan-count"]
+scope = "Frozen combination with normalized raw IEEE evidence."
+
+[[authority.claim]]
+capability = "semantic.count-state"
+status = "verified"
+cases = ["apache-floating-orders-nan-count", "apache-int32-with-null-pages", "apache-single-nan"]
+scope = "Frozen combination with normalized raw counts."
+
+[[authority]]
+id = "n6-raw-java"
+kind = "test-owned-independent-wire-scanner"
+version = "parquet-2.13-raw-footer-v3"
+revision = "c47e2a66e88943fc46fde1b028a9432f14fdf5c0"
+platforms = ["macos-15-arm64"]
+toolchain_sha256 = ["8608303c0624c5fb9692dc007fb4930c72af744a8a7355a19e8c607b3403f629"]
+
+[[authority.claim]]
+capability = "wire.column-order.type"
+status = "verified"
+cases = ["apache-binary", "apache-binary-truncated-min-max", "apache-bson", "apache-fixed-length-byte-array", "apache-float16-nonzeros-and-nans", "apache-float16-zeros-and-nans", "apache-floating-orders-nan-count", "apache-int32-with-null-pages", "apache-json", "apache-nan-in-stats", "apache-single-nan"]
+scope = "Raw Compact-Thrift field headers in the 20 pinned fixtures."
+
+[[authority.claim]]
+capability = "wire.column-order.ieee"
+status = "verified"
+cases = ["apache-floating-orders-nan-count"]
+scope = "Raw Compact-Thrift field 2 in one pinned fixture."
+
+[[authority.claim]]
+capability = "wire.column-order.empty"
+status = "verified"
+cases = ["apache-int96-timestamp-order"]
+scope = "Empty ColumnOrder union in one pinned fixture."
+
+[[authority.claim]]
+capability = "wire.statistics.deprecated-bounds"
+status = "verified"
+cases = ["apache-fixed-length-decimal", "apache-fixed-length-decimal-legacy", "apache-float16-nonzeros-and-nans", "apache-float16-zeros-and-nans", "apache-floating-orders-nan-count", "apache-int32-decimal", "apache-int32-with-null-pages", "apache-int64-decimal", "apache-nan-in-stats", "apache-rle-boolean-encoding"]
+scope = "Raw Statistics fields 1 and 2 in the exact Apache fixtures."
+
+[[authority.claim]]
+capability = "wire.statistics.modern-bounds"
+status = "verified"
+cases = ["apache-binary", "apache-binary-truncated-min-max", "apache-bson", "apache-fixed-length-byte-array", "apache-float16-nonzeros-and-nans", "apache-float16-zeros-and-nans", "apache-floating-orders-nan-count", "apache-int32-with-null-pages", "apache-int96-timestamp-order", "apache-json", "apache-nan-in-stats", "apache-rle-boolean-encoding"]
+scope = "Raw Statistics fields 5 and 6 in the exact Apache fixtures."
+
+[[authority.claim]]
+capability = "wire.statistics.exactness"
+status = "verified"
+cases = ["apache-binary-truncated-min-max"]
+scope = "Raw Statistics fields 7 and 8 in one exact Apache fixture."
+
+[[authority.claim]]
+capability = "wire.statistics.counts"
+status = "verified"
+cases = ["apache-binary", "apache-binary-truncated-min-max", "apache-bson", "apache-fixed-length-byte-array", "apache-fixed-length-decimal", "apache-fixed-length-decimal-legacy", "apache-float16-nonzeros-and-nans", "apache-float16-zeros-and-nans", "apache-floating-orders-nan-count", "apache-int32-decimal", "apache-int32-with-null-pages", "apache-int64-decimal", "apache-int96-timestamp-order", "apache-json", "apache-nan-in-stats", "apache-rle-boolean-encoding", "apache-single-nan"]
+scope = "Raw Statistics fields 3, 4, and 9 in the exact fixtures."
+
+[[authority.claim]]
+capability = "wire.statistics.nan-count"
+status = "verified"
+cases = ["apache-floating-orders-nan-count"]
+scope = "Raw Statistics field 9 in one exact Apache fixture."
+
+[[authority.claim]]
+capability = "semantic.type-order"
+status = "unsupported"
+cases = ["atomic-bound-family"]
+scope = "The scanner records wire facts and applies no comparator semantics."
+
+[[authority.claim]]
+capability = "wire.column-order.type"
+status = "verified"
+cases = ["julia-writer-type-order", "julia-writer-undefined-order", "julia-writer-oversized-bounds", "julia-writer-nested-row-groups"]
+scope = "Raw validation of the exact Julia-writer fixtures."
+
+[[authority.claim]]
+capability = "wire.column-order.ieee"
+status = "verified"
+cases = ["julia-writer-ieee-order"]
+scope = "Raw validation of the exact Julia floating writer output."
+
+[[authority.claim]]
+capability = "wire.statistics.nan-count"
+status = "verified"
+cases = ["julia-writer-ieee-order"]
+scope = "Raw field 9 validation of the exact Julia floating writer output."
+
+[[authority.claim]]
+capability = "wire.statistics.modern-bounds"
+status = "verified"
+cases = ["julia-writer-type-order", "julia-writer-ieee-order", "julia-writer-nested-row-groups"]
+scope = "Raw modern bounds in the exact Julia-writer fixtures."
+
+[[authority.claim]]
+capability = "wire.statistics.exactness"
+status = "verified"
+cases = ["julia-writer-type-order", "julia-writer-ieee-order", "julia-writer-nested-row-groups"]
+scope = "Raw modern exactness fields in the exact Julia-writer fixtures."
+
+[[authority.claim]]
+capability = "wire.statistics.counts"
+status = "verified"
+cases = ["julia-writer-type-order", "julia-writer-ieee-order", "julia-writer-undefined-order", "julia-writer-oversized-bounds", "julia-writer-nested-row-groups"]
+scope = "Raw counts in the exact Julia-writer fixtures."
+
+[[authority]]
+id = "parquet-jl"
+kind = "implementation-under-test"
+version = "1.0.0-DEV"
+revision = "69780a5df13fd16916b01960ebb9f8d0631762c2f1727aa3f350a178d1663e37"
+platforms = ["julia-1.10", "julia-1.12"]
+toolchain_sha256 = ["6f687953e48958fc6596962379691d1c8a1720d3a9ff39c1e3113888e43bd8ae", "9ad38bea81ecace044a4bdef2a0246dee94cb8a44c9420809cc00f9872651c64", "ff4a6b4b8386dadd628f58916c074b34a01a80c5f3c49e7f498757c8ff438958"]
+
+[[authority.claim]]
+capability = "write.type-order"
+status = "verified"
+cases = ["julia-writer-type-order", "julia-writer-ieee-order", "julia-writer-undefined-order", "julia-writer-oversized-bounds", "julia-writer-nested-row-groups"]
+scope = "Exact N6 writer fixtures produced by the implementation under test."
+
+[[authority.claim]]
+capability = "write.statistics-disabled"
+status = "verified"
+cases = ["julia-writer-statistics-disabled"]
+scope = "No statistics or column_orders when statistics=false."
+
+[[authority.claim]]
+capability = "write.statistics-limit"
+status = "verified"
+cases = ["julia-writer-oversized-bounds"]
+scope = "Counts remain while both oversized bounds are omitted."
+
+[[authority.claim]]
+capability = "semantic.type-order"
+status = "verified"
+cases = ["julia-writer-type-order", "julia-writer-undefined-order", "julia-writer-nested-row-groups"]
+scope = "Production interpretation must agree with the independent model."
+
+[[authority.claim]]
+capability = "semantic.logical-order"
+status = "verified"
+cases = ["julia-writer-type-order"]
+scope = "Stable logical leaf orders must agree with the independent model."
+
+[[authority.claim]]
+capability = "semantic.ieee-total-order"
+status = "verified"
+cases = ["julia-writer-ieee-order"]
+scope = "Production floating extrema must agree with the independent model."
+
+[[authority.claim]]
+capability = "semantic.count-state"
+status = "verified"
+cases = ["julia-writer-ieee-order", "julia-writer-nested-row-groups"]
+scope = "Nested leaf-entry and dense-value counts."
+
+[[authority.claim]]
+capability = "semantic.producer-trust"
+status = "verified"
+cases = ["julia-reader-untrusted-producer"]
+scope = "Affected bounds become unknown without erasing valid counts."
+
+[[authority.claim]]
+capability = "compat.legacy-statistics"
+status = "verified"
+cases = ["julia-reader-untrusted-producer"]
+scope = "Modern and deprecated producer-policy families remain separate."
+
+[[authority.claim]]
+capability = "read.no-pruning"
+status = "verified"
+cases = ["julia-reader-no-pruning-absent", "julia-reader-no-pruning-trusted", "julia-reader-no-pruning-untrusted", "julia-reader-no-pruning-oversized", "julia-reader-no-pruning-invalid"]
+scope = "N6-A reads identical bodies and values for every statistics trust state."
+
+[[authority.claim]]
+capability = "read.logical-values"
+status = "verified"
+cases = ["julia-writer-type-order", "julia-writer-ieee-order", "julia-writer-statistics-disabled", "julia-writer-nested-row-groups", "julia-reader-untrusted-producer", "julia-reader-no-pruning-absent", "julia-reader-no-pruning-trusted", "julia-reader-no-pruning-untrusted", "julia-reader-no-pruning-oversized", "julia-reader-no-pruning-invalid"]
+scope = "Julia reads every generated N6 fixture without value changes."
+
+[[authority]]
+id = "parquet-java"
+kind = "external-implementation"
+version = "1.17.1"
+revision = "78a8d3230eb4769db93de5f2f2e18363c04cae81"
+platforms = ["macos-15-arm64"]
+toolchain_sha256 = ["a4459b555778b1979de10510fd5291372ffb9f41166539868ce3639494d5a452"]
+
+[[authority.claim]]
+capability = "read.logical-values"
+status = "verified"
+cases = ["apache-alltypes-dictionary", "apache-alltypes-plain", "apache-binary", "apache-bson", "apache-byte-array-decimal", "apache-fixed-length-byte-array", "apache-fixed-length-decimal", "apache-fixed-length-decimal-legacy", "apache-int32-decimal", "apache-int32-with-null-pages", "apache-int64-decimal", "apache-json", "apache-rle-boolean-encoding"]
+scope = "Only listed N6 fixtures and values supported by the high-level API."
+
+[[authority.claim]]
+capability = "wire.column-order.type"
+status = "verified"
+cases = ["apache-binary", "apache-binary-truncated-min-max", "apache-bson", "apache-fixed-length-byte-array", "apache-float16-nonzeros-and-nans", "apache-float16-zeros-and-nans", "apache-int32-with-null-pages", "apache-json", "apache-nan-in-stats", "apache-single-nan"]
+scope = "Pinned Parquet Java metadata API independently reports TYPE_ORDER for every listed leaf."
+
+[[authority.claim]]
+capability = "compat.legacy-statistics"
+status = "verified"
+cases = ["apache-fixed-length-decimal", "apache-fixed-length-decimal-legacy", "apache-int32-decimal", "apache-int64-decimal", "producer-parquet-251"]
+scope = "Pinned high-level API and producer-version policy."
+
+[[authority.claim]]
+capability = "wire.statistics.nan-count"
+status = "unsupported"
+cases = ["apache-floating-orders-nan-count"]
+scope = "Embedded Parquet format 2.12 does not expose field 9."
+
+[[authority]]
+id = "arrow-rs"
+kind = "external-implementation"
+version = "59.2.0"
+revision = "782e5a685501a9db6cc8e9a3b7cbff894940c47a"
+platforms = ["macos-15-arm64", "linux-amd64-offline-harness"]
+toolchain_sha256 = ["c141bde2eea6442bcd8b3c7ad9f8aeadb04e7ad1080f5dc7b7cba0a2dae4cfe5"]
+
+[[authority.claim]]
+capability = "read.logical-values"
+status = "verified"
+cases = ["apache-alltypes-dictionary", "apache-alltypes-plain", "apache-binary", "apache-bson", "apache-byte-array-decimal", "apache-fixed-length-byte-array", "apache-fixed-length-decimal", "apache-fixed-length-decimal-legacy", "apache-int32-decimal", "apache-int32-with-null-pages", "apache-int64-decimal", "apache-json", "apache-rle-boolean-encoding"]
+scope = "Only listed N6 fixtures and values supported by Arrow Rust 59.2.0."
+
+[[authority.claim]]
+capability = "wire.column-order.type"
+status = "verified"
+cases = ["apache-binary", "apache-binary-truncated-min-max", "apache-bson", "apache-fixed-length-byte-array", "apache-float16-nonzeros-and-nans", "apache-float16-zeros-and-nans", "apache-int32-with-null-pages", "apache-json", "apache-nan-in-stats", "apache-single-nan"]
+scope = "Pinned Arrow Rust metadata API independently reports TYPE_ORDER for every listed leaf."
+
+[[authority.claim]]
+capability = "wire.column-order.ieee"
+status = "unsupported"
+cases = ["apache-floating-orders-nan-count"]
+scope = "Pinned metadata layer treats the future union member as unknown."
+
+[[authority.claim]]
+capability = "wire.statistics.nan-count"
+status = "unsupported"
+cases = ["apache-floating-orders-nan-count"]
+scope = "Pinned metadata layer does not expose field 9."
+
+[[authority]]
+id = "apache-arrow-cpp-policy"
+kind = "external-compatibility-policy"
+version = "source"
+revision = "515410b2a14ac766258e00b07eab9e5ee2692a62"
+platforms = ["source"]
+toolchain_sha256 = []
+
+[[authority.claim]]
+capability = "semantic.producer-trust"
+status = "verified"
+cases = ["producer-old-order"]
+scope = "Pinned metadata.cc cutoff policy only."
+
+[[authority]]
+id = "pyarrow"
+kind = "external-implementation"
+version = "25.0.1"
+revision = "beccec0d0c451b7aa3e4530416ac431b3c035c69"
+platforms = ["cp312-macosx-12-arm64"]
+toolchain_sha256 = ["0e1e7fa951f82f12ddfdbeb3865936763c1818f1f20a655d2646b1186cbcd958"]
+
+[[authority.claim]]
+capability = "read.logical-values"
+status = "verified"
+cases = ["apache-alltypes-dictionary", "apache-alltypes-plain", "apache-binary", "apache-bson", "apache-byte-array-decimal", "apache-fixed-length-byte-array", "apache-fixed-length-decimal", "apache-fixed-length-decimal-legacy", "apache-int32-decimal", "apache-int32-with-null-pages", "apache-int64-decimal", "apache-json", "apache-rle-boolean-encoding"]
+scope = "Exact CPython 3.12 macOS arm64 wheel and listed fixtures only."
+
+[[authority.claim]]
+capability = "read.statistics-metadata"
+status = "verified"
+cases = ["apache-binary", "apache-binary-truncated-min-max", "apache-bson", "apache-fixed-length-byte-array", "apache-int32-with-null-pages", "apache-json", "apache-nan-in-stats"]
+scope = "Only fields exposed by PyArrow's row-group statistics API."
+
+[[authority.claim]]
+capability = "wire.statistics.nan-count"
+status = "unsupported"
+cases = ["apache-floating-orders-nan-count"]
+scope = "The high-level API does not expose raw field 9."
+
+[[authority]]
+id = "duckdb"
+kind = "external-implementation"
+version = "1.5.5"
+revision = "d8cdaa33fda8df955cc76ef58a280f68f4cd43fa"
+platforms = ["cp312-macosx-11-arm64"]
+toolchain_sha256 = ["a3c20486eae1ec54266ca94e9a29f8fa0c7e46bdddbb829d28bc92991ddda6ae"]
+
+[[authority.claim]]
+capability = "read.logical-values"
+status = "verified"
+cases = ["apache-alltypes-dictionary", "apache-alltypes-plain", "apache-binary", "apache-byte-array-decimal", "apache-fixed-length-byte-array", "apache-fixed-length-decimal", "apache-fixed-length-decimal-legacy", "apache-int32-decimal", "apache-int32-with-null-pages", "apache-int64-decimal", "apache-json", "apache-rle-boolean-encoding"]
+scope = "Exact CPython 3.12 macOS arm64 wheel and listed fixtures only."
+
+[[authority.claim]]
+capability = "read.parquet-metadata-view"
+status = "verified"
+cases = ["apache-binary", "apache-binary-truncated-min-max", "apache-fixed-length-byte-array", "apache-int32-with-null-pages", "apache-json", "apache-nan-in-stats"]
+scope = "Only fields exposed by parquet_metadata for listed fixtures."
+
+[[authority.claim]]
+capability = "read.parquet-metadata-view"
+status = "unsupported"
+cases = ["apache-bson"]
+scope = "DuckDB 1.5.5 rejects BSON converted type 20 in parquet_metadata."
+
+[[authority.claim]]
+capability = "wire.column-order.ieee"
+status = "not_assessed"
+cases = ["apache-floating-orders-nan-count"]
+scope = "No raw Compact-Thrift capability is claimed."

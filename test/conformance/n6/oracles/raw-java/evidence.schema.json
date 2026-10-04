@@ -1,0 +1,948 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://julialang.org/parquet/n6/raw-footer-evidence.schema.json",
+  "title": "Parquet 2.13 raw footer evidence line",
+  "description": "Schema for one JSONL record emitted by the isolated raw Java scanner.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "evidence_version",
+    "format_commit",
+    "thrift_version",
+    "file",
+    "file_size",
+    "file_sha256",
+    "footer_length",
+    "footer_sha256",
+    "file_metadata"
+  ],
+  "properties": {
+    "evidence_version": {
+      "const": "parquet-2.13-raw-footer-v3"
+    },
+    "format_commit": {
+      "const": "c47e2a66e88943fc46fde1b028a9432f14fdf5c0"
+    },
+    "thrift_version": {
+      "const": "0.23.0"
+    },
+    "file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "file_size": {
+      "type": "integer",
+      "minimum": 12
+    },
+    "file_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "footer_length": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "footer_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "file_metadata": {
+      "$ref": "#/$defs/fileMetadata"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullableString": {
+      "type": ["string", "null"]
+    },
+    "path": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "nullablePath": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/path"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "physicalType": {
+      "enum": [
+        "BOOLEAN",
+        "INT32",
+        "INT64",
+        "INT96",
+        "FLOAT",
+        "DOUBLE",
+        "BYTE_ARRAY",
+        "FIXED_LEN_BYTE_ARRAY",
+        null
+      ]
+    },
+    "logicalType": {
+      "enum": [
+        "STRING",
+        "MAP",
+        "LIST",
+        "ENUM",
+        "DECIMAL",
+        "DATE",
+        "TIME",
+        "TIMESTAMP",
+        "INTEGER",
+        "UNKNOWN",
+        "JSON",
+        "BSON",
+        "UUID",
+        "FLOAT16",
+        "VARIANT",
+        "GEOMETRY",
+        "GEOGRAPHY",
+        null
+      ]
+    },
+    "logicalMember": {
+      "enum": [
+        "STRING",
+        "MAP",
+        "LIST",
+        "ENUM",
+        "DECIMAL",
+        "DATE",
+        "TIME",
+        "TIMESTAMP",
+        "INTEGER",
+        "UNKNOWN",
+        "JSON",
+        "BSON",
+        "UUID",
+        "FLOAT16",
+        "VARIANT",
+        "GEOMETRY",
+        "GEOGRAPHY"
+      ]
+    },
+    "presenceInteger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "value"],
+      "properties": {
+        "present": {"type": "boolean"},
+        "value": {"type": ["integer", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"present": {"const": false}}},
+          "then": {"properties": {"value": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"present": {"const": true}}},
+          "then": {"properties": {"value": {"type": "integer"}}}
+        }
+      ]
+    },
+    "presenceString": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "value"],
+      "properties": {
+        "present": {"type": "boolean"},
+        "value": {"type": ["string", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"present": {"const": false}}},
+          "then": {"properties": {"value": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"present": {"const": true}}},
+          "then": {"properties": {"value": {"type": "string"}}}
+        }
+      ]
+    },
+    "convertedTypeValue": {
+      "enum": [
+        "UTF8",
+        "MAP",
+        "MAP_KEY_VALUE",
+        "LIST",
+        "ENUM",
+        "DECIMAL",
+        "DATE",
+        "TIME_MILLIS",
+        "TIME_MICROS",
+        "TIMESTAMP_MILLIS",
+        "TIMESTAMP_MICROS",
+        "UINT_8",
+        "UINT_16",
+        "UINT_32",
+        "UINT_64",
+        "INT_8",
+        "INT_16",
+        "INT_32",
+        "INT_64",
+        "JSON",
+        "BSON",
+        "INTERVAL"
+      ]
+    },
+    "schemaLeaf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "path",
+        "physical_type",
+        "type_length",
+        "converted_type",
+        "scale",
+        "precision",
+        "repetition_type",
+        "field_id",
+        "logical_type"
+      ],
+      "properties": {
+        "ordinal": {"type": "integer", "minimum": 0},
+        "path": {"$ref": "#/$defs/path", "minItems": 1},
+        "physical_type": {
+          "enum": [
+            "BOOLEAN",
+            "INT32",
+            "INT64",
+            "INT96",
+            "FLOAT",
+            "DOUBLE",
+            "BYTE_ARRAY",
+            "FIXED_LEN_BYTE_ARRAY"
+          ]
+        },
+        "type_length": {"$ref": "#/$defs/presenceInteger"},
+        "converted_type": {
+          "allOf": [
+            {"$ref": "#/$defs/presenceString"},
+            {"properties": {"value": {
+              "oneOf": [
+                {"$ref": "#/$defs/convertedTypeValue"},
+                {"type": "null"}
+              ]
+            }}}
+          ]
+        },
+        "scale": {"$ref": "#/$defs/presenceInteger"},
+        "precision": {"$ref": "#/$defs/presenceInteger"},
+        "repetition_type": {
+          "allOf": [
+            {"$ref": "#/$defs/presenceString"},
+            {"properties": {"value": {
+              "enum": ["REQUIRED", "OPTIONAL", "REPEATED", null]
+            }}}
+          ]
+        },
+        "field_id": {"$ref": "#/$defs/presenceInteger"},
+        "logical_type": {"$ref": "#/$defs/leafLogicalType"}
+      }
+    },
+    "leafLogicalType": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "member", "parameters"],
+      "properties": {
+        "present": {"type": "boolean"},
+        "member": {
+          "oneOf": [
+            {"$ref": "#/$defs/logicalMember"},
+            {"type": "null"}
+          ]
+        },
+        "parameters": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/integerParameters"},
+            {"$ref": "#/$defs/decimalParameters"},
+            {"$ref": "#/$defs/timeParameters"},
+            {"$ref": "#/$defs/variantParameters"},
+            {"$ref": "#/$defs/geometryParameters"},
+            {"$ref": "#/$defs/geographyParameters"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"present": {"const": false}}},
+          "then": {"properties": {"member": {"type": "null"}, "parameters": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"present": {"const": true}}},
+          "then": {"properties": {"member": {
+            "oneOf": [
+              {"$ref": "#/$defs/logicalMember"},
+              {"type": "null"}
+            ]
+          }}}
+        },
+        {
+          "if": {"properties": {"member": {"type": "null"}}},
+          "then": {"properties": {"parameters": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"member": {"enum": ["STRING", "MAP", "LIST", "ENUM", "DATE", "UNKNOWN", "JSON", "BSON", "UUID", "FLOAT16"]}}},
+          "then": {"properties": {"parameters": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"member": {"const": "INTEGER"}}},
+          "then": {"properties": {"parameters": {"$ref": "#/$defs/integerParameters"}}}
+        },
+        {
+          "if": {"properties": {"member": {"const": "DECIMAL"}}},
+          "then": {"properties": {"parameters": {"$ref": "#/$defs/decimalParameters"}}}
+        },
+        {
+          "if": {"properties": {"member": {"enum": ["TIME", "TIMESTAMP"]}}},
+          "then": {"properties": {"parameters": {"$ref": "#/$defs/timeParameters"}}}
+        },
+        {
+          "if": {"properties": {"member": {"const": "VARIANT"}}},
+          "then": {"properties": {"parameters": {"$ref": "#/$defs/variantParameters"}}}
+        },
+        {
+          "if": {"properties": {"member": {"const": "GEOMETRY"}}},
+          "then": {"properties": {"parameters": {"$ref": "#/$defs/geometryParameters"}}}
+        },
+        {
+          "if": {"properties": {"member": {"const": "GEOGRAPHY"}}},
+          "then": {"properties": {"parameters": {"$ref": "#/$defs/geographyParameters"}}}
+        }
+      ]
+    },
+    "integerParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bit_width", "is_signed"],
+      "properties": {
+        "bit_width": {"type": "integer", "minimum": -128, "maximum": 127},
+        "is_signed": {"type": "boolean"}
+      }
+    },
+    "decimalParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scale", "precision"],
+      "properties": {
+        "scale": {"type": "integer"},
+        "precision": {"type": "integer"}
+      }
+    },
+    "timeParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "is_adjusted_to_utc"],
+      "properties": {
+        "unit": {"enum": ["MILLIS", "MICROS", "NANOS"]},
+        "is_adjusted_to_utc": {"type": "boolean"}
+      }
+    },
+    "variantParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["specification_version"],
+      "properties": {
+        "specification_version": {"$ref": "#/$defs/presenceInteger"}
+      }
+    },
+    "geometryParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["crs"],
+      "properties": {
+        "crs": {"$ref": "#/$defs/presenceString"}
+      }
+    },
+    "geographyParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["crs", "algorithm"],
+      "properties": {
+        "crs": {"$ref": "#/$defs/presenceString"},
+        "algorithm": {
+          "allOf": [
+            {"$ref": "#/$defs/presenceString"},
+            {"properties": {"value": {
+              "enum": ["SPHERICAL", "VINCENTY", "THOMAS", "ANDOYER", "KARNEY", null]
+            }}}
+          ]
+        }
+      }
+    },
+    "fileMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "num_rows",
+        "created_by",
+        "schema_leaf_count",
+        "schema_leaves",
+        "column_orders",
+        "row_group_count",
+        "row_groups"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "num_rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "created_by": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["present", "value"],
+          "properties": {
+            "present": {
+              "type": "boolean"
+            },
+            "value": {
+              "$ref": "#/$defs/nullableString"
+            }
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"present": {"const": false}}},
+              "then": {"properties": {"value": {"type": "null"}}}
+            },
+            {
+              "if": {"properties": {"present": {"const": true}}},
+              "then": {"properties": {"value": {"type": "string"}}}
+            }
+          ]
+        },
+        "schema_leaf_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "schema_leaves": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schemaLeaf"
+          }
+        },
+        "column_orders": {
+          "$ref": "#/$defs/columnOrders"
+        },
+        "row_group_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "row_groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rowGroup"
+          }
+        }
+      }
+    },
+    "columnOrders": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "count", "values"],
+      "properties": {
+        "present": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/columnOrder"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"present": {"const": false}}},
+          "then": {
+            "properties": {
+              "count": {"type": "null"},
+              "values": {"maxItems": 0}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"present": {"const": true}}},
+          "then": {"properties": {"count": {"type": "integer", "minimum": 0}}}
+        }
+      ]
+    },
+    "columnOrder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "schema_leaf_ordinal",
+        "state",
+        "field_id",
+        "wire_type",
+        "header_hex",
+        "member",
+        "path",
+        "physical_type",
+        "logical_type"
+      ],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "schema_leaf_ordinal": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "field_id": {
+          "oneOf": [
+            {"type": "integer", "minimum": -32768, "maximum": 32767},
+            {"type": "null"}
+          ]
+        },
+        "state": {
+          "enum": ["known", "unknown", "wrong_type", "empty"]
+        },
+        "wire_type": {
+          "oneOf": [
+            {"type": "integer", "minimum": 0, "maximum": 16},
+            {"type": "null"}
+          ]
+        },
+        "header_hex": {
+          "type": "string",
+          "pattern": "^(?:[0-9a-f]{2})+$"
+        },
+        "member": {
+          "enum": ["TYPE_ORDER", "IEEE_754_TOTAL_ORDER", null]
+        },
+        "path": {
+          "$ref": "#/$defs/nullablePath"
+        },
+        "physical_type": {
+          "$ref": "#/$defs/physicalType"
+        },
+        "logical_type": {
+          "$ref": "#/$defs/logicalType"
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "known"}}},
+          "then": {
+            "oneOf": [
+              {
+                "properties": {
+                  "field_id": {"const": 1},
+                  "wire_type": {"const": 12},
+                  "member": {"const": "TYPE_ORDER"}
+                }
+              },
+              {
+                "properties": {
+                  "field_id": {"const": 2},
+                  "wire_type": {"const": 12},
+                  "member": {"const": "IEEE_754_TOTAL_ORDER"}
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {"properties": {"state": {"const": "unknown"}}},
+          "then": {
+            "properties": {
+              "field_id": {"type": "integer", "not": {"enum": [1, 2]}},
+              "wire_type": {"type": "integer"},
+              "member": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"state": {"const": "wrong_type"}}},
+          "then": {
+            "properties": {
+              "field_id": {"enum": [1, 2]},
+              "wire_type": {"type": "integer", "not": {"const": 12}},
+              "member": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"state": {"const": "empty"}}},
+          "then": {
+            "properties": {
+              "field_id": {"type": "null"},
+              "wire_type": {"type": "null"},
+              "member": {"type": "null"}
+            }
+          }
+        }
+      ]
+    },
+    "rowGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordinal", "num_rows", "column_count", "columns"],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "num_rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "column_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/column"
+          }
+        }
+      }
+    },
+    "column": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "schema_leaf_ordinal",
+        "metadata_present",
+        "path",
+        "physical_type",
+        "logical_type",
+        "num_values",
+        "statistics"
+      ],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "schema_leaf_ordinal": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "metadata_present": {
+          "type": "boolean"
+        },
+        "path": {
+          "$ref": "#/$defs/nullablePath"
+        },
+        "physical_type": {
+          "$ref": "#/$defs/physicalType"
+        },
+        "logical_type": {
+          "$ref": "#/$defs/logicalType"
+        },
+        "num_values": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "statistics": {
+          "$ref": "#/$defs/statistics"
+        }
+      }
+    },
+    "statistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "fields"],
+      "properties": {
+        "present": {
+          "type": "boolean"
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 9,
+          "maxItems": 9,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/maxField"
+            },
+            {
+              "$ref": "#/$defs/minField"
+            },
+            {
+              "$ref": "#/$defs/nullCountField"
+            },
+            {
+              "$ref": "#/$defs/distinctCountField"
+            },
+            {
+              "$ref": "#/$defs/maxValueField"
+            },
+            {
+              "$ref": "#/$defs/minValueField"
+            },
+            {
+              "$ref": "#/$defs/maxExactField"
+            },
+            {
+              "$ref": "#/$defs/minExactField"
+            },
+            {
+              "$ref": "#/$defs/nanCountField"
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "fieldBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field_id", "name", "present", "value"],
+      "properties": {
+        "field_id": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "value": {}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"present": {"const": false}}},
+          "then": {"properties": {"value": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"present": {"const": true}}},
+          "then": {"properties": {"value": {"not": {"type": "null"}}}}
+        }
+      ]
+    },
+    "binaryFieldBase": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/fieldBase"
+        },
+        {
+          "properties": {
+            "value": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/binaryValue"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "integerFieldBase": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/fieldBase"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": ["integer", "null"]
+            }
+          }
+        }
+      ]
+    },
+    "booleanFieldBase": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/fieldBase"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": ["boolean", "null"]
+            }
+          }
+        }
+      ]
+    },
+    "maxField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/binaryFieldBase"
+        },
+        {
+          "properties": {
+            "field_id": {"const": 1},
+            "name": {"const": "max"}
+          }
+        }
+      ]
+    },
+    "minField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/binaryFieldBase"
+        },
+        {
+          "properties": {
+            "field_id": {"const": 2},
+            "name": {"const": "min"}
+          }
+        }
+      ]
+    },
+    "nullCountField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/integerFieldBase"
+        },
+        {
+          "properties": {
+            "field_id": {"const": 3},
+            "name": {"const": "null_count"}
+          }
+        }
+      ]
+    },
+    "distinctCountField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/integerFieldBase"
+        },
+        {
+          "properties": {
+            "field_id": {"const": 4},
+            "name": {"const": "distinct_count"}
+          }
+        }
+      ]
+    },
+    "maxValueField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/binaryFieldBase"
+        },
+        {
+          "properties": {
+            "field_id": {"const": 5},
+            "name": {"const": "max_value"}
+          }
+        }
+      ]
+    },
+    "minValueField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/binaryFieldBase"
+        },
+        {
+          "properties": {
+            "field_id": {"const": 6},
+            "name": {"const": "min_value"}
+          }
+        }
+      ]
+    },
+    "maxExactField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/booleanFieldBase"
+        },
+        {
+          "properties": {
+            "field_id": {"const": 7},
+            "name": {"const": "is_max_value_exact"}
+          }
+        }
+      ]
+    },
+    "minExactField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/booleanFieldBase"
+        },
+        {
+          "properties": {
+            "field_id": {"const": 8},
+            "name": {"const": "is_min_value_exact"}
+          }
+        }
+      ]
+    },
+    "nanCountField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/integerFieldBase"
+        },
+        {
+          "properties": {
+            "field_id": {"const": 9},
+            "name": {"const": "nan_count"}
+          }
+        }
+      ]
+    },
+    "binaryValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hex", "byte_length", "float_bits"],
+      "properties": {
+        "hex": {
+          "type": "string",
+          "pattern": "^(?:[0-9a-f]{2})*$"
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "float_bits": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/floatBits"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "floatBits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "valid_width", "hex"],
+      "properties": {
+        "width": {
+          "enum": [16, 32, 64]
+        },
+        "valid_width": {
+          "type": "boolean"
+        },
+        "hex": {
+          "type": ["string", "null"],
+          "pattern": "^0x[0-9a-f]+$"
+        }
+      }
+    }
+  }
+}
