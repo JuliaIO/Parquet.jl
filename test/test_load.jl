@@ -162,11 +162,11 @@ function test_load_boolean_and_ts()
 
         values = collect(rc)
         @test [v.bool_col for v in values] == [true,false]
-        @test [v.timestamp_col for v in values] == [DateTime("2009-04-01T12:00:00"), DateTime("2009-04-01T12:01:00")]
+        @test [v.timestamp_col for v in values] == [DateTime("2009-04-01T00:00:00"), DateTime("2009-04-01T00:01:00")]
 
         cc = BatchedColumnsCursor(p)
         values, _state = iterate(cc)
-        @test values.timestamp_col == [DateTime("2009-04-01T12:00:00"), DateTime("2009-04-01T12:01:00")]
+        @test values.timestamp_col == [DateTime("2009-04-01T00:00:00"), DateTime("2009-04-01T00:01:00")]
 
         p = Parquet.File(joinpath(@__DIR__, "booltest", "alltypes_plain.snappy.parquet"); map_logical_types=Dict(["date_string_col"]=>(String,logical_string)))
         rc = RecordCursor(p; rows=1:2, colnames=colnames(p))
@@ -180,11 +180,11 @@ function test_load_boolean_and_ts()
         p = Parquet.File(joinpath(@__DIR__, "booltest", "alltypes_plain.snappy.parquet"); map_logical_types=Dict(["timestamp_col"]=>(DateTime,(v)->logical_timestamp(v; offset=Dates.Second(30)))))
         rc = RecordCursor(p; rows=1:2, colnames=colnames(p))
         values = collect(rc)
-        @test [v.timestamp_col for v in values] == [DateTime("2009-04-01T12:00:30"), DateTime("2009-04-01T12:01:30")]
+        @test [v.timestamp_col for v in values] == [DateTime("2009-04-01T00:00:30"), DateTime("2009-04-01T00:01:30")]
 
         cc = BatchedColumnsCursor(p)
         values, _state = iterate(cc)
-        @test values.timestamp_col == [DateTime("2009-04-01T12:00:30"), DateTime("2009-04-01T12:01:30")]
+        @test values.timestamp_col == [DateTime("2009-04-01T00:00:30"), DateTime("2009-04-01T00:01:30")]
         #dlm,headers=readdlm("booltest/alltypes.csv", ','; header=true)
         #@test [v.bool_col for v in values] == dlm[:,2]  # skipping for now as this needs additional dependency on DelimitedFiles
     end
