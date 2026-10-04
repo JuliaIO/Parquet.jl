@@ -1,6 +1,6 @@
 # Parquet.jl `rewrite/1.0` handoff
 
-Last updated: 2026-08-27
+Last updated: 2026-10-04
 
 Read this file before continuing the rewrite. It separates implemented code,
 verified evidence, planned scope, and release authority.
@@ -15,7 +15,7 @@ verified evidence, planned scope, and release authority.
 - Pinned format source: `c47e2a66e88943fc46fde1b028a9432f14fdf5c0`
 - Pinned corpus: `09f3cdbde45302f0f0c689c950e465e98a9df960`
 - Current disposition: preproduction
-- Pull request: none
+- Pull request: [#199](https://github.com/JuliaIO/Parquet.jl/pull/199)
 - Release authority: none
 
 The branch preserves the registered package UUID and Git history. It removes the old
@@ -141,8 +141,8 @@ or package installations.
 
 The CI workflow runs package and N5 tests on Linux, macOS, and Windows. It also has
 macOS ARM64 N6 static lanes. A branch-only push does not run the current push workflow,
-because push events are limited to `master`. A pull request would run CI, but no pull
-request was requested for this handoff.
+because push events are limited to `master`. The open pull request runs these checks;
+passing them does not qualify the branch for release.
 
 ## Known remaining work
 
@@ -158,9 +158,10 @@ request was requested for this handoff.
 4. Expand the exact gate beyond macOS 15 ARM64. Run clean Linux, Windows, other macOS,
    Julia nightly, bounds, reverse-dependency, PkgEval, performance, and allocation
    qualification.
-5. Rebuild and review all current user-facing support statements. `README.md` and some
-   roadmap current-state paragraphs understate later nested, statistics, and index
-   slices. Treat tests and frozen evidence as facts until the text is reconciled.
+5. Review the remaining roadmap current-state paragraphs, which understate later
+   nested, statistics, and index slices. The README and guide describe the implemented
+   recursive nested and schema-preserving rewrite paths; feature-ledger statuses
+   remain conservative until their complete evidence contracts pass.
 6. Keep publication and oracle locking disabled until every release gate is complete.
 
 ## Out of scope

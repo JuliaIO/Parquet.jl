@@ -33,6 +33,44 @@ An encoding symbol or string applies to all columns. A `Pair`, `NamedTuple`, or
 dictionary supplies exact column-name overrides. Unlisted columns use PLAIN, or use
 adaptive dictionary encoding when `dictionary=true`.
 
+## Nested columns
+
+The development implementation reads and writes recursive structs, lists, and maps.
+For ordinary Julia input, use `NamedTuple` values for structs, vectors for lists, and
+dictionaries for maps. Declared element types supply the schema for empty and all-null
+columns. Null containers, empty containers, and null elements remain distinct.
+
+```@example nested
+using Parquet, Tables
+
+S = NamedTuple{(:name, :score),Tuple{String,Union{Missing,Int32}}}
+profile = Union{Missing,S}[missing, S(("Ada", Int32(7))), S(("Ben", missing))]
+samples = Union{Missing,Vector{Union{Missing,Int32}}}[
+    missing, Union{Missing,Int32}[], Union{Missing,Int32}[1, missing, 2],
+]
+attrs = [Dict("a" => Int32(1)), Dict{String,Int32}(), Dict("b" => Int32(2))]
+
+io = IOBuffer()
+Parquet.write(io, (; profile, samples, attrs); codec=:zstd, pageversion=:v2)
+table = Parquet.Table(take!(io))
+try
+    columns = Tables.columntable(table)
+    (
+        name=String(columns.profile[2]["name"]),
+        null_list=ismissing(columns.samples[1]),
+        empty_list=isempty(columns.samples[2]),
+        values=collect(columns.samples[3]),
+        map=Dict(columns.attrs[3]),
+    )
+finally
+    close(table)
+end
+```
+
+Nested read values expose indexing and iteration; their concrete container types may
+differ from the input. The reader also accepts the legacy list and map layouts tested
+in the pinned Apache corpus. The rewrite remains preproduction.
+
 ## What this package does not support
 
 Complete coverage of the format is not a goal, so a few parts are deliberately left
@@ -77,10 +115,12 @@ their input without building an object tree. `Parquet.Decimal`, `Parquet.Timesta
 and `Parquet.Interval` preserve exact Parquet values that have no single matching
 Julia standard-library type.
 
-### Annotations that a read and write cycle does not preserve
+### Preserve annotations when rewriting a table
 
-A Julia element type cannot always carry the complete Parquet annotation, so some
-columns are written back with a different annotation. Values are still exact.
+Writing a `Parquet.Table` preserves its stored scalar annotations and file key-value
+metadata. Extracting its columns into a new Tables.jl source loses that stored schema.
+A Julia element type cannot always carry the complete annotation, so such columns
+may be written with a different annotation even though their values remain exact.
 
 - A millisecond `TIMESTAMP` reads as `Parquet.Timestamp{:millis}` when
   `isAdjustedToUTC` is true, and as `Dates.DateTime` when it is false. Microsecond

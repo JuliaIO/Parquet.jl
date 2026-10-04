@@ -1,6 +1,6 @@
 # Parquet.jl
 
-Parquet.jl is being rebuilt as a complete pure-Julia implementation of the Apache Parquet format.
+Parquet.jl is being rebuilt as a pure-Julia implementation of the Apache Parquet format.
 
 The `rewrite/1.0` branch is development work. It is not ready for data use. The
 current foundation contains bounded byte sources, footer framing, a pure-Julia
@@ -13,11 +13,13 @@ supports UNCOMPRESSED, SNAPPY, GZIP, BROTLI, ZSTD, and LZ4_RAW pages, plus depre
 Hadoop and raw-block LZ4 input. The Stage 4 scalar layer reads STRING, ENUM, UUID, JSON,
 BSON, DATE, TIME, TIMESTAMP, INTEGER, DECIMAL, FLOAT16, INTERVAL, and UNKNOWN values. It
 writes these annotations from unambiguous Julia values or tagged package values, and a
-`Parquet.Table` rewrite preserves the source scalar schema. The first nested slice
-decodes three-level optional lists of supported primitive values and writes canonical
-`optional LIST<optional DATE>` columns. It preserves null lists, empty lists, null
-elements, and present elements. Recursive and legacy nested forms, structs, maps,
-indexes, encryption, Variant, and geospatial data are still in progress. LZO and INT96
+`Parquet.Table` rewrite preserves the source scalar schema and file key-value
+metadata. The nested implementation reads and writes recursive structs, lists, and
+maps, including null containers, empty containers, and null elements. The reader also
+handles the legacy list and map layouts covered by the pinned Apache corpus. The
+writer emits row-group statistics and offset indexes by default; the reader checks
+page-index declarations and offset-index contents. Scan pushdown, datasets, bloom
+filters, encryption, Variant, and geospatial modules remain target work. LZO and INT96
 are not supported and are not planned: every LZO implementation is GPL-2, and INT96 is
 deprecated in the format.
 `NTuple{N,UInt8}` writer columns map to FIXED_LEN_BYTE_ARRAY, and `Parquet.Table`
