@@ -158,11 +158,7 @@ passing them does not qualify the branch for release.
 4. Expand the exact gate beyond macOS 15 ARM64. Run clean Linux, Windows, other macOS,
    Julia nightly, bounds, reverse-dependency, PkgEval, performance, and allocation
    qualification.
-5. Review the remaining roadmap current-state paragraphs, which understate later
-   nested, statistics, and index slices. The README and guide describe the implemented
-   recursive nested and schema-preserving rewrite paths; feature-ledger statuses
-   remain conservative until their complete evidence contracts pass.
-6. Keep publication and oracle locking disabled until every release gate is complete.
+5. Keep publication and oracle locking disabled until every release gate is complete.
 
 ## Out of scope
 

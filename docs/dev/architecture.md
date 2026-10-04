@@ -15,7 +15,7 @@ Every support claim needs four facts:
 3. Invalid input fails safely under explicit resource limits.
 4. An independent implementation confirms interoperability.
 
-## Layers
+## Implemented layers
 
 - `source.jl`: bounded byte-range input and explicit ownership.
 - `thrift.jl`: pure Julia Compact Protocol with unknown-field preservation.
@@ -28,12 +28,16 @@ Every support claim needs four facts:
   `logical_decimal.jl`, `logical_json.jl`, and `logical_bson.jl`: validated
   physical-to-logical scalar conversion and bounded embedded-document syntax.
 - `dremel.jl` and `vectors.jl`: nested assembly and owned or borrowed vectors.
-- `read.jl` and `scan.jl`: bounded parallel decode and residual-safe pushdown.
-- `write.jl`, `write_logical.jl`, and `logical_column.jl`: schema-aware row-group,
-  page, and logical-value production.
-- `dataset.jl`: partition discovery and schema unification.
-- `crypto.jl`: Parquet encryption framing and key-provider interfaces.
-- `variant.jl` and `geo.jl`: complete Variant and geospatial modules.
+- `column.jl`, `nested_reader.jl`, `nested_table.jl`, and `table.jl`: bounded
+  column decoding, recursive nested assembly, and the materialized Tables.jl facade.
+- `write.jl`, `write_logical.jl`, `write_nested.jl`, and `logical_column.jl`:
+  schema-aware row-group, page, scalar, and recursive nested production.
+- `statistics.jl`, `write_statistics.jl`, and `page_index.jl`: statistics trust
+  and column order, bounded writer statistics, and offset-index production and validation.
+
+Residual-safe scan pushdown, datasets, bloom filters, encryption, Variant, and
+geospatial modules remain target work in the roadmap. Their planned layer names
+do not identify implemented source files or public APIs.
 
 The core does not depend on Arrow.jl. Arrow interoperation belongs in an extension. The package has no exports. Users call the narrow API through `Parquet`.
 

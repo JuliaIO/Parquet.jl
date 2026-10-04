@@ -15,7 +15,7 @@ The implementation is pure Julia at the protocol layer. Audited JLL libraries ca
 
 LZO is a stable, nondeprecated codec in the 2.13.0 IDL, but it is out of scope. The registered LibLZO package and its binary are GPL-2 licensed, so they cannot be dependencies of this MIT core. Rather than block the release on a license-compatible implementation that nobody has asked for, this package reports an LZO file as an unsupported feature and does not claim complete codec coverage. No mainstream implementation offers full spec coverage either; the practical target is interoperability with the implementations people actually use.
 
-## Public API
+## Target public API
 
 The package has no exports. The intended public names are:
 
@@ -33,7 +33,12 @@ Scalar schema and value helpers are also public through the package namespace:
 `Parquet.JSONValue`, `Parquet.BSONValue`, and `Parquet.Interval`. None of these names
 is exported.
 
-`File` provides metadata, schema, row groups, statistics, bloom filters, and page indexes. `Table` and `Dataset` implement Tables.jl. Old `read_parquet` and `write_parquet` entry points remain as documented compatibility shims. Removed cursor APIs return actionable migration errors.
+The implemented entry points are `File(input; limits)`, `Table(input; limits)`,
+`write(sink, table; ...)`, and `close!`. The writer supports the documented codec,
+encoding, dictionary, page, row-group, statistics, and offset-index options.
+`Table` implements Tables.jl. `Dataset`, scan and encryption options, bloom
+filters, compatibility shims, and cursor migration errors remain target work.
+The current branch does not define `read_parquet` or `write_parquet`.
 
 ## Format coverage policy
 
@@ -83,7 +88,11 @@ Variant is a separate bounded parser and writer. Version 1.0 reads and writes un
 
 Geospatial support includes a core WKB walker. It handles ISO and EWKB dimensional codes, SRID, empty points, and geometry bounding boxes without placing NaN in metadata. Geography bounding boxes implement longitude wraparound, including `xmin > xmax`, and require independent oracle coverage.
 
-## Internal design
+## Target internal design
+
+This section describes the intended architecture. Scan and dataset APIs remain
+planned; the current implementation is summarized in `architecture.md` and the
+stage notes below.
 
 ### Sources and ownership
 
@@ -99,7 +108,14 @@ Every generated struct stores raw unknown field records. Encoding re-emits those
 
 Primitive values decode into typed final buffers. Nested values use package-owned list, struct, and map vectors with a validity bitmap. Offsets use Int32 until data exceeds 2 GB, then Int64.
 
-DATE maps to `Dates.Date`. TIME remains nanosecond exact. Millisecond timestamps map to `DateTime`. Microsecond and nanosecond timestamps use an isbits `Parquet.Timestamp`. DECIMAL uses a Parquet-owned exact unscaled integer plus runtime scale. FLOAT16 maps to `Float16`. UUID maps to `UUIDs.UUID`. JSON and BSON remain tagged bytes in core and gain parsed integrations through extensions.
+The current reader maps STRING to `DataStrings.DataString` and DATE to
+`Dates.Date`. TIME remains nanosecond exact. UTC-adjusted millisecond timestamps
+use `Parquet.Timestamp{:millis}`; local millisecond timestamps use
+`Dates.DateTime`. Microsecond and nanosecond timestamps use unit-tagged
+`Parquet.Timestamp` values. DECIMAL uses `DataDecimals.Decimal` for precision up
+to 76 and `Parquet.Decimal` for larger precision. FLOAT16 maps to `Float16` and
+UUID to `UUIDs.UUID`. JSON and BSON remain tagged bytes in core; parsed
+integrations are planned extensions.
 
 ### Parallel reading
 
@@ -169,15 +185,18 @@ The implemented scalar layer gives modern LogicalType annotations precedence ove
 legacy ConvertedType fields. It validates every supported annotation against its
 physical type and preserves an unknown modern annotation as physical data. INTEGER
 uses the matching signed or unsigned Julia integer type. DATE uses `Dates.Date`. TIME
-uses `Dates.Time`. Millisecond TIMESTAMP uses `Dates.DateTime`, while microsecond and
+uses `Dates.Time`. Millisecond TIMESTAMP uses `Dates.DateTime` for unadjusted local
+values and `Parquet.Timestamp{:millis}` for UTC-adjusted values. Microsecond and
 nanosecond values use `Parquet.Timestamp` to retain exact ticks and the UTC-adjustment
-flag. DECIMAL uses `Parquet.Decimal`, UUID uses `UUIDs.UUID`, and FLOAT16 uses
-`Float16`. ENUM uses `String`. JSON, BSON, and INTERVAL use tagged package values so
-their Parquet identity is not lost.
+flag. STRING uses `DataStrings.DataString`. DECIMAL through 76 digits uses
+`DataDecimals.Decimal` with fixed precision and scale; wider decimals use
+`Parquet.Decimal`. UUID uses `UUIDs.UUID`, FLOAT16 uses `Float16`, and ENUM uses
+`String`. JSON, BSON, and INTERVAL use tagged package values so their Parquet
+identity is not lost.
 
 High-level writes infer the unambiguous scalar schema. Plain `Dates.Time` writes
 nanosecond local time, and plain `Dates.DateTime` writes millisecond local timestamp.
-Tagged timestamp values carry exact microsecond or nanosecond ticks and one consistent
+Tagged timestamp values carry exact millisecond, microsecond, or nanosecond ticks and one consistent
 UTC-adjustment flag. Decimal precision and scale are checked exactly before a physical
 INT32, INT64, or fixed-width byte representation is selected. A `Parquet.Table`
 read-write cycle instead retains its leaf schema. This preserves time units, UTC flags,
@@ -191,17 +210,23 @@ the internal Thrift metadata types.
 
 The scalar slice passes the pinned logical-type corpus and exact bidirectional checks
 with PyArrow 25.0.1. DuckDB 1.5.5 confirms the temporal, integer, decimal, and UUID
-forms it supports. Stage 4 remains open: recursive and legacy lists, structs, maps,
-VARIANT, and geospatial data are not implemented. A plain String column does not infer
+forms it supports. Recursive and legacy lists, structs, and maps are also implemented,
+as described below. Stage 4 remains open under the feature ledger's complete evidence
+contract. VARIANT and geospatial modules remain target work. A plain String column does not infer
 ENUM; use `Parquet.LogicalColumn` when ENUM is intended. Core validates JSON against
 [RFC 8259](https://www.rfc-editor.org/info/rfc8259/) and BSON against the
 [BSON 1.1 document grammar](https://bsonspec.org/spec.html) without building object
 trees. Parsed JSON and BSON object models stay in extensions. Embedded decimal byte
 values have a separate `Limits.max_decimal_bytes` bound before BigInt conversion.
 
-#### First vertical slice: optional lists of optional dates
+#### Recursive nested reader and writer
 
-The first nested reader and writer slice is `optional LIST<optional DATE>`. It must
+The recursive reader and writer distinguish null containers, empty containers,
+null elements, and present elements in lists, structs, and maps. Declared Julia
+element types provide schemas for empty and all-null containers; the reader also
+accepts the legacy list and map layouts exercised by the pinned corpus.
+
+For example, `optional LIST<optional DATE>` must
 distinguish a null list, an empty list, a null element, and a present element. The
 canonical leaf path is `list.element`, with maximum repetition level 1 and maximum
 definition level 3. For the rows `missing`, `Date[]`, `[missing]`,
@@ -227,13 +252,14 @@ streams and compress only values. V2 pages must start at repetition level zero,
 below the leaf maximum. `ColumnMetaData.num_values` is the number of leaf-stream
 entries, not the table row count.
 
-The first acceptance gate uses `list_columns.parquet` plus generated V1 and V2 DATE
+The acceptance gate uses `list_columns.parquet` plus generated V1 and V2 DATE
 list files. PyArrow and DuckDB must read Julia output exactly. Julia must read their
-null, empty, null-element, and repeated-element cases exactly. Recursive lists,
-legacy list forms, structs, and maps follow only after this boundary passes.
+null, empty, null-element, and repeated-element cases exactly. Recursive and legacy
+forms have separate fixtures and tests; this single-list example does not establish
+the complete nested-data gate.
 
-The implemented first nested slice has a physical `LeafStream` boundary, three-level
-optional-list assembly, and a canonical DATE-list writer. The pinned Apache
+The implementation has a physical `LeafStream` boundary, recursive nested plans,
+and canonical LIST and MAP output. The pinned Apache
 `list_columns.parquet` fixture passes for optional Int64 and STRING elements. Generated
 PyArrow and DuckDB V1/V2 files pass in Julia, and both engines read Julia PLAIN,
 DELTA_BINARY_PACKED, dictionary, Snappy, and Zstd output with exact null and empty-list
@@ -244,6 +270,12 @@ semantics. The broader Stage 4 gate remains open.
 - Implement statistics trust, column order, offset and column indexes, bloom filters, and residual-safe scan pushdown.
 
 Gate: full-scan and pushed-scan results are identical across seeded filters; a counting source proves pruned chunks are not read; DuckDB consumes Julia indexes and bloom filters.
+
+The current slice validates row-group statistics and column-order semantics,
+emits bounded footer statistics and offset indexes by default, and checks offset
+indexes against column-chunk ranges and page frames. Column-index production,
+bloom filters, and residual-safe scan pushdown remain target work. A successful
+full-table read does not establish the Stage 5 pruning gate.
 
 ### Stage 6: encryption
 
