@@ -154,6 +154,8 @@ struct DatasetPartitions
     end
 end
 
+Base.IteratorSize(::Type{DatasetPartitions}) = Base.SizeUnknown()
+
 function iterated_partition(partitions::DatasetPartitions, cursor)
     partition = nothing
     walker, root, files, fileidx, step = cursor
