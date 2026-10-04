@@ -308,7 +308,7 @@ function colcursor_values(colcursor::ColCursor{T}, batchsize::Int64, ::Type{Vect
         pagevals = colcursor.pagevals
         nvals_from_page = min(batchsize - fillpos + 1, pagevals.offset - colcursor.valpos + 1)
         @inbounds for idx in 1:nvals_from_page
-            vals[fillpos+idx-1] = pagevals.data[pagevals.offset+idx]
+            vals[fillpos+idx-1] = pagevals.data[colcursor.valpos+idx-1]
         end
         fillpos += nvals_from_page
         colcursor_advance(colcursor, nvals_from_page)

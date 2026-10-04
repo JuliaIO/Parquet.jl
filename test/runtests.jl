@@ -10,6 +10,7 @@ const julia_parcompat = joinpath(artifact"julia_parcompat", readdir(artifact"jul
     include("test_load.jl")
     include("test_codec.jl")
     include("test_cursors.jl")
+    include("test_required_columns.jl")
     include("test_writer.jl")
     include("test_dataset_types.jl")
     include("test_dataset_partitions.jl")
