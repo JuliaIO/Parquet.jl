@@ -9,7 +9,7 @@ Options:
 - `filter`: Filter function to apply while loading only a subset of partitions from a dataset.
 - `batchsize`: Maximum number of rows to read in each batch (default: row count of first row group). Applied only when reading a single file, and to each file when reading a dataset.
 - `use_threads`: Whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
-- `column_generator`: Function to generate a partitioned column when not found in the partitioned table. Parameters provided to the function: table, column index, length of column to generate. Default implementation determines column values from the table path.
+- `column_generator`: Function called for a column present in the table's schema but absent from its data file. Receives the table, column index, and requested column length. For datasets, the default determines values from the file path.
 - `map_logical_types`: Dictionary of logical type overrides for a dataset, as accepted by `Parquet.File`.
 
 One can easily convert the returned object to any Tables.jl compatible table e.g. DataFrames.DataFrame via
