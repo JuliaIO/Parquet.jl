@@ -14,4 +14,5 @@ const julia_parcompat = joinpath(artifact"julia_parcompat", readdir(artifact"jul
     include("test_dataset_types.jl")
     include("test_dataset_partitions.jl")
     include("test_dataset_columns.jl")
+    include("test_dataset_empty.jl")
 end

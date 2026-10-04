@@ -5,6 +5,8 @@ const DATASET_METADATA_FILES = ("_common_metadata", "_metadata")
 
 Returns the table contained in the parquet dataset in an Tables.jl compatible format.
 A dataset comprises of multiple parquet files and optionally some metadata files.
+The schema must be available from metadata or a data file. If no partitions are
+selected, the dataset contains empty columns with that schema.
 
 These options if provided are passed along while reading each parquet file in the dataset:
 - `filter`: Filter function that takes the path to partitioned file and returns boolean to indicate whether to include the partition while loading. All partitions are loaded by default.
@@ -203,6 +205,11 @@ function load(dataset::Dataset)
             for colidx in 1:ncols
                 append!(columns[colidx], Tables.getcolumn(table, colidx))
             end
+        end
+    end
+    if isempty(tables)
+        for coltype in getfield(dataset, :schema).types
+            push!(columns, coltype[])
         end
     end
     nothing
