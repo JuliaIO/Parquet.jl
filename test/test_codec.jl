@@ -1,6 +1,7 @@
 using Parquet
 using Decimals
 using Test
+using Dates
 
 const decimal_encoding_testdata = [
     (
@@ -167,4 +168,24 @@ end
 
 @testset "codec" begin
     test_codec()
+
+    @testset "INT96 timestamps" begin
+        for (day, nanos, expected) in (
+            (2440588, 0, DateTime(1970, 1, 1)),
+            (2440587, 0, DateTime(1969, 12, 31)),
+            (2440588, 1_000_000, DateTime(1970, 1, 1, 0, 0, 0, 1)),
+            (2440588, 43_200_000_000_000, DateTime(1970, 1, 1, 12)),
+            (2440588, 86_399_999_000_000, DateTime(1970, 1, 1, 23, 59, 59, 999)),
+        )
+            io = IOBuffer()
+            write(io, Int64(nanos))
+            write(io, Int32(day))
+            write(io, UInt32(0))
+            bytes = take!(io)
+            packed = read(IOBuffer(bytes), Int128)
+            for input in (bytes, packed), offset in (Second(0), Second(30), Hour(-5))
+                @test Parquet.logical_timestamp(input; offset=offset) == expected + offset
+            end
+        end
+    end
 end
