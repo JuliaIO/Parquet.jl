@@ -11,6 +11,7 @@ These options if provided are passed along while reading each parquet file in th
 - `batchsize`: Maximum number of rows to read in each batch (default: row count of first row group). Applied to each file in the partition.
 - `use_threads`: Whether to use threads while reading the file; applicable only for Julia v1.3 and later and switched on by default if julia processes is started with multiple threads.
 - `column_generator`: Function to generate a partitioned column when not found in the partitioned table. Parameters provided to the function: table, column index, length of column to generate. Default implementation determines column values from the table path.
+- `map_logical_types`: Dictionary of logical type overrides, as accepted by `Parquet.File`. The overrides apply when discovering the dataset schema and reading every partition.
 
 One can easily convert the returned object to any Tables.jl compatible table e.g. DataFrames.DataFrame via
 
@@ -24,6 +25,7 @@ struct Dataset <: Tables.AbstractColumns
     filter::Function
     ncols::Int
     kwargs::NamedTuple{(:batchsize, :use_threads, :column_generator), Tuple{Union{Nothing,Signed}, Bool, Function}}
+    map_logical_types::TLogicalTypeMap
     schema::Tables.Schema
     lookup::Dict{Symbol, Int} # map column name => index
     columns::Vector{AbstractVector}
@@ -33,14 +35,16 @@ struct Dataset <: Tables.AbstractColumns
             filter::Function=(path)->true,
             batchsize::Union{Nothing,Signed}=nothing,
             column_generator::Function=column_generator,
+            map_logical_types::Dict=TLogicalTypeMap(),
             use_threads::Bool=(nthreads() > 1))
 
         isdir(path) || error("Invalid Dataset path. Not a directory - $path")
-        sch = dataset_schema(string(path))
+        typemap = merge!(TLogicalTypeMap(), map_logical_types)
+        sch = dataset_schema(string(path); map_logical_types=typemap)
         ncols = length(sch.names)
         lookup = Dict{Symbol, Int}(nm => i for (i, nm) in enumerate(sch.names))
         kwargs = (batchsize=batchsize, use_threads=use_threads, column_generator=dataset_column_generator)
-        new(path, filter, ncols, kwargs, sch, lookup, AbstractVector[], Table[])
+        new(path, filter, ncols, kwargs, typemap, sch, lookup, AbstractVector[], Table[])
     end
 end
 
@@ -107,14 +111,14 @@ function close(dataset::Dataset)
     nothing
 end
 
-function dataset_schema(path::String)
+function dataset_schema(path::String; map_logical_types::Dict=TLogicalTypeMap())
     schema = nothing
 
     # look for _common_metadata or _metadata file
     for name in DATASET_METADATA_FILES
         meta_file = joinpath(path, name)
         if isfile(meta_file)
-            schema = tables_schema(Parquet.File(meta_file))
+            schema = tables_schema(Parquet.File(meta_file; map_logical_types=map_logical_types))
             break
         end
     end
@@ -125,7 +129,7 @@ function dataset_schema(path::String)
             for file in files
                 full_filename = joinpath(root, file)
                 if is_par_file(full_filename)
-                    schema = tables_schema(Parquet.File(full_filename))
+                    schema = tables_schema(Parquet.File(full_filename; map_logical_types=map_logical_types))
                     break
                 end
             end
@@ -150,6 +154,8 @@ struct DatasetPartitions
     end
 end
 
+Base.IteratorSize(::Type{DatasetPartitions}) = Base.SizeUnknown()
+
 function iterated_partition(partitions::DatasetPartitions, cursor)
     partition = nothing
     walker, root, files, fileidx, step = cursor
@@ -162,7 +168,8 @@ function iterated_partition(partitions::DatasetPartitions, cursor)
             if !(file in DATASET_METADATA_FILES)
                 full_filename = joinpath(root, file)
                 if partitions.filter(full_filename) && is_par_file(full_filename)
-                    partition = Table(full_filename, schema; getfield(partitions.dataset, :kwargs)...)
+                    parfile = Parquet.File(full_filename; map_logical_types=getfield(partitions.dataset, :map_logical_types))
+                    partition = Table(full_filename, parfile, schema; getfield(partitions.dataset, :kwargs)...)
                 end
             end
         else # walk further into directory tree

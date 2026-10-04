@@ -3,6 +3,9 @@
 [![CI](https://github.com/JuliaIO/Parquet.jl/actions/workflows/ci.yaml/badge.svg)](https://github.com/JuliaIO/Parquet.jl/actions/workflows/ci.yaml)
 [![codecov](https://codecov.io/gh/JuliaIO/Parquet.jl/graph/badge.svg?token=qchPEYSd5Q)](https://codecov.io/gh/JuliaIO/Parquet.jl)
 
+
+See also alternatives: [Parquet2.jl](https://gitlab.com/ExpandingMan/Parquet2.jl); We suggest also considering [DuckDB.jl](https://github.com/duckdb/duckdb) which is backed by a mature and well-maintained C++ library and has query support (see also [QuackIO.jl](https://github.com/JuliaAPlavin/QuackIO.jl) for a simple convenience wrapper of this).
+
 ## Reader
 
 A [parquet file](https://en.wikipedia.org/wiki/Apache_Parquet) or dataset can be loaded using the `read_parquet` function. A parquet dataset is a directory with multiple parquet files, each of which is a partition belonging to the dataset.
@@ -104,7 +107,7 @@ julia> parquetfile = Parquet.File("filename"; map_logical_types=mapping);
 
 The reader will interpret logical types based on the `map_logical_types` provided. The following logical type mapping methods are available in the Parquet package.
 
-- `logical_timestamp(v; offset=Dates.Second(0))`: Applicable for timestamps that are `INT96` values. This converts the data read as `Int128` types to `DateTime` types.
+- `logical_timestamp(v; offset=Dates.Second(0))`: Applicable for timestamps that are `INT96` values. This converts the data read as `Int128` types to `DateTime` types. The encoded time of day starts at midnight; `offset` is applied after decoding.
 - `logical_string(v)`: Applicable for strings that are `BYTE_ARRAY` values. Without this, they are represented in a `Vector{UInt8}` type. With this they are converted to `String` types.
 - `logical_decimal(v, precision, scale; use_float=true)`: Applicable for reading decimals from `FIXED_LEN_BYTE_ARRAY`, `INT64`, or `INT32` values. This converts the data read as those types to `Integer`, `Float64` or `Decimal` of the given precision and scale, depending on the options provided.
 
