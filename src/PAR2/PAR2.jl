@@ -16,10 +16,14 @@ export meta
 export _Type # enum
 export ConvertedType # enum
 export FieldRepetitionType # enum
+export EdgeInterpolationAlgorithm # enum
 export Encoding # enum
 export CompressionCodec # enum
 export PageType # enum
 export BoundaryOrder # enum
+export SizeStatistics # struct
+export BoundingBox # struct
+export GeospatialStatistics # struct
 export Statistics # struct
 export StringType # struct
 export UUIDType # struct
@@ -27,6 +31,7 @@ export MapType # struct
 export ListType # struct
 export EnumType # struct
 export DateType # struct
+export Float16Type # struct
 export NullType # struct
 export DecimalType # struct
 export MilliSeconds # struct
@@ -38,6 +43,9 @@ export TimeType # struct
 export IntType # struct
 export JsonType # struct
 export BsonType # struct
+export VariantType # struct
+export GeometryType # struct
+export GeographyType # struct
 export LogicalType # struct
 export SchemaElement # struct
 export DataPageHeader # struct
