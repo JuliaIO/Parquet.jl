@@ -422,7 +422,6 @@ function create_col_schema(type, colname)
     schema_node._type = COL_TYPE_CODE[type |> nonmissingtype]
     schema_node.repetition_type = 1
     schema_node.name = colname
-    schema_node.num_children = 0
 
     schema_node
 end
@@ -435,7 +434,6 @@ function create_col_schema(type::Type{String}, colname)
     schema_node._type = COL_TYPE_CODE[type]
     schema_node.repetition_type = 1
     schema_node.name = colname
-    schema_node.num_children = 0
 
     # for string set converted type to UTF8
     schema_node.converted_type = PAR2.ConvertedType.UTF8
