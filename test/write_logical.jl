@@ -117,8 +117,6 @@ end
             Parquet.Metadata.ConvertedType.TIMESTAMP_MILLIS
     end
 
-    @test_throws ArgumentError Parquet._encodefile(
-        (value=Parquet.Timestamp{:micros}[],))
     @test_throws ArgumentError Parquet._encodefile((value=[
         Parquet.Timestamp(0, :nanos, true),
         Parquet.Timestamp(1, :nanos, false),
@@ -227,10 +225,6 @@ end
             Parquet.Metadata.ConvertedType.DECIMAL, metadata.schema[2:end])
     end
 
-    @test_throws ArgumentError Parquet._encodefile(
-        (value=Parquet.Decimal[],))
-    @test_throws ArgumentError Parquet._encodefile(
-        (value=Union{Missing,Parquet.Decimal}[missing],))
     @test_throws ArgumentError Parquet._encodefile(
         (value=[Parquet.Decimal(1, 1), Parquet.Decimal(1, 2)],))
 end
@@ -420,4 +414,48 @@ end
     file = Parquet.File(empty)
     close(file)
     @test_throws Parquet.FormatError Parquet.Table(empty)
+end
+
+@testset "empty and all-missing TIMESTAMP and DECIMAL columns" begin
+    # Without values the annotation cannot be inferred, so defaults apply: millisecond
+    # timestamps are UTC-adjusted, finer units local, decimals DECIMAL(1, 0).
+    flat = (
+        ms=Union{Missing,Parquet.Timestamp{:millis}}[missing, missing],
+        us=Union{Missing,Parquet.Timestamp{:micros}}[missing, missing],
+        ns=Union{Missing,Parquet.Timestamp{:nanos}}[missing, missing],
+        dec=Union{Missing,Parquet.Decimal}[missing, missing],
+    )
+    nested = (
+        ms=[Parquet.Timestamp{:millis}[] for _ in 1:2],
+        us=[Parquet.Timestamp{:micros}[] for _ in 1:2],
+        ns=[Union{Missing,Parquet.Timestamp{:nanos}}[missing] for _ in 1:2],
+        dec=[Dict{String,Parquet.Decimal}() for _ in 1:2],
+    )
+    zero = map(column -> column[1:0], flat)
+    for source in (flat, nested, zero)
+        bytes = Parquet._encodefile(source)
+        table = Parquet.Table(bytes)
+        try
+            elements = filter(element -> element.type_ !== nothing,
+                table.metadata.schema)
+            if source === nested
+                stamps = [element.logicalType.TIMESTAMP for element in elements
+                    if element.logicalType !== nothing &&
+                        element.logicalType.TIMESTAMP !== nothing]
+                @test [stamp.isAdjustedToUTC for stamp in stamps] == [true, false, false]
+            else
+                @test elements[1].logicalType.TIMESTAMP.isAdjustedToUTC
+                @test !elements[2].logicalType.TIMESTAMP.isAdjustedToUTC
+                @test !elements[3].logicalType.TIMESTAMP.isAdjustedToUTC
+            end
+            decimal = last(elements)
+            @test decimal.logicalType.DECIMAL.precision == 1
+            @test decimal.logicalType.DECIMAL.scale == 0
+            @test table.rows == length(first(source))
+            source === flat && @test all(column -> all(ismissing, column),
+                values(table.columns))
+        finally
+            close(table)
+        end
+    end
 end

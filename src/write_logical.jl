@@ -225,9 +225,16 @@ function _timestampwriteadjustment(values::AbstractVector)
                 "all values in a TIMESTAMP column must use the same UTC adjustment"))
         end
     end
-    adjusted === nothing && throw(ArgumentError(
-        "cannot infer TIMESTAMP UTC adjustment from an empty or all-null column"))
+    adjusted === nothing && return _timestampdefaultadjustment(
+        Base.nonmissingtype(eltype(values)))
     return adjusted
+end
+
+# The annotation of a TIMESTAMP column without values: Timestamp{:millis} only holds
+# UTC-adjusted values, and the finer units default to local time, as pyarrow writes
+# timestamps without a time zone.
+function _timestampdefaultadjustment(value_type::Type)
+    return value_type == Timestamp{:millis}
 end
 
 function _timestampwriteunitcode(value_type::Type)
@@ -289,8 +296,8 @@ function _decimalwriteparameters(values::AbstractVector)
         end
         precision = max(precision, _decimaldigits(value.unscaled))
     end
-    scale === nothing && throw(ArgumentError(
-        "cannot infer DECIMAL scale from an empty or all-null column"))
+    # Without values any annotation is exact; DECIMAL(1, 0) is the smallest.
+    scale === nothing && (scale = Int32(0))
     precision = max(precision, Int(scale))
     precision <= typemax(Int32) || throw(ArgumentError(
         "DECIMAL precision exceeds Int32"))

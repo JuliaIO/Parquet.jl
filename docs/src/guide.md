@@ -128,7 +128,9 @@ logical ordering, and declared sort order before exposing a bound.
 
 Use `Parquet.LogicalColumn` when a Julia element type does not contain the complete
 Parquet schema. It can select ENUM, TIME, TIMESTAMP, or DECIMAL metadata. It also
-supplies a schema for empty and all-null columns.
+supplies a schema for empty and all-null columns. Without it, such a column of
+`Parquet.Timestamp` values is written UTC-adjusted for milliseconds and local for
+finer units, and a column of `Parquet.Decimal` values as DECIMAL(1, 0).
 
 `Parquet.JSONValue` and `Parquet.BSONValue` preserve encoded documents. They validate
 their input without building an object tree. `Parquet.Decimal`, `Parquet.Timestamp`,

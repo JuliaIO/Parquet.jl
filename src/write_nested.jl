@@ -6,7 +6,6 @@ abstract type _NestedWriteShape end
 
 # TIMESTAMP UTC adjustment and DECIMAL scale/precision come from the values themselves.
 mutable struct _NestedWriteLeafAggregate
-    seen::Bool
     adjusted::Union{Nothing,Bool}
     scale::Union{Nothing,Int32}
     precision::Int32
@@ -106,9 +105,8 @@ end
 
 function _nestedwriteleafshape(name::String, value_type::Type, optional::Bool;
         explicit=nothing, fixed_width=nothing)
-    aggregate = _NestedWriteLeafAggregate(false, nothing, nothing, Int32(1))
+    aggregate = _NestedWriteLeafAggregate(nothing, nothing, Int32(1))
     if value_type <: DataDecimals.Decimal
-        aggregate.seen = true
         aggregate.scale = Int32(DataDecimals.scale(value_type))
         aggregate.precision = Int32(precision(value_type))
     end
@@ -333,7 +331,6 @@ function _nestedwritescan!(shape::_NestedWriteLeafShape, value)
                 "$(repr(shape.name)) must use the same UTC adjustment"))
         end
     end
-    aggregate.seen = true
     return
 end
 
@@ -383,12 +380,9 @@ function _nestedwriteintegerlogical(name::String, value_type::Type,
 end
 
 function _nestedwritetimestampelement(shape::_NestedWriteLeafShape)
-    aggregate = shape.aggregate
-    aggregate.seen || throw(ArgumentError(
-        "cannot infer TIMESTAMP UTC adjustment for empty or all-null field " *
-        "$(repr(shape.name)); use Parquet.LogicalColumn"))
     value_type = shape.value_type
-    adjusted = something(aggregate.adjusted)
+    adjusted = something(shape.aggregate.adjusted,
+        _timestampdefaultadjustment(value_type))
     unit = _timestampwriteunit(value_type)
     logical = Metadata.LogicalType(TIMESTAMP=Metadata.TimestampType(
         isAdjustedToUTC=adjusted, unit=unit))
@@ -401,11 +395,8 @@ end
 function _nestedwritedecimalelement(shape::_NestedWriteLeafShape,
         limits::Limits)
     aggregate = shape.aggregate
-    aggregate.seen || throw(ArgumentError(
-        "cannot infer DECIMAL precision and scale for empty or all-null field " *
-        "$(repr(shape.name)); use Parquet.LogicalColumn"))
     precision = aggregate.precision
-    scale = something(aggregate.scale)
+    scale = something(aggregate.scale, Int32(0))
     if precision <= 9
         physical = Metadata.Type.INT32
         width = nothing
