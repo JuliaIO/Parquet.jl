@@ -196,7 +196,9 @@ own storage, so bytes it allocates are not charged here.
 
 ## Shared data values
 
-Strings decode to `DataStrings.DataString`. DECIMAL columns with precision up to
+Strings decode to `DataStrings.DataString`. A top-level STRING column is a
+`DataStrings.StringVector`, whose values refer to the decoded pages rather than to
+one copy per value. DECIMAL columns with precision up to
 76 decode to fixed-scale `DataDecimals.Decimal` values. Wider decimals retain
 `Parquet.Decimal`, whose coefficient is a `BigInt`. The writer accepts shared
 fixed-scale and per-value-scale decimals. A fixed-scale type supplies the schema

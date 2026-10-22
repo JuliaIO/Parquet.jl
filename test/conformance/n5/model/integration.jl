@@ -81,7 +81,7 @@ function n5comparevectortree(expected::N5ExpectedLeafVector, actual)
     if expected.physical == MD.Type.FIXED_LEN_BYTE_ARRAY
         actual isa Parquet.FixedByteArrayVector || return false
     else
-        actual isa Vector || return false
+        actual isa Union{Vector,Parquet.DataStrings.StringVector} || return false
     end
     base = _n5expectedleafbase(expected)
     expectedtype = expected.nullable ? Union{Missing,base} : base

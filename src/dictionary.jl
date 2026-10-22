@@ -21,7 +21,7 @@ function _dictionarypage!(dictionary::Vector{L}, ::Type{P}, convert, frame,
     count >= 0 || throw(FormatError("negative dictionary entry count"))
     _checklimit(:container_elements, count, limits.max_container_elements)
     _checkdictionarypageencoding(header.encoding)
-    bytes = _decompressinto!(buffers.page, md.codec, _byteview(frame.payload),
+    bytes = _pagebytes!(convert, buffers, md.codec, _byteview(frame.payload),
         frame.header.uncompressed_page_size, limits)
     empty!(dictionary)
     position = if P === Vector{UInt8}

@@ -249,7 +249,8 @@ function _flatcolumnvector(node::SchemaNode, rows::Int, limits::Limits)
     return Vector{_flatoutputtype(L, node)}(undef, rows)
 end
 
-# One row group's chunk of a flat field, decoded into `column[(offset + 1):]`.
+# One row group's chunk of a flat field, decoded into `column[(offset + 1):]`. Returns
+# the page buffers a STRING chunk's payloads point into, or `nothing`.
 function _readtablechunk!(column::Vector, offset::Int, file::File,
         metadata::Metadata.FileMetaData, rowindex::Int, node::SchemaNode,
         limits::Limits, budget::_LiveByteBudget, buffers::_PageBuffers)
@@ -262,10 +263,36 @@ function _readtablechunk!(column::Vector, offset::Int, file::File,
     convert, _ = _valueconverter(node.element, limits)
     _readflatchunk!(column, offset, _physicaleltype(md.type_), convert, file.source, md,
         node, start, stop, limits, budget, buffers)
-    return
+    return convert isa _StringPayloads ? convert.buffers : nothing
 end
 
-function _finishflatcolumn(column::Vector, node::SchemaNode)
+# A STRING column from its payloads and each row group's page buffers. Payload buffer
+# indices count from the row group's first buffer, so later row groups are rebased.
+function _stringcolumn(payloads::Vector{DataStrings.StringPayload}, node::SchemaNode,
+        chunks::Vector{Vector{Vector{UInt8}}}, starts::Vector{Int})
+    pages = Vector{UInt8}[]
+    for (rowindex, chunk) in enumerate(chunks)
+        base = length(pages)
+        if base > 0 && !isempty(chunk)
+            last = rowindex == length(starts) ? length(payloads) : starts[rowindex + 1]
+            for index in (starts[rowindex] + 1):last
+                payload = payloads[index]
+                DataStrings.payloadlength(payload) > DataStrings.INLINE_MAX || continue
+                buffer = UInt64(DataStrings.payloadbufidx(payload) + base)
+                payloads[index] = DataStrings.StringPayload(payload.a,
+                    (payload.b & 0xffffffff00000000) | buffer)
+            end
+        end
+        append!(pages, chunk)
+    end
+    T = node.max_definition_level == 0 ? DataStrings.DataString :
+        Union{Missing,DataStrings.DataString}
+    return DataStrings.StringVector{T}(payloads, pages, Val(:trusted))
+end
+
+function _finishflatcolumn(column::Vector, node::SchemaNode, chunks, starts::Vector{Int})
+    column isa Vector{DataStrings.StringPayload} &&
+        return _stringcolumn(column, node, chunks, starts)
     node.element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
         _logicalkind(node) === nothing || return column
     return FixedByteArrayVector{eltype(column)}(column, node.element.type_length)
@@ -279,6 +306,8 @@ function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Sch
     fields = schema.root.children
     starts = _rowgroupstarts(metadata, rows)
     columns = AbstractVector[]
+    # STRING page buffers, per field and row group.
+    pages = [Vector{Vector{UInt8}}[Vector{UInt8}[] for _ in starts] for _ in fields]
     tasks = Tuple{Int,Int}[]
     for (fieldindex, node) in enumerate(fields)
         node.max_definition_level in (0, 1) ||
@@ -300,8 +329,9 @@ function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Sch
         taskbudget = parallel ? _LiveByteBudget(limits) : budget
         for index in (rowindex == 0 ? eachindex(starts) : (rowindex:rowindex))
             offset = rowindex == 0 ? length(column) : starts[index]
-            _readtablechunk!(column, offset, file, metadata, index, node, limits,
+            kept = _readtablechunk!(column, offset, file, metadata, index, node, limits,
                 taskbudget, buffers)
+            kept === nothing || (pages[fieldindex][index] = kept)
         end
         return nothing
     end
@@ -309,7 +339,8 @@ function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Sch
         length(columns[fieldindex]) == rows || throw(FormatError(
             "flat column $(node.column_index) has $(length(columns[fieldindex])) " *
             "values for $rows rows"))
-        columns[fieldindex] = _finishflatcolumn(columns[fieldindex], node)
+        columns[fieldindex] = _finishflatcolumn(columns[fieldindex], node,
+            pages[fieldindex], starts)
     end
     return columns
 end

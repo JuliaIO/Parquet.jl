@@ -223,14 +223,6 @@ function (::_DateValue)(value::Int32)
     return _fromparquetdate(value)
 end
 
-struct _StringValue
-    limits::Limits
-end
-
-function (convert::_StringValue)(bytes::AbstractVector{UInt8})
-    return _fromparquetstring(bytes, convert.limits)
-end
-
 struct _TimestampValue{L}
     adjusted::Bool
 end
@@ -288,7 +280,7 @@ function _valueconverter(element::Metadata.SchemaElement, limits::Limits)
     kind = _logicalkind(element)
     kind === nothing && return identity, physical
     L = _logicaleltype(element, physical)
-    kind === :string && return _StringValue(limits), L
+    kind === :string && return _StringPayloads(limits), DataStrings.StringPayload
     kind === :date && return _DateValue(), L
     kind === :int96 && return _Int96Value(element), L
     kind isa _TimestampLogicalKind &&
@@ -317,6 +309,89 @@ end
 
 function _scratch(vectors::IdDict{Type,Vector}, ::Type{L}) where {L}
     return get!(() -> L[], vectors, L)::Vector{L}
+end
+
+# STRING values of a flat table column as DataStrings payloads: up to 12 bytes inline,
+# longer ones as views into a copy of the page they were decoded from, which `buffers`
+# keeps. `page` is the current page's bytes; `kept` is the 0-based index of its copy in
+# `buffers`, or -1 before a value needed one.
+mutable struct _StringPayloads
+    limits::Limits
+    buffers::Vector{Vector{UInt8}}
+    page::_ByteView
+    kept::Int
+end
+
+function _StringPayloads(limits::Limits)
+    return _StringPayloads(limits, Vector{UInt8}[], _byteview(UInt8[]), -1)
+end
+
+function _isasciibytes(bytes::_ByteView)
+    count = length(bytes)
+    bits = UInt64(0)
+    GC.@preserve bytes begin
+        start = pointer(bytes)
+        index = 0
+        while index + 8 <= count
+            bits |= unsafe_load(Ptr{UInt64}(start + index))
+            index += 8
+        end
+        while index < count
+            bits |= unsafe_load(start + index)
+            index += 1
+        end
+    end
+    return iszero(bits & 0x8080808080808080)
+end
+
+function _checkstringvalue(bytes::AbstractVector{UInt8}, limits::Limits)
+    _checklimit(:string_bytes, length(bytes), limits.max_string_bytes)
+    (bytes isa _ByteView && _isasciibytes(bytes)) || isvalid(String, bytes) ||
+        throw(FormatError("STRING value contains invalid UTF-8"))
+    return
+end
+
+# A value inside the current page.
+function (strings::_StringPayloads)(bytes::_ByteView)
+    _checkstringvalue(bytes, strings.limits)
+    count = length(bytes)
+    source = first(parentindices(bytes)[1])
+    count <= DataStrings.INLINE_MAX &&
+        return DataStrings.inline_payload(parent(bytes), source, count)
+    page = strings.page
+    parent(bytes) === parent(page) ||
+        throw(AssertionError("STRING value is outside its page"))
+    if strings.kept < 0
+        push!(strings.buffers, copy(page))
+        strings.kept = length(strings.buffers) - 1
+    end
+    position = source - first(parentindices(page)[1]) + 1
+    return DataStrings.view_payload(strings.buffers[strings.kept + 1], position, count,
+        strings.kept, position - 1)
+end
+
+# A value decoded into its own vector (DELTA_LENGTH_BYTE_ARRAY, DELTA_BYTE_ARRAY).
+function (strings::_StringPayloads)(bytes::Vector{UInt8})
+    _checkstringvalue(bytes, strings.limits)
+    count = length(bytes)
+    count <= DataStrings.INLINE_MAX && return DataStrings.inline_payload(bytes, 1, count)
+    push!(strings.buffers, bytes)
+    return DataStrings.view_payload(bytes, 1, count, length(strings.buffers) - 1, 0)
+end
+
+# A page's decompressed bytes, in the reused page buffer (or the source, uncompressed).
+function _pagebytes!(convert, buffers::_PageBuffers, codec::Metadata.CompressionCodec.T,
+        payload::_ByteView, expected::Integer, limits::Limits)
+    return _decompressinto!(buffers.page, codec, payload, expected, limits)
+end
+
+function _pagebytes!(strings::_StringPayloads, buffers::_PageBuffers,
+        codec::Metadata.CompressionCodec.T, payload::_ByteView, expected::Integer,
+        limits::Limits)
+    bytes = _decompressinto!(buffers.page, codec, payload, expected, limits)
+    strings.page = bytes
+    strings.kept = -1
+    return bytes
 end
 
 function _encodingerror(encoding::Metadata.Encoding.T, type)
@@ -479,7 +554,7 @@ function _datapagev1!(sink, ::Type{P}, convert, frame::PageFrame,
     count >= 0 || throw(FormatError("negative data page value count"))
     count <= remaining ||
         throw(FormatError("data pages carry more values than declared by the column chunk"))
-    bytes = _decompressinto!(buffers.page, md.codec, _byteview(frame.payload),
+    bytes = _pagebytes!(convert, buffers, md.codec, _byteview(frame.payload),
         frame.header.uncompressed_page_size, limits)
     maxrepetition = Int(node.max_repetition_level)
     maxdefinition = Int(node.max_definition_level)
@@ -503,7 +578,7 @@ end
 
 # The level sections of a data page V2 (stored uncompressed) and its value section,
 # decompressed into `buffers.page` when compressed.
-function _v2sections!(buffers::_PageBuffers, frame::PageFrame,
+function _v2sections!(convert, buffers::_PageBuffers, frame::PageFrame,
         codec::Metadata.CompressionCodec.T, limits::Limits)
     header = frame.header
     data = header.data_page_header_v2
@@ -526,7 +601,7 @@ function _v2sections!(buffers::_PageBuffers, frame::PageFrame,
     # An empty value section is not a compressed stream.
     compressedvalues = something(data.is_compressed, true) && !(isempty(encoded) &&
         expected == 0)
-    values = _decompressinto!(buffers.page,
+    values = _pagebytes!(convert, buffers,
         compressedvalues ? codec : Metadata.CompressionCodec.UNCOMPRESSED, encoded,
         expected, limits)
     return repetitionbytes, definitionbytes, values
@@ -543,8 +618,8 @@ function _datapagev2!(sink, ::Type{P}, convert, frame::PageFrame,
     rows >= 0 || throw(FormatError("negative data page V2 row count"))
     count <= remaining ||
         throw(FormatError("data pages carry more values than declared by the column chunk"))
-    repetitionbytes, definitionbytes, bytes = _v2sections!(buffers, frame, md.codec,
-        limits)
+    repetitionbytes, definitionbytes, bytes = _v2sections!(convert, buffers, frame,
+        md.codec, limits)
     maxrepetition = Int(node.max_repetition_level)
     maxdefinition = Int(node.max_definition_level)
     hasrepetition = _levelsv2!(buffers.repetition, repetitionbytes, count,
@@ -659,6 +734,10 @@ function _nullentry(::Type{Union{Missing,L}}) where {L}
     return missing
 end
 
+function _nullentry(::Type{DataStrings.StringPayload})
+    return DataStrings.PAYLOAD_MISSING
+end
+
 function _sinkpage!(decode, sink::_FlatSink{L,L,true}, count::Int, present::Int,
         hasrepetition::Bool, hasdefinition::Bool, buffers::_PageBuffers) where {L}
     position = decode(sink.output, sink.filled)
@@ -761,7 +840,9 @@ function readleafstream(src::AbstractSource, chunk::Metadata.ColumnChunk,
     return stream
 end
 
+# STRING payloads mark nulls themselves (`DataStrings.PAYLOAD_MISSING`).
 function _flatoutputtype(::Type{L}, node::SchemaNode) where {L}
+    L === DataStrings.StringPayload && return L
     return node.max_definition_level == 0 ? L : Union{Missing,L}
 end
 
