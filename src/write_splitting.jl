@@ -6,12 +6,6 @@ struct _WritePageCapacityError <: Exception
     maximum::Int64
 end
 
-function _writecheckedint64(value::Integer, resource::Symbol, maximum::Int64)
-    value >= 0 || throw(ArgumentError("$resource must be nonnegative"))
-    value <= typemax(Int64) || throw(LimitError(resource, typemax(Int64), maximum))
-    return Int64(value)
-end
-
 function _writedensecopy(values::AbstractVector, budget::_LiveByteBudget)
     T = Base.nonmissingtype(eltype(values))
     T === Missing && throw(ArgumentError(

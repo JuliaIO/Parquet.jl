@@ -1010,40 +1010,8 @@ function _provenancebarrier!(table::Table, elements::Vector{Metadata.SchemaEleme
     return
 end
 
-function _provenanceleafvalue(binding::_ProvenanceLeafBinding, index::Int)
-    values = binding.values
-    checkbounds(Bool, values, index) || throw(ArgumentError(
-        "schema-bearing physical leaf index exceeds its vector"))
-    return values[index]
-end
-
 function _provenanceleafaccess(binding::_ProvenanceLeafBinding, index::Int)
     return _nestedwriterowaccess(binding.values, index, binding.snapshot)
-end
-
-function _provenancekeyroot(binding::_ProvenanceLeafBinding, value)
-    expected = _provenanceleaflogicaltype(binding.plan)
-    value isa expected || throw(ArgumentError(
-        "schema-bearing Parquet MAP key contains $(typeof(value)); expected $expected"))
-    return
-end
-
-function _provenancekeyroot(::_ProvenanceStructBinding, value)
-    value isa StructValue || throw(ArgumentError(
-        "schema-bearing Parquet MAP key requires StructValue"))
-    return
-end
-
-function _provenancekeyroot(::_ProvenanceListBinding, value)
-    value isa ListValue || throw(ArgumentError(
-        "schema-bearing Parquet MAP key requires ListValue"))
-    return
-end
-
-function _provenancekeyroot(::_ProvenanceMapBinding, value)
-    value isa MapValue || throw(ArgumentError(
-        "schema-bearing Parquet MAP key requires MapValue"))
-    return
 end
 
 function _provenancebindingvalue(binding::_ProvenanceBinding, index::Int)

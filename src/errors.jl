@@ -157,12 +157,6 @@ function _reservearray!(budget::_LiveByteBudget, ::Type{T}, count::Integer;
     return bytes
 end
 
-function _reservebits!(budget::_LiveByteBudget, count::Integer; header::Bool=true)
-    bytes = _materializedbitbytes(count; header=header)
-    _reserve!(budget, bytes)
-    return bytes
-end
-
 function _reserveobjects!(budget::_LiveByteBudget, count::Integer=1)
     bytes = _materializedproduct(count, _MATERIALIZED_OBJECT_BYTES)
     _reserve!(budget, bytes)

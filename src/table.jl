@@ -105,10 +105,6 @@ function _readfilemetadata(file::File, limits::Limits)
     return _readfilemetadata(file, limits, _LiveByteBudget(limits))
 end
 
-function _isstringcolumn(node::SchemaNode)
-    return _logicalkind(node) === :string
-end
-
 function _tablecolumntype(node::SchemaNode)
     physical = _physicaleltype(node.element.type_)
     return _logicaleltype(node, physical)

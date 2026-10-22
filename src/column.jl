@@ -287,12 +287,6 @@ function _matrixvaluescharged(matrix::Matrix{UInt8},
     return values, charge
 end
 
-function _matrixvalues(matrix::Matrix{UInt8},
-    budget::_LiveByteBudget=_LiveByteBudget(Limits()))
-    values, _ = _matrixvaluescharged(matrix, budget)
-    return values
-end
-
 function _decodebooleanrle(bytes::AbstractVector{UInt8}, count::Int, offset::Int,
     limits::Limits)
     encoded, position = decode_hybrid(bytes, count, 1; offset=offset, length_prefix=true,

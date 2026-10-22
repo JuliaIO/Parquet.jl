@@ -6536,25 +6536,6 @@ function _nestedwritepreflightrows(context::_NestedWriteCountContext,
     return
 end
 
-function _nestedwritepackageaccesscheck(::AbstractVector)
-    return
-end
-
-function _nestedwritepackageaccesscheck(values::ListVector)
-    _validatelistvector(values)
-    return
-end
-
-function _nestedwritepackageaccesscheck(values::StructVector)
-    _validatestructvector(values)
-    return
-end
-
-function _nestedwritepackageaccesscheck(values::MapVector)
-    _validatemapvector(values)
-    return
-end
-
 function _nestedwritecolumnaccesscheck(values::AbstractVector, count::Int,
         first::Int, last::Int)
     _nestedvectorcount(values, "nested Parquet input") == count || throw(ArgumentError(
