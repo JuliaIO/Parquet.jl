@@ -1155,6 +1155,27 @@ end
     @test frameerror.maximum == 0
 end
 
+@testset "offset-index accepts empty data pages" begin
+    # Arrow C++ writes data pages with no values, e.g. at the end of a chunk.
+    emptyv1 = oiframe(UInt8[]; type=OIMD.PageType.DATA_PAGE, index=nothing,
+        data=OIMD.DataPageHeader(num_values=Int32(0),
+            encoding=OIMD.Encoding.PLAIN,
+            definition_level_encoding=OIMD.Encoding.RLE,
+            repetition_level_encoding=OIMD.Encoding.RLE))
+    emptyv2 = oiframe(UInt8[]; type=OIMD.PageType.DATA_PAGE_V2, index=nothing,
+        datav2=OIMD.DataPageHeaderV2(num_values=Int32(0), num_nulls=Int32(0),
+            num_rows=Int32(0), encoding=OIMD.Encoding.PLAIN,
+            definition_levels_byte_length=Int32(0),
+            repetition_levels_byte_length=Int32(0), is_compressed=false))
+    for empty in (emptyv1, emptyv2)
+        bytes = oilegacyfile([empty, oidatav1(Int32(1)), empty,
+            oidatav1(Int32(2)), empty])
+        table = Parquet.Table(bytes)
+        @test table.columns.value == Int32[1, 2]
+        close(table)
+    end
+end
+
 @testset "offset-index V1 V2 row and value semantics" begin
     E = Union{Missing,Date}
     nested = (; days=Union{Missing,Vector{E}}[

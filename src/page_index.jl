@@ -526,6 +526,8 @@ function _offsetindexpagerows(frame::PageFrame,
         md::Metadata.ColumnMetaData, node::SchemaNode, limits::Limits,
         budget::_LiveByteBudget)
     kind = pagekind(frame)
+    # Writers emit empty data pages (Arrow C++ does at chunk boundaries); they hold no rows.
+    _pageentrycount(frame) == 0 && return Int64(0)
     if kind === :data_v2
         header = frame.header.data_page_header_v2
         rows = Int64(header.num_rows)
@@ -600,6 +602,7 @@ end
 
 function _offsetindexpageentries(frame::PageFrame, node::SchemaNode)
     kind = pagekind(frame)
+    _pageentrycount(frame) == 0 && return Int64(0)
     if kind === :data_v2
         header = frame.header.data_page_header_v2
         rows = Int64(header.num_rows)
