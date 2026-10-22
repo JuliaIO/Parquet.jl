@@ -374,6 +374,65 @@ function _readrowgroups!(columns::Vector, file::File, metadata::Metadata.FileMet
     return
 end
 
+# Copy of a Thrift struct with some fields replaced.
+function _withfields(value::T; fields...) where {T}
+    return T((haskey(fields, name) ? fields[name] : getfield(value, name)
+        for name in fieldnames(T))...)
+end
+
+# Index of the last element in the preorder subtree that starts at `index`.
+function _subtreeend(elements::Vector{Metadata.SchemaElement}, index::Int)
+    last = index
+    for _ in 1:something(elements[index].num_children, Int32(0))
+        last = _subtreeend(elements, last + 1)
+    end
+    return last
+end
+
+# File metadata and schema restricted to the top-level fields at `positions`, in that
+# order and renamed to `names`. Row groups keep only those fields' column chunks, so
+# the chunks of every other field are never read.
+function _selectfields(metadata::Metadata.FileMetaData, schema::Schema,
+        positions::Vector{Int}, names::Vector{String}, limits::Limits)
+    elements = metadata.schema
+    leafcount = length(schema.leaves)
+    elementranges = UnitRange{Int}[]
+    leafranges = UnitRange{Int}[]
+    element, leaf = 2, 1
+    for child in schema.root.children
+        last = _subtreeend(elements, element)
+        count = _writeschemaleafcount(child)
+        push!(elementranges, element:last)
+        push!(leafranges, leaf:(leaf + count - 1))
+        element, leaf = last + 1, leaf + count
+    end
+    selected = Metadata.SchemaElement[_withfields(first(elements);
+        num_children=Int32(length(positions)))]
+    leaves = Int[]
+    for (position, name) in zip(positions, names)
+        range = elementranges[position]
+        push!(selected, _withfields(elements[first(range)]; name=name))
+        append!(selected, @view elements[(first(range) + 1):last(range)])
+        append!(leaves, leafranges[position])
+    end
+    groups = map(enumerate(metadata.row_groups)) do (rowindex, group)
+        length(group.columns) == leafcount || throw(FormatError(
+            "row group $rowindex has $(length(group.columns)) columns for " *
+            "$leafcount schema leaves"))
+        return _withfields(group; columns=group.columns[leaves],
+            sorting_columns=nothing)
+    end
+    orders = metadata.column_orders
+    if orders !== nothing
+        length(orders) == leafcount || throw(FormatError(
+            "file declares $(length(orders)) column orders for $leafcount leaves"))
+        orders = orders[leaves]
+    end
+    selectedmetadata = _withfields(metadata; schema=selected, row_groups=groups,
+        column_orders=orders)
+    return selectedmetadata, Schema(selected; limits=limits)
+end
+
 function _isflattableplan(plan::_NestedSchemaPlan)
     for child in plan.root.children
         child isa _NestedLeafPlan || return false
@@ -382,7 +441,19 @@ function _isflattableplan(plan::_NestedSchemaPlan)
     return true
 end
 
-function Table(input; limits::Limits=Limits())
+"""
+    Parquet.Table(source; scan=nothing, limits=Parquet.Limits())
+
+Read a Parquet file from a path, a byte vector, or an `IO` into Tables.jl columns.
+
+`scan` takes a `Tables.Scan` request. Only the top-level columns it selects or its
+filter references are read; the column chunks of every other column are skipped
+unread. The filter, row bounds, and renames are then applied to the columns read, and
+the result keeps their stored Parquet schema (renamed), so writing it preserves their
+annotations. Type overrides are not supported.
+"""
+function Table(input; scan::Union{Nothing,Tables.Scan}=nothing,
+        limits::Limits=Limits())
     budget = _LiveByteBudget(limits)
     _reserveobjects!(budget, 2)
     file = File(input; limits=limits, budget=budget)
@@ -392,6 +463,19 @@ function Table(input; limits::Limits=Limits())
         metadata.num_rows <= typemax(Int) || throw(FormatError("file row count overflows Int"))
         _checklimit(:container_elements, metadata.num_rows, limits.max_container_elements)
         schema = Schema(metadata; limits=limits, budget=budget)
+        bound = nothing
+        if scan !== nothing
+            sourcenames = _tablenames(schema, limits, budget)
+            bound = Tables.resolve(scan, sourcenames)
+            any(column -> column.type !== nothing, bound.columns) && throw(ArgumentError(
+                "Parquet.Table does not apply scan type overrides; convert the " *
+                "columns after reading"))
+            positions = sort!(unique!(vcat(Int[column.index
+                for column in bound.columns], bound.filtercols)))
+            metadata, schema = _selectfields(metadata, schema, positions,
+                String[String(sourcenames[position]) for position in positions],
+                limits)
+        end
         rows = _validatetablerowgroups(metadata, schema, limits)
         _checklimit(:container_elements, rows, limits.max_container_elements)
         _validatetablechunkranges(metadata, schema, file.footer.offset)
@@ -419,6 +503,10 @@ function Table(input; limits::Limits=Limits())
             "table column count does not match its names"))
         _reserveobjects!(budget, 2)
         named = NamedTuple{Tuple(names)}(Tuple(columns))
+        if bound !== nothing
+            named, rows, metadata, schema = _scanresidual(named, rows, bound,
+                metadata, schema, limits)
+        end
         table = Table(file, metadata, schema, named, rows, false)
         finalizer(close!, table)
         return table
@@ -429,6 +517,33 @@ function Table(input; limits::Limits=Limits())
         end
         rethrow()
     end
+end
+
+# Applies the filter, row bounds, order, and renames of a resolved scan to the columns
+# read for it, and restricts the schema to the output columns.
+function _scanresidual(columns::NamedTuple, rows::Int, bound::Tables.BoundScan,
+        metadata::Metadata.FileMetaData, schema::Schema, limits::Limits)
+    readpositions = sort!(unique!(vcat(Int[column.index for column in bound.columns],
+        bound.filtercols)))
+    positions = Int[searchsortedfirst(readpositions, column.index)
+        for column in bound.columns]
+    names = Symbol[column.name for column in bound.columns]
+    readnames = keys(columns)
+    bound.filter === nothing && bound.limit === nothing && iszero(bound.offset) &&
+        positions == eachindex(readnames) && Tuple(names) == readnames &&
+        return columns, rows, metadata, schema
+    residual = Tables.Scan(; select=[readnames[position] => name
+        for (position, name) in zip(positions, names)], filter=bound.filter,
+        limit=bound.limit, offset=bound.offset, validate=bound.validate)
+    # With no column read, a stand-in column carries the row count to the executor.
+    result = Tables.scan(isempty(readnames) ? (rows=Base.OneTo(rows),) : columns,
+        residual)
+    outrows = Tables.rowcount(result)
+    output = NamedTuple{Tuple(names)}(Tuple(Tables.getcolumn(result, name)
+        for name in names))
+    metadata, schema = _selectfields(metadata, schema, positions,
+        String[String(name) for name in names], limits)
+    return output, outrows, metadata, schema
 end
 
 function close!(table::Table)

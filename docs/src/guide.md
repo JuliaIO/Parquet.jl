@@ -16,6 +16,17 @@ close(table)
 
 Use `Parquet.File(path)` when you need file metadata without materializing a table.
 
+### Read some columns
+
+Pass a `Tables.Scan` request to read only the columns it needs. The column chunks of
+every other column are never read, so columns this package cannot decode can be
+skipped too. The filter, row bounds, and renames apply after reading.
+
+```julia
+table = Parquet.Table("input.parquet";
+    scan=Tables.Scan(select=(:id, :price => :amount), filter=Tables.col(:qty) > 0))
+```
+
 ## Write a table
 
 `Parquet.write` accepts a Tables.jl source and a path or `IO` sink.

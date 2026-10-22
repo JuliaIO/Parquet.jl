@@ -570,6 +570,7 @@ function _readleafstream(::Type{T}, src::AbstractSource, md::Metadata.ColumnMeta
     expected_rows=nothing) where {T}
     operationstart = _budgetused(budget)
     try
+        src isa MemorySource || (src = _ChunkSource(src, start, stop))
         count = Int(md.num_values)
         _reserve!(budget, _leaflevelbytes(count))
         _reserve!(budget, _leafdensebytes(T, count, md))

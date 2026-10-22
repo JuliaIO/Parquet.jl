@@ -131,7 +131,7 @@ function _readpageheader(src::AbstractSource, offset::Int64, stop::Int64,
     window > 0 || throw(LimitError(:page_header_bytes, 1, limits.max_page_header_bytes))
     temporary = _reserveobjects!(budget, 2)
     bytes = try
-        _readrangeexact(src, total, offset, window)
+        _contiguous(_readrangeexact(src, total, offset, window))
     catch
         _release!(budget, temporary)
         rethrow()
@@ -178,7 +178,8 @@ function readpage(src::AbstractSource, offset::Int64, stop::Int64, limits::Limit
         _checklimit(:page_bytes, header.uncompressed_page_size,
             limits.max_page_bytes)
         framecharge = _reserveobjects!(budget, 2)
-        payload = _readrangeexact(src, total, payloadoffset, compressed)
+        payload = _contiguous(_readrangeexact(src, total, payloadoffset,
+            compressed))
         crc = header.crc
         crc === nothing || verifypagechecksum(crc, payload; budget=budget)
         charge = _materializedsum(headercharge, framecharge)

@@ -34,7 +34,7 @@ ChunkCodecLibZlib = "1"
 ChunkCodecLibZstd = "1"
 CRC32 = "1"
 DataAPI = "1"
-Tables = "1.12"
+Tables = "1.14"
 julia = "1.10"
 
 [extras]

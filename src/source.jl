@@ -230,3 +230,32 @@ function _readrangeexact(src::AbstractSource, total::Int64, offset::Int64,
         "source read callback must return a vector with Base.OneTo axes"))
     return bytes
 end
+
+# One column chunk fetched with a single read from a source that is not in memory;
+# the page reads inside the chunk are served from these bytes.
+struct _ChunkSource{B<:AbstractVector{UInt8}} <: AbstractSource
+    bytes::B
+    start::Int64
+    total::Int64
+end
+
+function _ChunkSource(src::AbstractSource, start::Int64, stop::Int64)
+    total = _checkedsourcelength(src)
+    bytes = _contiguous(_readrangeexact(src, total, start, stop - start))
+    return _ChunkSource(bytes, start, total)
+end
+
+function sourcelength(src::_ChunkSource)
+    return src.total
+end
+
+function concurrentreads(::_ChunkSource)
+    return true
+end
+
+function readrange(src::_ChunkSource, offset::Integer, count::Integer)
+    first = Int(offset - src.start) + 1
+    first >= 1 && first - 1 + Int(count) <= length(src.bytes) || throw(ArgumentError(
+        "read outside the prefetched column chunk"))
+    return view(src.bytes, first:(first - 1 + Int(count)))
+end

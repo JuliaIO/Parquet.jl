@@ -7,6 +7,7 @@ CurrentModule = Parquet
 ## Reading and writing
 
 ```@docs
+Parquet.Table
 Parquet.write
 Parquet.Limits
 ```

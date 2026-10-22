@@ -761,3 +761,111 @@ end
         end
     end
 end
+
+mutable struct TableScanSource <: Parquet.AbstractSource
+    bytes::Vector{UInt8}
+    reads::Vector{Tuple{Int64,Int64}}
+end
+
+Parquet.sourcelength(source::TableScanSource) = Int64(length(source.bytes))
+
+function Parquet.readrange(source::TableScanSource, offset::Integer, count::Integer)
+    push!(source.reads, (Int64(offset), Int64(count)))
+    return source.bytes[(offset + 1):(offset + count)]
+end
+
+@testset "scan selects columns without reading the others" begin
+    decimals = Parquet.LogicalColumn(Union{Missing,Parquet.Decimal}[
+        Parquet.Decimal(125, 2), missing, Parquet.Decimal(-5, 2), Parquet.Decimal(0, 2)],
+        :decimal; precision=5, scale=2)
+    source = (id=Int32[1, 2, 3, 4], name=["w", "x", "y", "z"],
+        items=[Int64[1], Int64[], Int64[2, 3], Int64[4]],
+        point=NamedTuple{(:x, :y),Tuple{Float64,Union{Missing,Float64}}}[
+            (x=1.0, y=missing), (x=2.0, y=2.5), (x=3.0, y=missing), (x=4.0, y=4.5)],
+        amount=decimals)
+    bytes = Parquet._encodefile(source; rowgroupsize=2)
+    full = Parquet.Table(bytes)
+    amounts = full.columns.amount
+    close(full)
+
+    table = Parquet.Table(bytes; scan=Tables.Scan(select=(:items, :id)))
+    try
+        @test keys(table.columns) == (:items, :id)
+        @test table.rows == 4
+        @test collect.(table.columns.items) == source.items
+        @test table.columns.id == source.id
+        @test [element.name for element in table.metadata.schema] ==
+            ["schema", "items", "list", "element", "id"]
+        @test all(group -> length(group.columns) == 2, table.metadata.row_groups)
+    finally
+        close(table)
+    end
+
+    # Filter columns are read and dropped; renames carry into the stored schema, so a
+    # rewrite keeps the column's annotations.
+    request = Tables.Scan(select=(:amount => :cents, :point), offset=1, limit=2,
+        filter=Tables.col(:id) >= 2)
+    table = Parquet.Table(bytes; scan=request)
+    try
+        @test keys(table.columns) == (:cents, :point)
+        @test table.rows == 2
+        @test isequal(table.columns.cents, amounts[3:4])
+        @test isequal([NamedTuple(value) for value in table.columns.point],
+            [(x=3.0, y=missing), (x=4.0, y=4.5)])
+        io = IOBuffer()
+        Parquet.write(io, table)
+        rewritten = Parquet.Table(take!(io))
+        try
+            @test keys(rewritten.columns) == (:cents, :point)
+            element = rewritten.metadata.schema[2]
+            @test element.name == "cents" && element.logicalType.DECIMAL.precision == 5
+            @test isequal(rewritten.columns.cents, table.columns.cents)
+        finally
+            close(rewritten)
+        end
+    finally
+        close(table)
+    end
+
+    for (request, rows) in ((Tables.Scan(select=()), 4),
+            (Tables.Scan(select=(), offset=3), 1),
+            (Tables.Scan(select=(), filter=Tables.col(:id) > 1), 3))
+        table = Parquet.Table(bytes; scan=request)
+        @test isempty(table.columns) && table.rows == rows
+        close(table)
+    end
+    table = Parquet.Table(bytes; scan=Tables.Scan(select=Tables.Not(r"^(name|point)$")))
+    @test keys(table.columns) == (:id, :items, :amount)
+    close(table)
+    @test_throws ArgumentError Parquet.Table(bytes;
+        scan=Tables.Scan(select=(:id => Float64,)))
+    @test_throws ArgumentError Parquet.Table(bytes; scan=Tables.Scan(select=(:nope,)))
+
+    # Only the selected chunks are fetched, each in one read.
+    plain = Parquet._encodefile(source; rowgroupsize=2, pagesize=8, pageindex=false)
+    metadata = wpmetadata(plain)
+    tracked = TableScanSource(plain, Tuple{Int64,Int64}[])
+    table = Parquet.Table(tracked; scan=Tables.Scan(select=(:name,)))
+    try
+        @test table.columns.name == source.name
+    finally
+        close(table)
+    end
+    footer = length(plain) - 8 - Int(Parquet._readu32le(plain, length(plain) - 7))
+    for group in metadata.row_groups, (index, chunk) in enumerate(group.columns)
+        start, stop = Parquet._chunkrange(chunk.meta_data, Int64(footer))
+        reads = count(read -> read[1] < stop && read[1] + read[2] > start,
+            tracked.reads)
+        @test reads == (index == 2 ? 1 : 0)
+    end
+
+    # A damaged chunk of an unselected column does not affect the selection.
+    damaged = copy(plain)
+    chunk = first(metadata.row_groups).columns[1]
+    start, stop = Parquet._chunkrange(chunk.meta_data, Int64(footer))
+    damaged[(start + 1):stop] .= 0x00
+    @test_throws Parquet.FormatError Parquet.Table(damaged)
+    table = Parquet.Table(damaged; scan=Tables.Scan(select=Tables.Not(:id)))
+    @test table.columns.name == source.name
+    close(table)
+end
