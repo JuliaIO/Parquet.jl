@@ -277,7 +277,9 @@ function n5productionstreams(table, compiled::N5Compiled)
                 length(column.definitions) : length(column.repetitions)
         repetition = _n5productionlevels(column.repetitions, entries)
         definition = _n5productionlevels(column.definitions, entries)
-        values = Any[column.values...]
+        # STRING leaves may hold strings rather than bytes before encoding.
+        values = Any[value isa AbstractString ?
+            Vector{UInt8}(codeunits(value)) : value for value in column.values]
         push!(streams, N5LeafStream(repetition, definition, values,
             Int(column.max_repetition_level),
             Int(column.max_definition_level)))

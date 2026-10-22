@@ -89,10 +89,18 @@ function _writeentryoffsets(column::WriteColumn, rows::Int)
     repetitions = column.repetitions
     length(repetitions) == entries || throw(ArgumentError(
         "writer repetition stream length changed"))
+    _writerowstarts!(output, repetitions, UInt64(column.max_repetition_level),
+        rows)
+    output[rows + 1] = Int64(entries)
+    return output
+end
+
+function _writerowstarts!(output::Vector{Int64},
+        repetitions::AbstractVector{UInt64}, maxlevel::UInt64, rows::Int)
     row = 0
     for index in eachindex(repetitions)
         level = repetitions[index]
-        level <= UInt64(column.max_repetition_level) || throw(ArgumentError(
+        level <= maxlevel || throw(ArgumentError(
             "writer repetition level exceeds its schema maximum"))
         if iszero(level)
             row += 1
@@ -103,7 +111,6 @@ function _writeentryoffsets(column::WriteColumn, rows::Int)
     end
     row == rows || throw(ArgumentError(
         "writer leaf has $row row boundaries for $rows rows"))
-    output[rows + 1] = Int64(entries)
     return output
 end
 
@@ -123,23 +130,31 @@ function _writedenseoffsets(column::WriteColumn, entries::Vector{Int64})
     else
         length(definitions) == last(entries) || throw(ArgumentError(
             "writer definition stream length changed"))
-        maximum = UInt64(column.max_definition_level)
-        position = 0
-        for row in 1:rows
-            stop = Int(entries[row + 1])
-            while position < stop
-                position += 1
-                definition = definitions[position]
-                definition <= maximum || throw(ArgumentError(
-                    "writer definition level exceeds its schema maximum"))
-                definition == maximum && (dense = Base.checked_add(dense, 1))
-            end
-            output[row + 1] = dense
-        end
+        dense = _writedensecounts!(output, definitions, entries,
+            UInt64(column.max_definition_level))
     end
     dense == length(column.values) || throw(ArgumentError(
         "writer dense-value count does not match its definition stream"))
     return output
+end
+
+function _writedensecounts!(output::Vector{Int64},
+        definitions::AbstractVector{UInt64}, entries::Vector{Int64},
+        maximum::UInt64)
+    dense = Int64(0)
+    position = 0
+    for row in 1:(length(entries) - 1)
+        stop = Int(entries[row + 1])
+        while position < stop
+            position += 1
+            definition = definitions[position]
+            definition <= maximum || throw(ArgumentError(
+                "writer definition level exceeds its schema maximum"))
+            definition == maximum && (dense = Base.checked_add(dense, 1))
+        end
+        output[row + 1] = dense
+    end
+    return dense
 end
 
 function _writepayloadfixedwidth(column::WriteColumn)
@@ -175,13 +190,18 @@ function _writepayloadoffsets(column::WriteColumn, dense::Vector{Int64},
     physical == Metadata.Type.BYTE_ARRAY || throw(ArgumentError(
         "unsupported writer physical type $physical"))
     output[1] = Int64(0)
+    return _writebytearrayoffsets!(output, column.values, dense, limits)
+end
+
+function _writebytearrayoffsets!(output::Vector{Int64}, values::AbstractVector,
+        dense::Vector{Int64}, limits::Limits)
     bytes = Int64(0)
     position = 0
-    for row in 1:rows
+    for row in 1:(length(dense) - 1)
         stop = Int(dense[row + 1])
         while position < stop
             position += 1
-            value = column.values[position]
+            value = values[position]
             payload = value isa AbstractString ? ncodeunits(value) : length(value)
             _checklimit(:string_bytes, payload, limits.max_string_bytes)
             payload <= typemax(Int32) || throw(ArgumentError(
@@ -208,12 +228,15 @@ function _writevalidateprefixes(column::WriteColumn, rows::Int,
         "writer dense prefix has the wrong terminal count"))
     last(payload) == _writerrawpayloadbytes(column) || throw(AssertionError(
         "writer payload prefix has the wrong terminal byte count"))
-    for row in 1:rows
+    _writevalidaterowstarts(column.repetitions, entries)
+    return
+end
+
+function _writevalidaterowstarts(repetitions, entries::Vector{Int64})
+    for row in 1:(length(entries) - 1)
         entries[row + 1] > entries[row] || throw(ArgumentError(
             "every top-level row must add a level entry to every leaf"))
-        start = Int(entries[row]) + 1
-        repetitions = column.repetitions
-        repetitions === nothing || iszero(repetitions[start]) ||
+        repetitions === nothing || iszero(repetitions[Int(entries[row]) + 1]) ||
             throw(ArgumentError("writer data-page row boundary has nonzero repetition"))
     end
     return
@@ -418,37 +441,42 @@ struct _WriteChunkDictionary{V}
     bitwidth::Int
 end
 
-function _writepageestimate(leaf::WriteLeafPlan, firstrow::Int, lastrow::Int)
-    entries = leaf.entry_offsets[lastrow + 1] -
-        leaf.entry_offsets[firstrow + 1]
-    dense = leaf.dense_offsets[lastrow + 1] -
-        leaf.dense_offsets[firstrow + 1]
-    levels = Int64(0)
-    !iszero(leaf.column.max_repetition_level) &&
-        (levels = Base.checked_add(levels, Base.checked_mul(entries, Int64(8))))
-    !iszero(leaf.column.max_definition_level) &&
-        (levels = Base.checked_add(levels, Base.checked_mul(entries, Int64(8))))
-    raw = if leaf.column.physical == Metadata.Type.BOOLEAN
-        cld(dense, Int64(8))
-    else
-        leaf.payload_offsets[lastrow + 1] -
-            leaf.payload_offsets[firstrow + 1]
-    end
+# Estimated page bytes for rows firstrow+1:lastrow: 8 bytes per level entry and stream,
+# plus the raw value payload.
+function _writepageestimate(entries::Vector{Int64}, dense::Vector{Int64},
+        payload::Vector{Int64}, levelwidth::Int64, boolean::Bool,
+        firstrow::Int, lastrow::Int)
+    levels = Base.checked_mul(entries[lastrow + 1] - entries[firstrow + 1],
+        levelwidth)
+    raw = boolean ? cld(dense[lastrow + 1] - dense[firstrow + 1], Int64(8)) :
+        payload[lastrow + 1] - payload[firstrow + 1]
     return Base.checked_add(levels, raw)
 end
 
 function _writecandidateboundaries(leaf::WriteLeafPlan,
         pagesize::Union{Nothing,Int64})
-    rows = leaf.column.rows
+    column = leaf.column
+    rows = column.rows
     iszero(rows) && return Tuple{Int,Int}[]
     pagesize === nothing && return Tuple{Int,Int}[(0, rows)]
+    levelwidth = Int64(8) * (!iszero(column.max_repetition_level) +
+        !iszero(column.max_definition_level))
+    boolean = column.physical == Metadata.Type.BOOLEAN
+    return _writecandidateboundaries(leaf.entry_offsets, leaf.dense_offsets,
+        leaf.payload_offsets, levelwidth, boolean, rows, pagesize)
+end
+
+function _writecandidateboundaries(entries::Vector{Int64},
+        dense::Vector{Int64}, payload::Vector{Int64}, levelwidth::Int64,
+        boolean::Bool, rows::Int, pagesize::Int64)
     output = Tuple{Int,Int}[]
     firstrow = 0
     while firstrow < rows
         lastrow = firstrow
         while lastrow < rows
             candidate = lastrow + 1
-            estimate = _writepageestimate(leaf, firstrow, candidate)
+            estimate = _writepageestimate(entries, dense, payload, levelwidth,
+                boolean, firstrow, candidate)
             lastrow > firstrow && estimate > pagesize && break
             lastrow = candidate
         end
