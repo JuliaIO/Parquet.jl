@@ -397,3 +397,45 @@ end
     view = Parquet.MapValue{Int32,Missing,false}(attackkeys, nothing, 1, 1)
     @test_throws ArgumentError view[1]
 end
+
+@testset "nested vector row subsets stay columnar and writable" begin
+    E = Union{Missing,Int32}
+    S = NamedTuple{(:x, :tags),Tuple{E,Union{Missing,Vector{String}}}}
+    source = (
+        s=Union{Missing,S}[S((1, ["a"])), missing, S((missing, missing)), S((4, String[]))],
+        l=Union{Missing,Vector{E}}[E[1, missing], missing, E[], E[3]],
+        m=[Dict("k" => Int32(1)), Dict{String,Int32}(), Dict("q" => Int32(2), "r" => Int32(3)),
+            Dict{String,Int32}()],
+        f=Parquet.FixedByteArrayVector{Union{Missing,Vector{UInt8}}}(
+            Union{Missing,Vector{UInt8}}[UInt8[1, 2], missing, UInt8[3, 4], UInt8[5, 6]],
+            Int32(2)),
+    )
+    table = Parquet.Table(Parquet._encodefile(source))
+    try
+        columns = table.columns
+        for selection in ([3, 1], Bool[true, false, true, true], Int[], :)
+            for name in keys(columns)
+                column = getproperty(columns, name)
+                subset = column[selection]
+                @test typeof(subset) == typeof(column)
+                @test isequal(collect(subset), collect(column)[selection])
+            end
+            subset = map(column -> column[selection], columns)
+            written = Parquet.Table(Parquet._encodefile(subset))
+            try
+                for name in keys(columns)
+                    @test isequal(collect(getproperty(written.columns, name)),
+                        collect(getproperty(columns, name))[selection])
+                end
+            finally
+                close(written)
+            end
+        end
+        copied = copy(columns.s)
+        @test copied isa Parquet.StructVector && copied.children !== columns.s.children
+        @test_throws BoundsError columns.l[[5]]
+        @test_throws BoundsError columns.m[Bool[true]]
+    finally
+        close(table)
+    end
+end

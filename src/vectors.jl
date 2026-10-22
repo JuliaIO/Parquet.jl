@@ -1068,3 +1068,83 @@ function (::Type{Dict})(value::MapValue{K,V}) where {K,V}
     end
     return output
 end
+
+# Row subsets and copies keep the columnar layout. A StructVector, ListVector, or
+# MapVector carries the child schema the writer needs, which a plain Vector of its
+# row values does not, so `copy(column)`, `column[rows]`, and `column[mask]` (what
+# DataFrames uses to copy, subset, filter, and sort) stay writable.
+function _rowselection(column::AbstractVector, rows::AbstractVector{<:Integer})
+    @boundscheck checkbounds(column, rows)
+    return Int[Int(row) for row in rows]
+end
+
+function _childspans(offsets::Vector{O}, rows::Vector{Int}) where {O}
+    selected = Vector{O}(undef, length(rows) + 1)
+    selected[1] = zero(O)
+    spans = Int[]
+    for (index, row) in enumerate(rows)
+        firstindex, lastindex = _nestedspan(offsets, row)
+        append!(spans, firstindex:lastindex)
+        selected[index + 1] = selected[index] + O(lastindex - firstindex + 1)
+    end
+    return selected, spans
+end
+
+function _subsetrows(column::FixedByteArrayVector{T}, rows::Vector{Int}) where {T}
+    return FixedByteArrayVector{T}(column.values[rows], column.width)
+end
+
+function _subsetrows(column::ListVector{T,E,O,V}, rows::Vector{Int}) where {T,E,O,V}
+    offsets, spans = _childspans(column.offsets, rows)
+    validity = column.validity === nothing ? nothing : column.validity[rows]
+    return ListVector{T,E,O,V}(offsets, validity, column.values[spans])
+end
+
+function _subsetrows(column::MapVector{T,K,V,H,O,Validity},
+        rows::Vector{Int}) where {T,K,V,H,O,Validity}
+    offsets, spans = _childspans(column.offsets, rows)
+    validity = column.validity === nothing ? nothing : column.validity[rows]
+    values = column.values === nothing ? nothing : column.values[spans]
+    return MapVector{T,K,V,H,O,Validity}(offsets, validity, column.keys[spans],
+        values)
+end
+
+function _subsetrows(column::StructVector{T,Nothing}, rows::Vector{Int}) where {T}
+    children = AbstractVector[child[rows] for child in column.children]
+    return StructVector{T,Nothing}(copy(column.names), nothing, children,
+        length(rows))
+end
+
+function _subsetrows(column::StructVector{T,R}, rows::Vector{Int}) where {T,R}
+    ranks = column.ranks
+    I = eltype(ranks)
+    selected = Vector{I}(undef, length(rows) + 1)
+    selected[1] = zero(I)
+    dense = Int[]
+    for (index, row) in enumerate(rows)
+        present = ranks[row + 1] > ranks[row]
+        present && push!(dense, Int(ranks[row + 1]))
+        selected[index + 1] = selected[index] + I(present)
+    end
+    children = AbstractVector[child[dense] for child in column.children]
+    return StructVector{T,R}(copy(column.names), selected, children, length(rows))
+end
+
+const _ColumnarVector = Union{FixedByteArrayVector,ListVector,MapVector,StructVector}
+
+function Base.getindex(column::_ColumnarVector, rows::AbstractVector{<:Integer})
+    return _subsetrows(column, _rowselection(column, rows))
+end
+
+function Base.getindex(column::_ColumnarVector, mask::AbstractVector{Bool})
+    length(mask) == length(column) || throw(BoundsError(column, mask))
+    return _subsetrows(column, findall(mask))
+end
+
+function Base.getindex(column::_ColumnarVector, ::Colon)
+    return copy(column)
+end
+
+function Base.copy(column::_ColumnarVector)
+    return _subsetrows(column, collect(1:length(column)))
+end
