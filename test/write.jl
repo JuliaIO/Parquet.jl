@@ -102,14 +102,11 @@ Tables.columns(source::NestedPathTable) = Tables.columns(source.table)
 # Send a scalar table through the nested shredder instead of the flat fast path.
 function Parquet._writefieldsencoded(source::NestedPathTable, limits::Parquet.Limits,
         budget::Parquet._LiveByteBudget, encoding, dictionary::Bool)
-    columns, rows, inputcharge, _ = Parquet._writeinputcolumns(source.table, limits,
-        budget)
+    columns, rows, _ = Parquet._writeinputcolumns(source.table, limits, budget)
     preflight = semantic -> Parquet._preflightwriteencoding(semantic, encoding,
-        dictionary, budget)
-    fields = Parquet._nestedwritefields(columns, rows, limits, budget;
-        preflight=preflight)
-    Parquet._release!(budget, inputcharge)
-    return fields, rows
+        dictionary)
+    return Parquet._nestedwritefields(columns, rows, limits;
+        preflight=preflight), rows
 end
 
 @testset "flat writer fast path matches the nested writer" begin

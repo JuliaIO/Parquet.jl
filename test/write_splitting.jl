@@ -685,16 +685,4 @@ end
         (value=Int32[1],), ordinarylimits, ordinarytable)
     @test Parquet._budgetused(ordinarytable) == ordinarytableentry == 64
 
-    source = Parquet.Table(Parquet._encodefile((value=Int32[1],)))
-    try
-        provenancelimits = Parquet.Limits(max_materialized_bytes=2000)
-        provenancetable = Parquet._LiveByteBudget(provenancelimits)
-        Parquet._reservearray!(provenancetable, UInt8, 0)
-        provenanceentry = Parquet._budgetused(provenancetable)
-        @test_throws Parquet.LimitError Parquet._writeplan(source,
-            provenancelimits, provenancetable)
-        @test Parquet._budgetused(provenancetable) == provenanceentry == 64
-    finally
-        close(source)
-    end
 end

@@ -60,7 +60,6 @@ function n5frozenwriterguard()
             endswith(file, ".jl") || continue
             path = normpath(joinpath(directory, file))
             relative = relpath(path, root)
-            first(splitpath(relative)) == "hardening" && continue
             parsed = Meta.parseall(read(path, String))
             found = Tuple{Symbol,Bool}[]
             n5collectfrozenwritercalls!(found, parsed)

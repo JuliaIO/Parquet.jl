@@ -35,6 +35,7 @@ adaptive dictionary encoding when `dictionary=true`.
 
 The writer reads each value of a scalar column once: a column that is not a `Vector`
 is first collected into one, so lazy or computed vectors are evaluated a single time.
+Changes made to a source while it is being written are not detected.
 
 ## Nested columns
 
@@ -149,11 +150,11 @@ operation's budget.
 
 ### Nesting depth
 
-Schema parsing and write validation are iterative and accept very deep schemas under a
-raised `max_metadata_depth`. Nested reading still recurses once per level, so it
+Schema parsing is iterative and accepts very deep schemas under a raised
+`max_metadata_depth`. Nested reading and writing recurse once per level. Reading
 rejects a plan deeper than 1024 levels with a `LimitError` instead of exhausting the
-stack. The writer can therefore produce a synthetic file that the reader declines.
-Ordinary Parquet nesting is far below this bound.
+stack; writing is bounded only by `max_metadata_depth`, so it can produce a synthetic
+file that the reader declines. Ordinary Parquet nesting is far below these bounds.
 
 ## Sources and file lifetime
 

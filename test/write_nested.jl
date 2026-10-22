@@ -142,43 +142,6 @@ Base.size(values::WNZeroVector) = size(values.values)
 Base.axes(values::WNZeroVector) = (0:(length(values.values) - 1),)
 Base.getindex(values::WNZeroVector, index::Int) = values.values[index + 1]
 
-mutable struct WNThrowingSizeVector{T,E} <: AbstractVector{T}
-    values::Vector{T}
-    calls::Int
-    throw_on::Int
-    exception::E
-end
-
-function Base.IndexStyle(::Type{<:WNThrowingSizeVector})
-    return IndexLinear()
-end
-
-function Base.size(values::WNThrowingSizeVector)
-    values.calls += 1
-    values.calls == values.throw_on && throw(values.exception)
-    return size(values.values)
-end
-
-function Base.length(values::WNThrowingSizeVector)
-    return length(values.values)
-end
-
-function Base.axes(values::WNThrowingSizeVector)
-    return (Base.OneTo(length(values.values)),)
-end
-
-function Base.firstindex(::WNThrowingSizeVector)
-    return 1
-end
-
-function Base.lastindex(values::WNThrowingSizeVector)
-    return length(values.values)
-end
-
-function Base.getindex(values::WNThrowingSizeVector, index::Int)
-    return values.values[index]
-end
-
 function wndeepstruct(depth::Int, rows::Int)
     values::AbstractVector = iszero(rows) ? Int32[] : Int32[7]
     for level in depth:-1:1
@@ -187,29 +150,6 @@ function wndeepstruct(depth::Int, rows::Int)
             AbstractVector[values]; rows=rows)
     end
     return values
-end
-
-function wnwriterpassallocations(source::AbstractVector)
-    limits = Parquet.Limits(max_materialized_bytes=1_000_000_000)
-    budget = Parquet._LiveByteBudget(limits)
-    shape = Parquet._nestedwriteshape("value", eltype(source), source,
-        limits, budget)
-    shapes = Parquet._NestedWriteShape[shape]
-    values = AbstractVector[source]
-    rows = length(source)
-    fragment = Parquet._nestedwriteschema(shape, limits, budget)
-    fragments = Vector{Parquet.Metadata.SchemaElement}[fragment]
-    semantic, plans = Parquet._nestedwritecompile(shapes, fragments, limits,
-        budget)
-    Parquet._nestedwritescanaggregates!(shapes, values, rows, limits, nothing)
-    scanbytes = @allocated Parquet._nestedwritescanaggregates!(shapes, values,
-        rows, limits, nothing)
-    counts = Parquet._nestedwritecounts(length(semantic.leaves), budget)
-    context = Parquet._NestedWriteCountContext(counts, limits)
-    Parquet._nestedwritescanrows!(context, plans, values, rows)
-    rowbytes = @allocated Parquet._nestedwritescanrows!(context, plans,
-        values, rows)
-    return scanbytes, rowbytes
 end
 
 struct WNTrackedBytes <: AbstractVector{UInt8}
@@ -1106,11 +1046,8 @@ end
 
     tracked = WNTrackedBytes(fill(UInt8(1), 100_000), Ref(0))
     pagelimits = Parquet.Limits(max_page_bytes=1)
-    payloadbudget = Parquet._LiveByteBudget(pagelimits)
-    @test_throws Parquet.LimitError Parquet._writefields(
-        (value=WNTrackedBytes[tracked],), pagelimits, payloadbudget)
-    @test tracked.reads[] == 0
-    @test Parquet._budgetused(payloadbudget) == 0
+    @test_throws Parquet.LimitError Parquet._encodefile(
+        (value=WNTrackedBytes[tracked],); limits=pagelimits)
 
     calls, rows, values = wnchangingsource(repeat("y", 100_000))
     @test calls == 1
@@ -1138,17 +1075,14 @@ end
     end
 end
 
-@testset "ordinary writer iterative topology and exact rollback" begin
+@testset "ordinary writer deep structs" begin
     depth = 4096
     exactlimits = Parquet.Limits(max_metadata_depth=depth + 2,
-        max_container_elements=100_000,
-        max_materialized_bytes=256 * 1024 * 1024)
+        max_container_elements=100_000)
     sources = (wndeepstruct(depth, 0), wndeepstruct(depth, 1))
     for (rows, source) in enumerate(sources)
         expectedrows = rows - 1
-        budget = Parquet._LiveByteBudget(exactlimits)
-        fields, written = Parquet._writefields((deep=source,), exactlimits,
-            budget)
+        fields, written = Parquet._writefields((deep=source,), exactlimits)
         field = only(fields)
         leaf = only(field.leaves)
         @test written == expectedrows
@@ -1157,15 +1091,10 @@ end
         @test leaf.values == (iszero(expectedrows) ? Int32[] : Int32[7])
     end
 
-    precharge = Int64(257)
     failurelimits = Parquet.Limits(max_metadata_depth=depth + 1,
-        max_container_elements=100_000,
-        max_materialized_bytes=256 * 1024 * 1024)
-    failurebudget = Parquet._LiveByteBudget(failurelimits)
-    Parquet._reserve!(failurebudget, precharge)
+        max_container_elements=100_000)
     caught = try
-        Parquet._writefields((deep=last(sources),), failurelimits,
-            failurebudget)
+        Parquet._writefields((deep=last(sources),), failurelimits)
         nothing
     catch err
         err
@@ -1174,199 +1103,85 @@ end
     @test caught.resource == :metadata_depth
     @test caught.requested == depth + 2
     @test caught.maximum == depth + 1
-    @test Parquet._budgetused(failurebudget) == precharge
-    Parquet._release!(failurebudget, precharge)
-
-    frame = Parquet._NestedWriteSourceFrame
-    headercharge = Parquet._materializedsum(
-        Parquet._materializedarraybytes(frame, 0),
-        Parquet._MATERIALIZED_OBJECT_BYTES)
-    framecharge = Parquet._materializedarraybytes(frame, 1; header=false)
-    traversalcharge = headercharge + 2 * framecharge
-    framesource = Parquet.StructVector(String["value"],
-        AbstractVector[Int32[]]; rows=0)
-    lowlimits = Parquet.Limits(
-        max_materialized_bytes=precharge + traversalcharge - 1)
-    lowbudget = Parquet._LiveByteBudget(lowlimits)
-    Parquet._reserve!(lowbudget, precharge)
-    caught = try
-        Parquet._nestedwritevalidatesource(framesource, lowlimits, lowbudget)
-        nothing
-    catch err
-        err
-    end
-    @test caught isa Parquet.LimitError
-    @test caught.resource == :materialized_bytes
-    @test caught.requested == precharge + traversalcharge
-    @test caught.maximum == precharge + traversalcharge - 1
-    @test Parquet._budgetused(lowbudget) == precharge
-    Parquet._release!(lowbudget, precharge)
-
-    exactframelimits = Parquet.Limits(
-        max_materialized_bytes=precharge + traversalcharge)
-    exactframebudget = Parquet._LiveByteBudget(exactframelimits)
-    Parquet._reserve!(exactframebudget, precharge)
-    Parquet._nestedwritevalidatesource(framesource, exactframelimits,
-        exactframebudget)
-    @test Parquet._budgetused(exactframebudget) == precharge
-    Parquet._release!(exactframebudget, precharge)
-
-    precedencecharge = headercharge + framecharge
-    precedencesource = Parquet.StructVector(String["first", "second"],
-        AbstractVector[Int32[], Int32[]]; rows=0)
-    precedencelimits = Parquet.Limits(max_metadata_depth=1,
-        max_materialized_bytes=precharge + precedencecharge)
-    precedencebudget = Parquet._LiveByteBudget(precedencelimits)
-    Parquet._reserve!(precedencebudget, precharge)
-    caught = try
-        Parquet._nestedwritevalidatesource(precedencesource,
-            precedencelimits, precedencebudget)
-        nothing
-    catch err
-        err
-    end
-    @test caught isa Parquet.LimitError
-    @test caught.resource == :metadata_depth
-    @test caught.requested == 2
-    @test caught.maximum == 1
-    @test Parquet._budgetused(precedencebudget) == precharge
-    Parquet._release!(precedencebudget, precharge)
-
-    sentinel = ErrorException("writer topology callback sentinel")
-    backing = WNThrowingSizeVector(Int32[7], 0, 4, sentinel)
-    view = Parquet.ListValue(backing, 1, 1)
-    views = WNDeclaredVector{Parquet.ListValue{Int32}}(Any[view])
-    callbacklimits = Parquet.Limits()
-    callbackbudget = Parquet._LiveByteBudget(callbacklimits)
-    Parquet._reserve!(callbackbudget, precharge)
-    caught = try
-        Parquet._writefields((deep=views,), callbacklimits, callbackbudget)
-        nothing
-    catch err
-        err
-    end
-    @test caught === sentinel
-    @test backing.calls == 4
-    @test Parquet._budgetused(callbackbudget) == precharge
-    Parquet._release!(callbackbudget, precharge)
 end
 
-@testset "ordinary writer reuses pass scratch stacks" begin
-    rows = 1000
-    structs = Parquet.StructVector(String["value"],
-        AbstractVector[fill(Int32(1), rows)]; rows=rows)
-    lists = Parquet.ListVector(collect(Int32(0):Int32(rows)),
-        fill(Int32(1), rows))
-    structscan, structrows = wnwriterpassallocations(structs)
-    listscan, listrows = wnwriterpassallocations(lists)
-    # These bounds catch a pass that stops reusing its scratch stacks, which costs
-    # far more than a constant per row. Keep them loose: the same measurement runs
-    # about a seventh higher on x86-64 than on arm64, and varies by Julia version.
-    @test structscan < 1800 * rows
-    @test structrows < 3300 * rows
-    @test listscan < 4200 * rows
-    @test listrows < 6300 * rows
-
-    limits = Parquet.Limits()
-    budget = Parquet._LiveByteBudget(limits)
-    shape = Parquet._nestedwriteshape("value", Int32, Int32[], limits,
-        budget)
-    fragment = Parquet._nestedwriteschema(shape, limits, budget)
-    semantic, plans = Parquet._nestedwritecompile(
-        Parquet._NestedWriteShape[shape],
-        Vector{Parquet.Metadata.SchemaElement}[fragment], limits, budget)
-    counts = Parquet._nestedwritecounts(length(semantic.leaves), budget)
-    context = Parquet._NestedWriteCountContext(counts, limits)
-    plan = only(plans)::Parquet._NestedWriteLeafPlan
-    Parquet._nestedwritescanaggregate!(shape, Int32(1), limits)
-    Parquet._nestedwriteshred!(context, plan, Int32(1), UInt64(0), nothing)
-    @test @allocated(Parquet._nestedwritescanaggregate!(shape, Int32(1),
-        limits)) == 0
-    @test @allocated(Parquet._nestedwriteshred!(context, plan, Int32(1),
-        UInt64(0), nothing)) == 0
-
-    precharge = Int64(31)
-    actiontype = Parquet._NestedWriteScanAction
-    headercharge = Parquet._materializedsum(
-        Parquet._materializedarraybytes(actiontype, 0),
-        Parquet._MATERIALIZED_OBJECT_BYTES)
-    framecharge = Parquet._materializedarraybytes(actiontype, 1;
-        header=false)
-    lowlimits = Parquet.Limits(
-        max_materialized_bytes=precharge + headercharge + framecharge - 1)
-    lowbudget = Parquet._LiveByteBudget(lowlimits)
-    Parquet._reserve!(lowbudget, precharge)
-    lowstack = Parquet._nestedwritepassstackstart(actiontype, lowbudget)
-    action = Parquet._nestedwritescanenter(shape, Int32(1), nothing)
-    caught = try
-        Parquet._nestedwritestackpush!(lowstack, action, lowbudget)
-        nothing
-    catch err
-        err
-    end
-    @test caught isa Parquet.LimitError
-    @test caught.requested == precharge + headercharge + framecharge
-    @test Parquet._budgetused(lowbudget) == precharge + headercharge
-    Parquet._nestedwritepassstackrelease!(lowstack, lowbudget)
-    @test Parquet._budgetused(lowbudget) == precharge
-    Parquet._release!(lowbudget, precharge)
-
-    exactlimits = Parquet.Limits(
-        max_materialized_bytes=precharge + headercharge + framecharge)
-    exactbudget = Parquet._LiveByteBudget(exactlimits)
-    Parquet._reserve!(exactbudget, precharge)
-    exactstack = Parquet._nestedwritepassstackstart(actiontype, exactbudget)
-    Parquet._nestedwritestackpush!(exactstack, action, exactbudget)
-    Parquet._nestedwritepassstackpop!(exactstack)
-    Parquet._nestedwritepassstackprocessed!(exactstack)
-    @test Parquet._budgetused(exactbudget) ==
-        precharge + headercharge + framecharge
-    Parquet._nestedwritepassstackrelease!(exactstack, exactbudget)
-    @test Parquet._budgetused(exactbudget) == precharge
-    Parquet._release!(exactbudget, precharge)
-end
-
-@testset "aggregate scan without a trace covers MAP sources" begin
-    # A MAP key snapshot exists only while a trace records one, so a traceless
-    # aggregate scan has no snapshot to assert against. Both MAP scan arms used to
-    # reach the key assertion with no snapshot and raise a MethodError, so this
-    # helper was only ever exercised with struct and list sources.
-    rows = 4
-    dicts = [Dict("k$(index)" => Int32(index)) for index in 1:rows]
-    dictscan, dictrows = wnwriterpassallocations(dicts)
-    @test dictscan >= 0 && dictrows >= 0
-
-    views = Parquet.MapVector(collect(Int32(0):Int32(rows)),
-        String["k$(index)" for index in 1:rows], collect(Int32(1):Int32(rows)))
-    viewscan, viewrows = wnwriterpassallocations(views)
-    @test viewscan >= 0 && viewrows >= 0
-
-    # Inferring the leaf schema is the reason a traceless scan exists, so check that
-    # it still aggregates rather than merely completing.
-    limits = Parquet.Limits(max_materialized_bytes=1_000_000_000)
-    function wnmapaggregate(source)
-        budget = Parquet._LiveByteBudget(limits)
-        shape = Parquet._nestedwriteshape("value", eltype(source), source,
-            limits, budget)
-        Parquet._nestedwritescanaggregates!(Parquet._NestedWriteShape[shape],
-            AbstractVector[source], length(source), limits, nothing)
-        return shape.value.aggregate
-    end
+@testset "MAP values infer DECIMAL and TIMESTAMP annotations" begin
     decimals = Dict{String,Parquet.Decimal}[
         Dict("k" => Parquet.Decimal(Int128(1234), Int32(2)))]
-    decimal = wnmapaggregate(decimals)
-    @test decimal.seen && decimal.precision == 4 && decimal.scale == Int32(2)
     stamps = Dict{String,Parquet.Timestamp{:micros}}[
         Dict("k" => Parquet.Timestamp(Int64(5), :micros, true))]
-    stamp = wnmapaggregate(stamps)
-    @test stamp.seen && something(stamp.adjusted)
+    views = Parquet.MapVector(Int32[0, 1], String["k"],
+        Parquet.Decimal[Parquet.Decimal(Int128(-56789), Int32(3))])
+    for (source, check) in (
+            (decimals, logical -> logical.DECIMAL.precision == 4 &&
+                logical.DECIMAL.scale == 2),
+            (stamps, logical -> logical.TIMESTAMP.isAdjustedToUTC),
+            (views, logical -> logical.DECIMAL.precision == 5 &&
+                logical.DECIMAL.scale == 3))
+        bytes = Parquet._encodefile((m=source,))
+        value = only(filter(element -> element.name == "value",
+            wninspect(bytes).metadata.schema))
+        @test check(value.logicalType)
+        table = Parquet.Table(bytes)
+        try
+            plain(x::Parquet.DataDecimals.AbstractDecimal) = Parquet.Decimal(
+                BigInt(Parquet.DataDecimals.unscaled(x)),
+                Parquet.DataDecimals.scale(x))
+            plain(x::AbstractString) = String(x)
+            plain(x) = x
+            @test isequal(
+                [plain(pair.first) => plain(pair.second)
+                    for pair in only(table.columns.m)],
+                collect(only(source)))
+        finally
+            close(table)
+        end
+    end
+end
 
-    # The snapshot is the only check the traceless path drops; a key that does not
-    # match its declared shape must still be rejected.
-    budget = Parquet._LiveByteBudget(limits)
-    keyshape = Parquet._nestedwriteshape("key", String, String[], limits, budget)
-    @test_throws ArgumentError Parquet._nestedwritekeyassert!(nothing, Int32(1),
-        keyshape, limits, nothing, nothing, nothing)
-    @test Parquet._nestedwritekeyassert!(nothing, "k", keyshape, limits, nothing,
-        nothing, nothing) === nothing
+@testset "MAP sources: struct keys, duplicate keys, null and empty rows" begin
+    keys = Parquet.StructVector(["optional"],
+        [Union{Missing,Int32}[missing, Int32(2)]])
+    maps = Parquet.MapVector(Int32[0, 2], keys, Int32[10, 20])
+    for version in (:v1, :v2)
+        bytes = Parquet._encodefile((m=maps,); checksum=false,
+            pageversion=version, pageindex=false)
+        table = Parquet.Table(bytes)
+        try
+            pairs = collect(table.columns.m[1])
+            @test length(pairs) == 2
+            @test pairs[1].first[1] === missing
+            @test pairs[2].first[1] == Int32(2)
+        finally
+            close(table)
+        end
+    end
+
+    duplicate = Parquet.MapVector(Int32[0, 2], Int32[1, 1], Int32[10, 11])
+    table = Parquet.Table(Parquet._encodefile((m=duplicate,)))
+    try
+        @test collect(table.columns.m[1]) ==
+            [Int32(1) => Int32(10), Int32(1) => Int32(11)]
+    finally
+        close(table)
+    end
+
+    values = Parquet.MapVector(Int32[0, 0, 0, 2, 3], String["a", "b", "c"],
+        Union{Missing,Int32}[missing, 2, 3];
+        validity=Bool[false, true, true, true])
+    for pageversion in (:v1, :v2)
+        bytes = Parquet._encodefile((attrs=values,);
+            pageversion=pageversion, checksum=false, pageindex=false)
+        reread = Parquet.Table(bytes)
+        try
+            @test reread.columns.attrs[1] === missing
+            @test isempty(reread.columns.attrs[2])
+            @test isequal(collect(reread.columns.attrs[3]),
+                Pair{String,Union{Missing,Int32}}[
+                    "a" => missing, "b" => Int32(2)])
+            @test collect(reread.columns.attrs[4]) == ["c" => Int32(3)]
+        finally
+            close(reread)
+        end
+    end
 end

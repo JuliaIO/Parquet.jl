@@ -6,22 +6,6 @@ const WPTH = Parquet.Thrift
 const WRITE_PROVENANCE_CORPUS = get(ENV, "PARQUET_TESTING_DIR",
     joinpath(@__DIR__, "parquet-testing"))
 
-struct WPNullKeyVector{T} <: AbstractVector{T}
-    values::Vector{T}
-end
-
-function Base.IndexStyle(::Type{<:WPNullKeyVector})
-    return IndexLinear()
-end
-
-function Base.size(values::WPNullKeyVector)
-    return size(values.values)
-end
-
-function Base.getindex(values::WPNullKeyVector, index::Int)
-    return index == firstindex(values.values) ? missing : values.values[index]
-end
-
 function wpfixture(name::AbstractString)
     return joinpath(WRITE_PROVENANCE_CORPUS, "data", name)
 end
@@ -64,12 +48,29 @@ function wprawi32(id::Integer, value::Integer)
     return WPTH.RawField(id, WPTH.I32, writer.buffer)
 end
 
-function wpschemaequal(left, right)
+# Field-by-field equality that also compares the raw Compact Thrift header state of
+# preserved unknown fields, which RawField's == ignores.
+function wpexact(left::WPTH.RawField, right::WPTH.RawField)
+    return left.id == right.id && left.type == right.type &&
+        left.previd == right.previd && left.headerlength == right.headerlength &&
+        left.bytes == right.bytes
+end
+
+function wpexact(left::AbstractVector, right::AbstractVector)
     length(left) == length(right) || return false
-    for index in eachindex(left, right)
-        Parquet._provenanceexact(left[index], right[index]) || return false
-    end
-    return true
+    return all(index -> wpexact(left[index], right[index]), eachindex(left, right))
+end
+
+function wpexact(left, right)
+    typeof(left) === typeof(right) || return false
+    T = typeof(left)
+    isstructtype(T) && hasfield(T, :unknown_fields) || return isequal(left, right)
+    return all(index -> wpexact(getfield(left, index), getfield(right, index)),
+        1:fieldcount(T))
+end
+
+function wpschemaequal(left, right)
+    return wpexact(left, right)
 end
 
 function wpsemantic(value)
@@ -123,53 +124,6 @@ function wpexactrewrite(table::Parquet.Table; kwargs...)
         close(rewritten)
     end
     return output
-end
-
-function wpprovenancesource()
-    structs = Union{Missing,NamedTuple{(:id,:name),Tuple{Int32,String}}}[
-        missing,
-        (id=Int32(1), name="one"),
-        (id=Int32(2), name="two"),
-    ]
-    lists = Union{Missing,Vector{Union{Missing,Int32}}}[
-        missing,
-        Union{Missing,Int32}[],
-        Union{Missing,Int32}[Int32(1), missing],
-    ]
-    maps = Union{Missing,Dict{String,Union{Missing,Int32}}}[
-        missing,
-        Dict{String,Union{Missing,Int32}}(),
-        Dict{String,Union{Missing,Int32}}("a" => Int32(1), "b" => missing),
-    ]
-    return (; s=structs, l=lists, m=maps)
-end
-
-function wpfreshtable()
-    return Parquet.Table(Parquet._encodefile(wpprovenancesource()))
-end
-
-function wpreplacecolumn!(table::Parquet.Table, name::Symbol, replacement)
-    names = keys(table.columns)
-    columns = ntuple(length(names)) do index
-        return names[index] == name ? replacement : values(table.columns)[index]
-    end
-    updated = NamedTuple{names}(columns)
-    typeof(updated) === typeof(table.columns) || throw(ArgumentError(
-        "replacement changed the concrete table column type"))
-    table.columns = updated
-    return table
-end
-
-function wprejects(f)
-    error = try
-        f()
-        nothing
-    catch err
-        err
-    end
-    @test error !== nothing
-    @test error isa Union{ArgumentError,Parquet.FormatError,Parquet.LimitError}
-    return error
 end
 
 function wpdeepstructtable(depth::Int, rows::Int)
@@ -241,46 +195,6 @@ function wpdeepstructkeytable(depth::Int)
     return table, limits
 end
 
-function wpbindingpass(table, semantic, limits, budget, topology)
-    before = Parquet._budgetused(budget)
-    bindings = Parquet._provenancebindings(table, semantic, limits, budget,
-        topology)
-    count = length(bindings)
-    Parquet._release!(budget, Parquet._budgetused(budget) - before)
-    return count
-end
-
-function wpprovenanceallocations(name::Symbol)
-    source = NamedTuple{(name,)}((Int32[1],))
-    table = Parquet.Table(Parquet._encodefile(source))
-    try
-        limits = Parquet.Limits()
-        budget = Parquet._LiveByteBudget(limits)
-        _, schema = Parquet._provenancefreshschema(table, limits, budget)
-        semantic = Parquet._nestedplan(schema; limits=limits, budget=budget)
-        topology = Parquet._provenancetopology(table, limits, budget)
-        wpbindingpass(table, semantic, limits, budget, topology)
-        GC.gc()
-        bindingbytes = @allocated wpbindingpass(table, semantic, limits, budget,
-            topology)
-        bindings = Parquet._provenancebindings(table, semantic, limits, budget,
-            topology)
-        before = Parquet._budgetused(budget)
-        Parquet._provenancevalidatetop(table, semantic, bindings, 1, limits,
-            topology, budget)
-        Parquet._budgetused(budget) == before || throw(AssertionError(
-            "provenance validation retained scratch budget"))
-        GC.gc()
-        validationbytes = @allocated Parquet._provenancevalidatetop(table,
-            semantic, bindings, 1, limits, topology, budget)
-        Parquet._budgetused(budget) == before || throw(AssertionError(
-            "provenance validation retained measured scratch budget"))
-        return (; bindingbytes, validationbytes)
-    finally
-        close(table)
-    end
-end
-
 function wpcustomschemafile()
     labels = Union{Missing,Vector{Union{Missing,String}}}[
         missing,
@@ -308,44 +222,6 @@ function wpcustomschemafile()
     end
     custom = wpreplace(metadata; schema=schema)
     return wprewritefooter(bytes, custom)
-end
-
-struct WPNestedPathTable
-    table::Parquet.Table
-end
-
-# Send a flat Parquet.Table through the nested provenance writer.
-function Parquet._writefieldsencoded(source::WPNestedPathTable, limits::Parquet.Limits,
-        budget::Parquet._LiveByteBudget, encoding, dictionary::Bool)
-    return Parquet._provenancewritefields(source.table, limits, budget, encoding,
-        dictionary; flat=false)
-end
-
-function Parquet._writekeyvaluemetadata(source::WPNestedPathTable,
-        limits::Parquet.Limits, budget::Parquet._LiveByteBudget)
-    return Parquet._writekeyvaluemetadata(source.table, limits, budget)
-end
-
-@testset "flat schema-bearing rewrite matches the nested provenance writer" begin
-    source = (id=Int32[1, 2, 3], name=Union{Missing,String}["a", missing, "c"],
-        day=[Date(2000), Date(1969), Date(1970)],
-        fixed=NTuple{2,UInt8}[(0x01, 0x02), (0x03, 0x04), (0x05, 0x06)],
-        amount=Parquet.LogicalColumn(Union{Missing,Parquet.Decimal}[
-            Parquet.Decimal(1, 2), missing, Parquet.Decimal(-7, 2)], :decimal;
-            precision=4, scale=2))
-    table = Parquet.Table(Parquet._encodefile(source; pageversion=:v2))
-    try
-        @test Parquet._provenanceflat(table, Parquet._nestedplan(table.schema))
-        for options in ((;), (dictionary=true, codec=:gzip, rowgroupsize=2),
-                (pageversion=:v2, statistics=false, encoding=(id=:delta_binary_packed,)))
-            fast = (io = IOBuffer(); Parquet.write(io, table; options...); take!(io))
-            nested = (io = IOBuffer(); Parquet.write(io, WPNestedPathTable(table);
-                options...); take!(io))
-            @test fast == nested
-        end
-    finally
-        close(table)
-    end
 end
 
 @testset "schema-bearing writer exact provenance" begin
@@ -407,8 +283,7 @@ end
     actual = only(rewritten.key_value_metadata)
     @test actual.key == expected.key
     @test actual.value == expected.value
-    @test Parquet._provenanceexact(actual.unknown_fields,
-        expected.unknown_fields)
+    @test wpexact(actual.unknown_fields, expected.unknown_fields)
 end
 
 @testset "schema-bearing writer selectors" begin
@@ -498,161 +373,21 @@ end
     close(table)
 end
 
-@testset "schema-bearing writer rejects stored-schema tampering" begin
-    table = wpfreshtable()
-    changed = copy(table.metadata.schema)
-    changed[1] = wpreplace(changed[1]; field_id=Int32(777))
-    table.metadata = wpreplace(table.metadata; schema=changed)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    changed = copy(table.metadata.schema)
-    leafindex = findfirst(element -> element.name == "id", changed)
-    changed[leafindex] = wpreplace(changed[leafindex]; type_=WPMD.Type.INT64)
-    table.metadata = wpreplace(table.metadata; schema=changed)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    changed = copy(table.metadata.schema)
-    changed[1] = wpreplace(changed[1];
-        num_children=changed[1].num_children + Int32(1))
-    table.metadata = wpreplace(table.metadata; schema=changed)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    changed = copy(table.metadata.schema)
-    changed[1] = wpreplace(changed[1]; field_id=Int32(778))
-    changedmetadata = wpreplace(table.metadata; schema=changed)
-    table.schema = Parquet.Schema(changedmetadata)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = Parquet.Table(wpcustomschemafile())
-    changed = copy(table.metadata.schema)
-    raw = only(changed[1].unknown_fields)
-    changedraw = WPTH.RawField(raw.id, raw.type, Int16(raw.previd + 1),
-        raw.headerlength, copy(raw.bytes))
-    @test raw == changedraw
-    @test !Parquet._provenanceexact(raw, changedraw)
-    changed[1] = wpreplace(changed[1]; unknown_fields=[changedraw])
-    table.metadata = wpreplace(table.metadata; schema=changed)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-end
-
-@testset "unknown-field provenance clone charge includes its vector" begin
-    fields = WPTH.RawField[wprawi32(90, 900), wprawi32(91, 910)]
-    expected = Parquet._materializedarraybytes(WPTH.RawField, length(fields))
-    for field in fields
-        fieldcharge = Parquet._materializedsum(
-            Parquet._MATERIALIZED_OBJECT_BYTES,
-            Parquet._materializedarraybytes(UInt8, length(field.bytes)))
-        expected = Parquet._materializedsum(expected, fieldcharge)
-    end
-    @test Parquet._provenanceclonecharge(fields) == expected
-end
-
-@testset "schema-bearing writer rejects vector tampering" begin
-    table = wpfreshtable()
-    table.columns.s.names[1] = "changed"
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    pop!(table.columns.s.children)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    table.columns.s.children[1] = Int64[1, 2]
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    table.columns.s.ranks[1] = Int32(1)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    table.columns.s.ranks[3] = Int32(2)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    table.columns.l.offsets[1] = Int32(1)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    table.columns.l.offsets[end] = Int32(1)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    table.columns.l.offsets[2] = Int32(1)
-    table.columns.l.offsets[3] = Int32(1)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    table.columns.m.offsets[1] = Int32(1)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    table.columns.m.offsets[end] = Int32(1)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    map = table.columns.m
-    badmap = typeof(map)(copy(map.offsets), copy(map.validity),
-        WPNullKeyVector(copy(map.keys)), copy(map.values))
-    wpreplacecolumn!(table, :m, badmap)
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-
-    table = wpfreshtable()
-    table.rows += 1
-    wprejects(() -> Parquet._encodefile(table))
-    close(table)
-end
-
-@testset "schema-bearing writer limits and cleanup" begin
+@testset "schema-bearing writer limits" begin
     values = Union{Missing,NamedTuple{(:text,),Tuple{String}}}[
         (text=repeat("x", 32),), missing]
     table = Parquet.Table(Parquet._encodefile((; values)))
-    limits = Parquet.Limits(max_string_bytes=16)
-    budget = Parquet._LiveByteBudget(limits)
-    Parquet._reserve!(budget, 64)
-    before = Parquet._budgetused(budget)
-    @test_throws Parquet.LimitError Parquet._provenancewritefields(
-        table, limits, budget, nothing, false)
-    @test Parquet._budgetused(budget) == before
-    Parquet._release!(budget, before)
-    @test Parquet._budgetused(budget) == 0
-
-    tight = Parquet.Limits(max_materialized_bytes=512)
-    tightbudget = Parquet._LiveByteBudget(tight)
-    @test_throws Parquet.LimitError Parquet._provenancewritefields(
-        table, tight, tightbudget, nothing, false)
-    @test Parquet._budgetused(tightbudget) == 0
-    @test_throws Parquet.LimitError Parquet._encodefile(table;
-        limits=Parquet.Limits(max_container_elements=1))
-    close(table)
+    try
+        @test_throws Parquet.LimitError Parquet._encodefile(table;
+            limits=Parquet.Limits(max_string_bytes=16))
+        @test_throws Parquet.LimitError Parquet._encodefile(table;
+            limits=Parquet.Limits(max_container_elements=1))
+    finally
+        close(table)
+    end
 end
 
-@testset "schema-bearing writer charged name snapshot" begin
-    short = wpprovenanceallocations(:x)
-    long = wpprovenanceallocations(Symbol(repeat("x", 4096)))
-    @test long.bindingbytes <= short.bindingbytes + 512
-    @test long.validationbytes <= short.validationbytes + 512
-end
-
-@testset "schema-bearing writer iterative deep topology" begin
+@testset "schema-bearing writer deep structs" begin
     depth = 4096
     for rows in (0, 1)
         table, limits = wpdeepstructtable(depth, rows)
@@ -691,18 +426,14 @@ end
         end
         shallow = Parquet.Limits(max_metadata_depth=257,
             max_container_elements=limits.max_container_elements)
-        budget = Parquet._LiveByteBudget(shallow)
-        Parquet._reserve!(budget, Int64(64))
         error = try
-            Parquet._provenancewritefields(table, shallow, budget, nothing,
-                false)
+            Parquet._encodefile(table; limits=shallow)
             nothing
         catch err
             err
         end
         @test error isa Parquet.LimitError
         @test error.resource == :metadata_depth
-        @test Parquet._budgetused(budget) == 64
     finally
         close(table)
     end

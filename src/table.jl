@@ -53,14 +53,13 @@ function _writecolumns(table::Table, limits::Limits)
     return _writecolumns(table, limits, _LiveByteBudget(limits))
 end
 
-function _writefields(table::Table, limits::Limits,
-        budget::_LiveByteBudget)
-    return _provenancewritefields(table, limits, budget, nothing, false)
+function _writefields(table::Table, limits::Limits, ::_LiveByteBudget)
+    return _provenancewritefields(table, limits, nothing, false)
 end
 
-function _writefieldsencoded(table::Table, limits::Limits,
-        budget::_LiveByteBudget, encoding, dictionary::Bool)
-    return _provenancewritefields(table, limits, budget, encoding, dictionary)
+function _writefieldsencoded(table::Table, limits::Limits, ::_LiveByteBudget,
+        encoding, dictionary::Bool)
+    return _provenancewritefields(table, limits, encoding, dictionary)
 end
 
 function _writekeyvaluemetadata(table::Table, limits::Limits,

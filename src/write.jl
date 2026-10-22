@@ -493,7 +493,7 @@ function _preflightwriterowtypes(names::Vector{String}, types,
         for (name, T) in zip(names, types)
             T isa Type || throw(ArgumentError(
                 "row-oriented Tables schemas must contain Julia types"))
-            _nestedwriteshape(name, T, nothing, limits, budget)
+            _nestedwriteshape(name, T, nothing, limits)
         end
         return
     finally
@@ -716,70 +716,7 @@ function _writeinputrowcolumns(table, limits::Limits,
                 normalized[index], columns[index]))
         end
         _release!(budget, namearraycharge)
-        return output, rowcount, _materializedsum(rowcharge, paircharge), nothing
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
-    end
-end
-
-struct _WriteColumnAccessValidator
-    table::Any
-    columns::Vector{Pair{String,AbstractVector}}
-end
-
-function _writecolumnnameequal(raw::AbstractString, expected::String)
-    ncodeunits(raw) == ncodeunits(expected) || return false
-    rawunits = codeunits(raw)
-    expectedunits = codeunits(expected)
-    for index in eachindex(rawunits, expectedunits)
-        rawunits[index] == expectedunits[index] || return false
-    end
-    return true
-end
-
-function _writecolumnnameequal(raw::Symbol, expected::String)
-    return String(raw) == expected
-end
-
-function _writecolumnnameequal(raw, ::String)
-    _writecolumnnamebytes(raw)
-    return false
-end
-
-function _validatewriteinput(::Nothing, ::_LiveByteBudget)
-    return
-end
-
-function _validatewriteinput(validator::_WriteColumnAccessValidator,
-        budget::_LiveByteBudget)
-    start = _budgetused(budget)
-    try
-        columns = Tables.columns(validator.table)
-        names = Tables.columnnames(columns)
-        length(names) == length(validator.columns) || throw(ArgumentError(
-            "Parquet table column count changed during write"))
-        index = 0
-        for raw in names
-            index += 1
-            index <= length(validator.columns) || throw(ArgumentError(
-                "Parquet table column count changed during write"))
-            expected = validator.columns[index]
-            namebytes = _writecolumnnamebytes(raw)
-            temporary = _materializedsum(_MATERIALIZED_OBJECT_BYTES, namebytes)
-            _reserve!(budget, temporary)
-            matches = _writecolumnnameequal(raw, first(expected))
-            _release!(budget, temporary)
-            matches || throw(ArgumentError(
-                "Parquet table column name or order changed during write"))
-            values = Tables.getcolumn(columns, raw)
-            values === last(expected) || throw(ArgumentError(
-                "Parquet table column identity changed during write"))
-        end
-        index == length(validator.columns) || throw(ArgumentError(
-            "Parquet table column count changed during write"))
-        return
+        return output, rowcount, _materializedsum(rowcharge, paircharge)
     catch
         used = _budgetused(budget)
         used > start && _release!(budget, used - start)
@@ -818,10 +755,7 @@ function _writeinputcolumns(table, limits::Limits, budget::_LiveByteBudget)
                     "Parquet columns have different lengths"))
                 push!(output, Pair{String,AbstractVector}(name, values))
             end
-            validatorcharge = _reserveobjects!(budget)
-            validator = _WriteColumnAccessValidator(table, output)
-            return output, something(rows, 0),
-                _materializedsum(paircharge, validatorcharge), validator
+            return output, something(rows, 0), paircharge
         finally
             _release!(budget, namearraycharge)
         end
@@ -830,39 +764,25 @@ function _writeinputcolumns(table, limits::Limits, budget::_LiveByteBudget)
     end
 end
 
+# Resolves the encoding policy against the schema leaves before any value is read.
 function _preflightwriteencoding(semantic::_NestedSchemaPlan, encoding,
-        dictionary::Bool, budget::_LiveByteBudget)
-    start = _budgetused(budget)
-    try
-        count = length(semantic.leaves)
-        choicecharge = _reservearray!(budget, WriteEncodingChoice, count)
-        _reservearray!(budget, WriteLeafPlan, count)
-        _reserveobjects!(budget, 3 * count + 2)
-        emptyschema = Metadata.SchemaElement[]
-        leaves = WriteLeafPlan[]
-        sizehint!(leaves, count)
-        for leaf in semantic.leaves
-            node = leaf.source
-            element = node.element
-            optional = element.repetition_type ==
-                Metadata.FieldRepetitionType.OPTIONAL
-            column = WriteColumn(element.name, nothing, element.type_,
-                element.type_length, optional, element.logicalType,
-                element.converted_type, node.path, nothing, nothing,
-                node.max_repetition_level, node.max_definition_level, 0,
-                emptyschema)
-            push!(leaves, WriteLeafPlan(node.column_index, node.path, column))
-        end
-        choices = _writeencodingchoices(leaves, encoding, dictionary)
-        used = _budgetused(budget)
-        temporary = used - start - choicecharge
-        temporary > 0 && _release!(budget, temporary)
-        return choices, choicecharge
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
+        dictionary::Bool)
+    emptyschema = Metadata.SchemaElement[]
+    leaves = WriteLeafPlan[]
+    sizehint!(leaves, length(semantic.leaves))
+    for leaf in semantic.leaves
+        node = leaf.source
+        element = node.element
+        optional = element.repetition_type ==
+            Metadata.FieldRepetitionType.OPTIONAL
+        column = WriteColumn(element.name, nothing, element.type_,
+            element.type_length, optional, element.logicalType,
+            element.converted_type, node.path, nothing, nothing,
+            node.max_repetition_level, node.max_definition_level, 0,
+            emptyschema)
+        push!(leaves, WriteLeafPlan(node.column_index, node.path, column))
     end
+    return _writeencodingchoices(leaves, encoding, dictionary)
 end
 
 # Scalar element types the flat column writer maps exactly as the nested writer does.
@@ -919,15 +839,13 @@ function _writefieldsencoded(table, limits::Limits,
     Base.@nospecialize table
     start = _budgetused(budget)
     try
-        columns, rows, inputcharge, validator = _writeinputcolumns(table,
-            limits, budget)
+        columns, rows, inputcharge = _writeinputcolumns(table, limits, budget)
         fields = if all(column -> _flatwritable(last(column)), columns)
             _flatwritefields(columns, limits, budget)
         else
             preflight = semantic -> _preflightwriteencoding(semantic, encoding,
-                dictionary, budget)
-            _nestedwritefields(columns, rows, limits, budget;
-                preflight=preflight, sourcevalidator=validator)
+                dictionary)
+            _nestedwritefields(columns, rows, limits; preflight=preflight)
         end
         _release!(budget, inputcharge)
         return fields, rows
