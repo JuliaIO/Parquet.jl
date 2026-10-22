@@ -374,8 +374,21 @@ end
         budget=Parquet._LiveByteBudget(tiny))
 
     validleft = nrstream(plan, 1, [0], [1], Int32[1]; rows=1)
-    passbytes = Parquet._nestedreadpassbytes(plan)
-    passlimits = Parquet.Limits(max_materialized_bytes=passbytes)
+    # The smallest budget that assembles the valid streams; one byte less fails while
+    # materializing outputs, after the structure is validated.
+    function fits(maximum)
+        limits = Parquet.Limits(max_materialized_bytes=maximum)
+        try
+            Parquet._assemblenested(plan, [validleft, right], 1; limits=limits,
+                budget=Parquet._LiveByteBudget(limits))
+            return true
+        catch err
+            err isa Parquet.LimitError || rethrow()
+            return false
+        end
+    end
+    needed = findfirst(fits, 1:100_000)
+    passlimits = Parquet.Limits(max_materialized_bytes=needed - 1)
     invalidbudget = Parquet._LiveByteBudget(passlimits)
     @test_throws Parquet.FormatError Parquet._assemblenested(
         plan, [left, right], 1; limits=passlimits,

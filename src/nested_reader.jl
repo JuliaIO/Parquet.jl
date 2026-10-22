@@ -1,39 +1,14 @@
-# Recursive Dremel assembly from aligned physical leaf streams.
+# Column-at-a-time Dremel assembly from aligned physical leaf streams.
+#
+# A plan node's slots are computed from the levels of each leaf beneath it: entry `i`
+# opens a slot when its repetition level is at most the level of the node's nearest
+# repeated ancestor and its definition level shows the node's parent is present. Every
+# leaf under a node must yield the same slots, presence, and list entry counts.
 
-# The assembly passes recurse one Julia stack frame per plan-tree level, unlike the
-# iterative schema parser and plan compiler, so a plan deep enough to be built under
-# a raised max_metadata_depth could otherwise overflow the stack here (with corrupted
-# process state, not a clean error). Reject such plans up front with a LimitError.
-# Keep a wide safety margin below observed process-corrupting stack overflows. Writer
-# validation is iterative and can accept deeper synthetic values, but the reader must
-# reject them until every assembly pass is iterative.
+# Assembly recurses once per plan-tree level, so a plan deep enough to be built under a
+# raised max_metadata_depth could overflow the stack. Such plans are rejected with a
+# LimitError before any recursion.
 const _NESTED_READ_MAX_DEPTH = 1024
-
-mutable struct _NestedReadState
-    plan::_NestedPlan
-    children::Vector{_NestedReadState}
-    force_required::Bool
-    occurrences::Int64
-    present::Int64
-    entries::Int64
-    fill_occurrences::Int64
-    fill_present::Int64
-    fill_entries::Int64
-    buffer::Any
-    validity::Union{Nothing,BitVector}
-    names::Union{Nothing,Vector{String}}
-    child_outputs::Union{Nothing,Vector{AbstractVector}}
-    result::Any
-end
-
-mutable struct _NestedReadContext
-    streams::Vector{LeafStream}
-    positions::Vector{Int}
-    dense_positions::Vector{Int}
-    logical_values::Vector{AbstractVector}
-    limits::Limits
-    fill::Bool
-end
 
 function _nestedreadlabel(plan::_NestedPlan)
     path = getfield(plan, :source).path
@@ -41,104 +16,10 @@ function _nestedreadlabel(plan::_NestedPlan)
     return "nested field $(repr(join(path, ".")))"
 end
 
-function _nestedreadstate(plan::_NestedLeafPlan; force_required::Bool=false)
-    return _NestedReadState(plan, _NestedReadState[], force_required,
-        Int64(0), Int64(0), Int64(0), Int64(0), Int64(0), Int64(0), nothing,
-        nothing, nothing, nothing, nothing)
-end
-
-function _nestedreadstate(plan::_NestedStructPlan; force_required::Bool=false)
-    children = _NestedReadState[]
-    sizehint!(children, length(plan.children))
-    for child in plan.children
-        push!(children, _nestedreadstate(child))
-    end
-    return _NestedReadState(plan, children, force_required, Int64(0), Int64(0),
-        Int64(0), Int64(0), Int64(0), Int64(0), nothing, nothing, nothing,
-        nothing, nothing)
-end
-
-function _nestedreadstate(plan::_NestedListPlan; force_required::Bool=false)
-    child = _nestedreadstate(plan.element)
-    return _NestedReadState(plan, _NestedReadState[child], force_required,
-        Int64(0), Int64(0), Int64(0), Int64(0), Int64(0), Int64(0), nothing,
-        nothing, nothing, nothing, nothing)
-end
-
-function _nestedreadstate(plan::_NestedMapPlan; force_required::Bool=false)
-    count = plan.value === nothing ? 1 : 2
-    children = Vector{_NestedReadState}(undef, count)
-    children[1] = _nestedreadstate(plan.key; force_required=true)
-    plan.value === nothing || (children[2] = _nestedreadstate(plan.value))
-    return _NestedReadState(plan, children, force_required, Int64(0), Int64(0),
-        Int64(0), Int64(0), Int64(0), Int64(0), nothing, nothing, nothing,
-        nothing, nothing)
-end
-
-function _nestedreadplancount(plan::_NestedLeafPlan)
-    return Int64(1)
-end
-
-function _nestedreadplancountsum(count::Int64, child::_NestedPlan)
-    return try
-        Base.checked_add(count, _nestedreadplancount(child))
-    catch err
-        err isa OverflowError || rethrow()
-        throw(LimitError(:container_elements, typemax(Int64), typemax(Int64)))
-    end
-end
-
-function _nestedreadplancount(plan::_NestedStructPlan)
-    count = Int64(1)
-    for child in plan.children
-        count = _nestedreadplancountsum(count, child)
-    end
-    return count
-end
-
-function _nestedreadplancount(plan::_NestedListPlan)
-    return _nestedreadplancountsum(Int64(1), plan.element)
-end
-
-function _nestedreadplancount(plan::_NestedMapPlan)
-    count = _nestedreadplancountsum(Int64(1), plan.key)
-    plan.value === nothing && return count
-    return _nestedreadplancountsum(count, plan.value)
-end
-
 function _nestedreadint(value::Integer, label::AbstractString)
     value >= 0 || throw(FormatError("negative $label"))
     value <= typemax(Int) || throw(FormatError("$label exceeds the Julia index range"))
     return Int(value)
-end
-
-function _nestedreadincrement(value::Int64, limits::Limits)
-    next = try
-        Base.checked_add(value, Int64(1))
-    catch err
-        err isa OverflowError || rethrow()
-        throw(LimitError(:container_elements, typemax(Int64),
-            limits.max_container_elements))
-    end
-    _checklimit(:container_elements, next, limits.max_container_elements)
-    return next
-end
-
-function _nestedreadrecord!(context::_NestedReadContext,
-    state::_NestedReadState, field::Symbol)
-    if context.fill
-        fillfield = field === :occurrences ? :fill_occurrences :
-            field === :present ? :fill_present : :fill_entries
-        expected = getfield(state, field)
-        next = getfield(state, fillfield) + Int64(1)
-        next <= expected || throw(FormatError(
-            "$(_nestedreadlabel(state.plan)) changed between nested reader passes"))
-        setfield!(state, fillfield, next)
-        return next
-    end
-    next = _nestedreadincrement(getfield(state, field), context.limits)
-    setfield!(state, field, next)
-    return next
 end
 
 function _nestedreadphysicalvalue(value, expected::Type,
@@ -215,388 +96,9 @@ function _nestedreadstreams(streams::AbstractVector)
     return output
 end
 
-function _nestedreadcurrent(context::_NestedReadContext, leafindex::Int)
-    stream = context.streams[leafindex]
-    position = context.positions[leafindex]
-    position <= length(stream) || throw(FormatError(
-        "leaf $leafindex ends before its sibling occurrence"))
-    return stream.repetition[position], stream.definition[position]
-end
-
-function _nestedreadstatus(context::_NestedReadContext, plan::_NestedPlan,
-    startrepetition::UInt64)
-    range = _nestedleafrange(plan)
-    isempty(range) && return true
-    expected = nothing
-    for rawindex in range
-        leafindex = Int(rawindex)
-        repetition, definition = _nestedreadcurrent(context, leafindex)
-        repetition == startrepetition || throw(FormatError(
-            "$(_nestedreadlabel(plan)) has misaligned sibling repetition boundaries"))
-        parent = UInt64(getfield(plan, :parent_definition))
-        definition >= parent || throw(FormatError(
-            "$(_nestedreadlabel(plan)) has a definition below its present ancestor"))
-        present = definition >= UInt64(getfield(plan, :present_definition))
-        if expected === nothing
-            expected = present
-        elseif expected != present
-            throw(FormatError(
-                "$(_nestedreadlabel(plan)) has inconsistent sibling presence"))
-        end
-    end
-    return something(expected)
-end
-
-function _nestedreadentrystatus(context::_NestedReadContext,
-    plan::Union{_NestedListPlan,_NestedMapPlan})
-    expected = nothing
-    for rawindex in plan.leaf_range
-        leafindex = Int(rawindex)
-        _, definition = _nestedreadcurrent(context, leafindex)
-        present = definition >= UInt64(plan.entry_definition)
-        if expected === nothing
-            expected = present
-        elseif expected != present
-            throw(FormatError(
-                "$(_nestedreadlabel(plan)) has inconsistent sibling entry presence"))
-        end
-    end
-    return something(expected)
-end
-
-function _nestedreadparentrepetition(
-    plan::Union{_NestedListPlan,_NestedMapPlan})
-    plan.repetition_level > 0 || throw(FormatError(
-        "$(_nestedreadlabel(plan)) has no repeated-entry level"))
-    return UInt64(plan.repetition_level - Int16(1))
-end
-
-function _nestedreadconsume!(context::_NestedReadContext, plan::_NestedLeafPlan)
-    leafindex = Int(first(plan.leaf_range))
-    stream = context.streams[leafindex]
-    position = context.positions[leafindex]
-    position <= length(stream) || throw(FormatError("leaf $leafindex ends early"))
-    definition = stream.definition[position]
-    denseindex = 0
-    if definition == UInt64(plan.source.max_definition_level)
-        denseindex = context.dense_positions[leafindex] + 1
-        denseindex <= length(stream.values) || throw(FormatError(
-            "leaf $leafindex ends before its dense values"))
-        context.dense_positions[leafindex] = denseindex
-    end
-    context.positions[leafindex] = position + 1
-    return denseindex
-end
-
-function _nestedreadconsumeplaceholder!(context::_NestedReadContext,
-    plan::_NestedPlan, leaves::Vector{_NestedLeafPlan})
-    for rawindex in _nestedleafrange(plan)
-        leafindex = Int(rawindex)
-        stream = context.streams[leafindex]
-        position = context.positions[leafindex]
-        position <= length(stream) || throw(FormatError(
-            "leaf $leafindex ends before its sibling placeholder"))
-        definition = stream.definition[position]
-        if definition == UInt64(leaves[leafindex].source.max_definition_level)
-            denseindex = context.dense_positions[leafindex] + 1
-            denseindex <= length(stream.values) || throw(FormatError(
-                "leaf $leafindex ends before its dense values"))
-            context.dense_positions[leafindex] = denseindex
-        end
-        context.positions[leafindex] = position + 1
-    end
-    return
-end
-
-function _nestedreadboundary(context::_NestedReadContext,
-    range::UnitRange{Int32}, maximum::UInt64, label::AbstractString)
-    isempty(range) && return nothing
-    expected = nothing
-    ended = nothing
-    for rawindex in range
-        leafindex = Int(rawindex)
-        position = context.positions[leafindex]
-        stream = context.streams[leafindex]
-        atend = position > length(stream)
-        if ended === nothing
-            ended = atend
-        elseif ended != atend
-            throw(FormatError("$label has incomplete sibling streams"))
-        end
-        atend && continue
-        repetition = stream.repetition[position]
-        repetition <= maximum || throw(FormatError(
-            "$label leaves an unconsumed repetition level $repetition"))
-        if expected === nothing
-            expected = repetition
-        elseif expected != repetition
-            throw(FormatError("$label has misaligned next sibling boundaries"))
-        end
-    end
-    something(ended) && return nothing
-    return something(expected)
-end
-
-function _nestedreadscan!(context::_NestedReadContext,
-    state::_NestedReadState, startrepetition::UInt64,
-    leaves::Vector{_NestedLeafPlan})
-    return _nestedreadscan!(context, state, state.plan, startrepetition, leaves)
-end
-
-function _nestedreadscan!(context::_NestedReadContext,
-    state::_NestedReadState, plan::_NestedLeafPlan, startrepetition::UInt64,
-    leaves::Vector{_NestedLeafPlan})
-    outputindex = _nestedreadrecord!(context, state, :occurrences)
-    present = _nestedreadstatus(context, plan, startrepetition)
-    denseindex = _nestedreadconsume!(context, plan)
-    if present
-        denseindex > 0 || throw(FormatError(
-            "$(_nestedreadlabel(plan)) is present without a dense value"))
-        _nestedreadrecord!(context, state, :present)
-        if context.fill
-            values = context.logical_values[Int(first(plan.leaf_range))]
-            state.buffer[Int(outputindex)] = values[denseindex]
-        end
-    else
-        denseindex == 0 || throw(FormatError(
-            "$(_nestedreadlabel(plan)) is null but has a dense value"))
-        if context.fill
-            state.force_required && throw(FormatError(
-                "$(_nestedreadlabel(plan)) is a null map key"))
-            state.buffer[Int(outputindex)] = missing
-        end
-    end
-    return present
-end
-
-function _nestedreadscan!(context::_NestedReadContext,
-    state::_NestedReadState, plan::_NestedStructPlan, startrepetition::UInt64,
-    leaves::Vector{_NestedLeafPlan})
-    outputindex = _nestedreadrecord!(context, state, :occurrences)
-    present = _nestedreadstatus(context, plan, startrepetition)
-    boundary = UInt64(plan.source.max_repetition_level)
-    if !present
-        _nestedreadconsumeplaceholder!(context, plan, leaves)
-        _nestedreadboundary(context, plan.leaf_range, boundary,
-            _nestedreadlabel(plan))
-        if context.fill && state.buffer !== nothing
-            state.buffer[Int(outputindex) + 1] = state.fill_present
-        end
-        return false
-    end
-    _nestedreadrecord!(context, state, :present)
-    for child in state.children
-        _nestedreadscan!(context, child, startrepetition, leaves)
-    end
-    _nestedreadboundary(context, plan.leaf_range, boundary,
-        _nestedreadlabel(plan))
-    if context.fill && state.buffer !== nothing
-        state.buffer[Int(outputindex) + 1] = state.fill_present
-    end
-    return true
-end
-
-function _nestedreadscan!(context::_NestedReadContext,
-    state::_NestedReadState, plan::_NestedListPlan, startrepetition::UInt64,
-    leaves::Vector{_NestedLeafPlan})
-    outputindex = _nestedreadrecord!(context, state, :occurrences)
-    present = _nestedreadstatus(context, plan, startrepetition)
-    parentrepetition = _nestedreadparentrepetition(plan)
-    if !present
-        _nestedreadconsumeplaceholder!(context, plan, leaves)
-        _nestedreadboundary(context, plan.leaf_range, parentrepetition,
-            _nestedreadlabel(plan))
-        if context.fill
-            state.validity === nothing || (state.validity[Int(outputindex)] = false)
-            state.buffer[Int(outputindex) + 1] = state.fill_entries
-        end
-        return false
-    end
-    _nestedreadrecord!(context, state, :present)
-    nonempty = _nestedreadentrystatus(context, plan)
-    if !nonempty
-        _nestedreadconsumeplaceholder!(context, plan, leaves)
-        _nestedreadboundary(context, plan.leaf_range, parentrepetition,
-            _nestedreadlabel(plan))
-        if context.fill
-            state.validity === nothing || (state.validity[Int(outputindex)] = true)
-            state.buffer[Int(outputindex) + 1] = state.fill_entries
-        end
-        return true
-    end
-    itemrepetition = startrepetition
-    repeated = UInt64(plan.repetition_level)
-    while true
-        _nestedreadrecord!(context, state, :entries)
-        _nestedreadscan!(context, state.children[1], itemrepetition, leaves)
-        boundary = _nestedreadboundary(context, plan.leaf_range, repeated,
-            _nestedreadlabel(plan))
-        boundary == repeated || break
-        itemrepetition = repeated
-    end
-    boundary = _nestedreadboundary(context, plan.leaf_range, parentrepetition,
-        _nestedreadlabel(plan))
-    if context.fill
-        state.validity === nothing || (state.validity[Int(outputindex)] = true)
-        state.buffer[Int(outputindex) + 1] = state.fill_entries
-    end
-    boundary === nothing || boundary <= parentrepetition || throw(FormatError(
-        "$(_nestedreadlabel(plan)) continues after its final item"))
-    return true
-end
-
-function _nestedreadscan!(context::_NestedReadContext,
-    state::_NestedReadState, plan::_NestedMapPlan, startrepetition::UInt64,
-    leaves::Vector{_NestedLeafPlan})
-    outputindex = _nestedreadrecord!(context, state, :occurrences)
-    present = _nestedreadstatus(context, plan, startrepetition)
-    parentrepetition = _nestedreadparentrepetition(plan)
-    if !present
-        _nestedreadconsumeplaceholder!(context, plan, leaves)
-        _nestedreadboundary(context, plan.leaf_range, parentrepetition,
-            _nestedreadlabel(plan))
-        if context.fill
-            state.validity === nothing || (state.validity[Int(outputindex)] = false)
-            state.buffer[Int(outputindex) + 1] = state.fill_entries
-        end
-        return false
-    end
-    _nestedreadrecord!(context, state, :present)
-    nonempty = _nestedreadentrystatus(context, plan)
-    if !nonempty
-        _nestedreadconsumeplaceholder!(context, plan, leaves)
-        _nestedreadboundary(context, plan.leaf_range, parentrepetition,
-            _nestedreadlabel(plan))
-        if context.fill
-            state.validity === nothing || (state.validity[Int(outputindex)] = true)
-            state.buffer[Int(outputindex) + 1] = state.fill_entries
-        end
-        return true
-    end
-    itemrepetition = startrepetition
-    repeated = UInt64(plan.repetition_level)
-    while true
-        _nestedreadrecord!(context, state, :entries)
-        keypresent = _nestedreadscan!(context, state.children[1],
-            itemrepetition, leaves)
-        keypresent || throw(FormatError(
-            "$(_nestedreadlabel(plan)) contains a null map key"))
-        length(state.children) == 1 || _nestedreadscan!(context,
-            state.children[2], itemrepetition, leaves)
-        boundary = _nestedreadboundary(context, plan.leaf_range, repeated,
-            _nestedreadlabel(plan))
-        boundary == repeated || break
-        itemrepetition = repeated
-    end
-    boundary = _nestedreadboundary(context, plan.leaf_range, parentrepetition,
-        _nestedreadlabel(plan))
-    if context.fill
-        state.validity === nothing || (state.validity[Int(outputindex)] = true)
-        state.buffer[Int(outputindex) + 1] = state.fill_entries
-    end
-    boundary === nothing || boundary <= parentrepetition || throw(FormatError(
-        "$(_nestedreadlabel(plan)) continues after its final entry"))
-    return true
-end
-
-function _nestedreadpass!(context::_NestedReadContext,
-    state::_NestedReadState, plan::_NestedSchemaPlan, rows::Int)
-    for _ in 1:rows
-        _nestedreadscan!(context, state, UInt64(0), plan.leaves)
-    end
-    boundary = _nestedreadboundary(context, plan.root.leaf_range, UInt64(0),
-        "schema root")
-    boundary === nothing || throw(FormatError(
-        "nested leaf streams contain more rows than the metadata row count"))
-    for index in eachindex(context.streams)
-        context.positions[index] == length(context.streams[index]) + 1 ||
-            throw(FormatError("nested reader did not consume every level entry in leaf $index"))
-        context.dense_positions[index] == length(context.streams[index].values) ||
-            throw(FormatError("nested reader did not consume every dense value in leaf $index"))
-    end
-    return
-end
-
-function _nestedreadverifycounts(state::_NestedReadState)
-    state.present <= state.occurrences || throw(FormatError(
-        "$(_nestedreadlabel(state.plan)) has more present values than occurrences"))
-    plan = state.plan
-    required = state.force_required ||
-        getfield(plan, :parent_definition) == getfield(plan, :present_definition)
-    required && state.present != state.occurrences && throw(FormatError(
-        "$(_nestedreadlabel(plan)) is required but has null occurrences"))
-    if plan isa _NestedStructPlan
-        iszero(state.entries) || throw(FormatError(
-            "$(_nestedreadlabel(plan)) records entries for a struct"))
-        for child in state.children
-            child.occurrences == state.present || throw(FormatError(
-                "$(_nestedreadlabel(plan)) has a miscounted struct child"))
-        end
-    elseif plan isa _NestedListPlan
-        length(state.children) == 1 || throw(FormatError(
-            "$(_nestedreadlabel(plan)) has an invalid reader state"))
-        state.children[1].occurrences == state.entries || throw(FormatError(
-            "$(_nestedreadlabel(plan)) has a miscounted list element"))
-    elseif plan isa _NestedMapPlan
-        for child in state.children
-            child.occurrences == state.entries || throw(FormatError(
-                "$(_nestedreadlabel(plan)) has a miscounted map child"))
-        end
-    elseif !iszero(state.entries)
-        throw(FormatError("$(_nestedreadlabel(plan)) records entries for a leaf"))
-    end
-    for child in state.children
-        _nestedreadverifycounts(child)
-    end
-    return
-end
-
 function _nestedreadlogicaltype(plan::_NestedLeafPlan)
     physical = _physicaleltype(plan.source.element.type_)
     return _logicaleltype(plan.source, physical)
-end
-
-function _nestedreadoutputtype(state::_NestedReadState,
-    plan::_NestedLeafPlan)
-    logical = _nestedreadlogicaltype(plan)
-    required = state.force_required || plan.parent_definition == plan.present_definition
-    return required ? logical : Union{Missing,logical}
-end
-
-function _nestedreadindexbytes(terminal::Int64, count::Int64)
-    T = _nestedindextype(terminal)
-    return _materializedarraybytes(T, count)
-end
-
-function _nestedreadpassbytes(plan::_NestedSchemaPlan)
-    leaves = Int64(length(plan.leaves))
-    nodes = _nestedreadplancount(plan.root)
-    nodes == plan.plan_count || throw(FormatError(
-        "nested schema plan count does not match its topology"))
-    nodes > 0 || throw(FormatError("nested schema plan has no root state"))
-    edges = nodes - Int64(1)
-    bytes = _materializedarraybytes(LeafStream, leaves)
-    bytes = _materializedsum(bytes, _materializedarraybytes(Int, leaves))
-    bytes = _materializedsum(bytes, _materializedarraybytes(Int, leaves))
-    bytes = _materializedsum(bytes,
-        _materializedarraybytes(AbstractVector, leaves))
-    bytes = _materializedsum(bytes,
-        _materializedproduct(_nestedreadplusone(nodes),
-            _MATERIALIZED_OBJECT_BYTES))
-    bytes = _materializedsum(bytes,
-        _materializedproduct(nodes, _MATERIALIZED_ARRAY_HEADER_BYTES))
-    bytes = _materializedsum(bytes,
-        _materializedarraybytes(_NestedReadState, edges; header=false))
-    return bytes
-end
-
-function _nestedreadplusone(value::Int64)
-    return try
-        Base.checked_add(value, Int64(1))
-    catch err
-        err isa OverflowError || rethrow()
-        throw(LimitError(:container_elements, typemax(Int64), typemax(Int64)))
-    end
 end
 
 function _nestedreadpayloadbytes(plan::_NestedLeafPlan, stream::LeafStream)
@@ -612,169 +114,271 @@ function _nestedreadpayloadbytes(plan::_NestedLeafPlan, stream::LeafStream)
     return bytes
 end
 
-function _nestedreadcharges(state::_NestedReadState, streams::Vector{LeafStream})
-    plan = state.plan
-    if plan isa _NestedLeafPlan
-        outputtype = _nestedreadoutputtype(state, plan)
-        final = _materializedarraybytes(outputtype, state.occurrences)
-        plan.source.element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
-            _logicalkind(plan.source) === nothing &&
-            (final = _materializedsum(final, _MATERIALIZED_OBJECT_BYTES))
-        temporary = Int64(0)
-        if _logicalkind(plan.source) !== nothing
-            logical = _nestedreadlogicaltype(plan)
-            temporary = _materializedarraybytes(logical,
-                length(streams[Int(first(plan.leaf_range))].values))
-            final = _materializedsum(final,
-                _nestedreadpayloadbytes(plan,
-                    streams[Int(first(plan.leaf_range))]))
-        end
-        return final, temporary
-    end
-    final = _MATERIALIZED_OBJECT_BYTES
-    temporary = Int64(0)
-    count = state.occurrences
-    if plan isa _NestedStructPlan
-        final = _materializedsum(final,
-            _materializedarraybytes(String, length(state.children)))
-        final = _materializedsum(final,
-            _materializedarraybytes(AbstractVector, length(state.children)))
-        required = state.force_required || plan.parent_definition == plan.present_definition
-        required || (final = _materializedsum(final,
-            _nestedreadindexbytes(state.present,
-                _nestedreadplusone(count))))
-    else
-        final = _materializedsum(final,
-            _nestedreadindexbytes(state.entries,
-                _nestedreadplusone(count)))
-        required = state.force_required || plan.parent_definition == plan.present_definition
-        required || (final = _materializedsum(final,
-            _materializedbitbytes(count)))
-    end
-    for child in state.children
-        childfinal, childtemporary = _nestedreadcharges(child, streams)
-        final = _materializedsum(final, childfinal)
-        temporary = _materializedsum(temporary, childtemporary)
-    end
-    return final, temporary
+# One node's slots as seen through one leaf stream. `counts` holds each slot's entry
+# count for lists and maps and is empty otherwise.
+struct _NestedShape
+    present::BitVector
+    counts::Vector{Int}
 end
 
-function _nestedreadindexarray(terminal::Int64, count::Int64)
-    length = _nestedreadint(count, "nested index length")
-    T = _nestedindextype(terminal)
-    output = Vector{T}(undef, length)
-    output[1] = zero(T)
-    return output
+struct _NestedShapeTree
+    shape::_NestedShape
+    children::Vector{_NestedShapeTree}
 end
 
-function _nestedreadallocate!(state::_NestedReadState)
-    plan = state.plan
-    count = _nestedreadint(state.occurrences,
-        "$(_nestedreadlabel(plan)) occurrence count")
-    if plan isa _NestedLeafPlan
-        T = _nestedreadoutputtype(state, plan)
-        state.buffer = Vector{T}(undef, count)
-        return
-    elseif plan isa _NestedStructPlan
-        required = state.force_required || plan.parent_definition == plan.present_definition
-        state.buffer = required ? nothing :
-            _nestedreadindexarray(state.present,
-                _nestedreadplusone(state.occurrences))
-        state.names = Vector{String}(undef, length(plan.children))
-        state.child_outputs = Vector{AbstractVector}(undef, length(plan.children))
-        for index in eachindex(plan.children)
-            state.names[index] = plan.children[index].source.element.name
-        end
-    else
-        state.buffer = _nestedreadindexarray(state.entries,
-            _nestedreadplusone(state.occurrences))
-        required = state.force_required || plan.parent_definition == plan.present_definition
-        state.validity = required ? nothing : falses(count)
-    end
-    for child in state.children
-        _nestedreadallocate!(child)
-    end
-    return
+function _nestedlisting(plan::_NestedPlan)
+    return plan isa Union{_NestedListPlan,_NestedMapPlan}
 end
 
-function _nestedreadlogicalvalues!(output::Vector{AbstractVector},
-    plan::_NestedSchemaPlan, streams::Vector{LeafStream}, limits::Limits)
-    for index in eachindex(streams)
-        output[index] = _logicalvalues(plan.leaves[index].source,
-            streams[index].values; limits=limits)
-    end
-    return output
+function _nestedshapebytes(slots::Integer, listing::Bool)
+    bytes = _materializedsum(_materializedbitbytes(slots),
+        _MATERIALIZED_OBJECT_BYTES)
+    listing || return bytes
+    return _materializedsum(bytes, _materializedarraybytes(Int, slots))
 end
 
-function _nestedreadreset!(state::_NestedReadState)
-    state.fill_occurrences = 0
-    state.fill_present = 0
-    state.fill_entries = 0
-    for child in state.children
-        _nestedreadreset!(child)
+function _nestedshape(stream::LeafStream, plan::_NestedPlan,
+        repetition::UInt64, parent::UInt64, budget::_LiveByteBudget)
+    reps = stream.repetition
+    defs = stream.definition
+    present = UInt64(getfield(plan, :present_definition))
+    listing = _nestedlisting(plan)
+    level = listing ? UInt64(plan.repetition_level) : UInt64(0)
+    entry = listing ? UInt64(plan.entry_definition) : UInt64(0)
+    slots = 0
+    for i in eachindex(reps, defs)
+        (reps[i] <= repetition && defs[i] >= parent) && (slots += 1)
     end
-    return
-end
-
-function _nestedreadverifyfills(state::_NestedReadState)
-    state.fill_occurrences == state.occurrences || throw(FormatError(
-        "$(_nestedreadlabel(state.plan)) occurrence count changed between passes"))
-    state.fill_present == state.present || throw(FormatError(
-        "$(_nestedreadlabel(state.plan)) presence count changed between passes"))
-    state.fill_entries == state.entries || throw(FormatError(
-        "$(_nestedreadlabel(state.plan)) entry count changed between passes"))
-    for child in state.children
-        _nestedreadverifyfills(child)
-    end
-    return
-end
-
-function _nestedreadfinalize!(state::_NestedReadState)
-    for child in state.children
-        _nestedreadfinalize!(child)
-    end
-    plan = state.plan
-    if plan isa _NestedLeafPlan
-        if plan.source.element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
-                _logicalkind(plan.source) === nothing
-            state.result = FixedByteArrayVector{eltype(state.buffer)}(
-                state.buffer, plan.source.element.type_length)
+    charge = _nestedshapebytes(slots, listing)
+    _reserve!(budget, charge)
+    presence = falses(slots)
+    counts = listing ? zeros(Int, slots) : Int[]
+    slot = 0
+    open = false
+    for i in eachindex(reps, defs)
+        r = reps[i]
+        d = defs[i]
+        if r <= repetition
+            open = d >= parent
+            open || continue
+            slot += 1
+            d >= present || continue
+            presence[slot] = true
+            listing && d >= entry && (counts[slot] = 1)
         else
-            state.result = state.buffer
+            (open && presence[slot]) || throw(FormatError(
+                "$(_nestedreadlabel(plan)) repeats inside a null or absent value"))
+            if listing
+                (d >= entry && counts[slot] > 0) || throw(FormatError(
+                    "$(_nestedreadlabel(plan)) repeats inside an empty value"))
+                r == level && (counts[slot] += 1)
+            else
+                d >= present || throw(FormatError(
+                    "$(_nestedreadlabel(plan)) has a definition below its present ancestor"))
+            end
         end
-        return
-    elseif plan isa _NestedStructPlan
-        children = something(state.child_outputs)
-        for index in eachindex(state.children)
-            children[index] = state.children[index].result
-        end
-        names = something(state.names)
-        ranks = state.buffer
-        T = ranks === nothing ? StructValue : Union{Missing,StructValue}
-        state.result = StructVector{T,typeof(ranks)}(
-            names, ranks, children, Int(state.occurrences))
-        return
-    elseif plan isa _NestedListPlan
-        values = state.children[1].result
-        E = eltype(values)
-        V = ListValue{E}
-        T = state.validity === nothing ? V : Union{Missing,V}
-        state.result = ListVector{T,E,eltype(state.buffer),typeof(state.validity)}(
-            state.buffer, state.validity, values)
-        return
     end
-    keys = state.children[1].result
+    return _NestedShape(presence, counts), charge
+end
+
+# Slots of `plan`, verified against every leaf beneath it and against the `expected`
+# slot count implied by its parent. Returns the shape tree and its budget charge.
+function _nestedshapetree(plan::_NestedPlan, streams::Vector{LeafStream},
+        repetition::UInt64, parent::UInt64, expected::Int, keyed::Bool,
+        budget::_LiveByteBudget)
+    label = plan
+    range = _nestedleafrange(plan)
+    charge = Int64(0)
+    if isempty(range)
+        plan isa _NestedStructPlan || throw(FormatError(
+            "$(_nestedreadlabel(label)) has no leaf columns"))
+        charge = _nestedshapebytes(expected, false)
+        _reserve!(budget, charge)
+        shape = _NestedShape(trues(expected), Int[])
+    else
+        shape, charge = _nestedshape(streams[first(range)], plan, repetition,
+            parent, budget)
+        for index in (first(range) + Int32(1)):last(range)
+            other, othercharge = _nestedshape(streams[index], plan, repetition,
+                parent, budget)
+            same = other.present == shape.present && other.counts == shape.counts
+            _release!(budget, othercharge)
+            same || throw(FormatError(
+                "$(_nestedreadlabel(label)) has misaligned sibling leaves"))
+        end
+    end
+    length(shape.present) == expected || throw(FormatError(
+        "$(_nestedreadlabel(label)) has $(length(shape.present)) occurrences " *
+        "where its parent expects $expected"))
+    keyed && !all(shape.present) && throw(FormatError(
+        "$(_nestedreadlabel(label)) is a null map key"))
+    children = _NestedShapeTree[]
+    if plan isa _NestedStructPlan
+        inner = UInt64(plan.present_definition)
+        present = count(shape.present)
+        for child in plan.children
+            tree, childcharge = _nestedshapetree(child, streams, repetition,
+                inner, present, false, budget)
+            charge = _materializedsum(charge, childcharge)
+            push!(children, tree)
+        end
+    elseif _nestedlisting(plan)
+        level = UInt64(plan.repetition_level)
+        entry = UInt64(plan.entry_definition)
+        entries = sum(shape.counts; init=0)
+        members = plan isa _NestedListPlan ? (plan.element,) :
+            plan.value === nothing ? (plan.key,) : (plan.key, plan.value)
+        for (index, child) in enumerate(members)
+            iskey = plan isa _NestedMapPlan && index == 1
+            tree, childcharge = _nestedshapetree(child, streams, level, entry,
+                entries, iskey, budget)
+            charge = _materializedsum(charge, childcharge)
+            push!(children, tree)
+        end
+    end
+    return _NestedShapeTree(shape, children), charge
+end
+
+function _nestedrequired(plan::_NestedPlan, keyed::Bool)
+    return keyed || getfield(plan, :parent_definition) == getfield(plan, :present_definition)
+end
+
+function _nestedoffsets(counts::Vector{Int}, budget::_LiveByteBudget)
+    total = sum(counts; init=0)
+    I = _nestedindextype(total)
+    _reservearray!(budget, I, length(counts) + 1)
+    offsets = Vector{I}(undef, length(counts) + 1)
+    offsets[1] = zero(I)
+    running = 0
+    for (index, count) in enumerate(counts)
+        running += count
+        offsets[index + 1] = I(running)
+    end
+    return offsets
+end
+
+function _nestedvalidity(present::BitVector, required::Bool,
+        budget::_LiveByteBudget)
+    required && return nothing
+    _reserve!(budget, _materializedbitbytes(length(present)))
+    return copy(present)
+end
+
+function _nestedbuild(plan::_NestedLeafPlan, tree::_NestedShapeTree,
+        logical::Vector{AbstractVector}, keyed::Bool, budget::_LiveByteBudget)
+    presence = tree.shape.present
+    values = logical[Int(first(plan.leaf_range))]
+    count(presence) == length(values) || throw(FormatError(
+        "$(_nestedreadlabel(plan)) has $(length(values)) dense values for " *
+        "$(count(presence)) present occurrences"))
+    T = _nestedreadlogicaltype(plan)
+    output = if _nestedrequired(plan, keyed)
+        _reservearray!(budget, T, length(values))
+        values isa Vector{T} ? values : convert(Vector{T}, values)
+    else
+        _reservearray!(budget, Union{Missing,T}, length(presence))
+        _nestedfill(Union{Missing,T}, presence, values)
+    end
+    if plan.source.element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
+            _logicalkind(plan.source) === nothing
+        _reserveobjects!(budget)
+        return FixedByteArrayVector{eltype(output)}(output,
+            plan.source.element.type_length)
+    end
+    return output
+end
+
+function _nestedfill(::Type{T}, presence::BitVector, values::AbstractVector) where {T}
+    output = Vector{T}(undef, length(presence))
+    next = 0
+    for index in eachindex(output)
+        if presence[index]
+            next += 1
+            output[index] = values[next]
+        else
+            output[index] = missing
+        end
+    end
+    return output
+end
+
+function _nestedbuild(plan::_NestedStructPlan, tree::_NestedShapeTree,
+        logical::Vector{AbstractVector}, keyed::Bool, budget::_LiveByteBudget)
+    presence = tree.shape.present
+    count = length(presence)
+    _reserveobjects!(budget)
+    _reservearray!(budget, String, length(plan.children))
+    _reservearray!(budget, AbstractVector, length(plan.children))
+    names = String[child.source.element.name for child in plan.children]
+    children = Vector{AbstractVector}(undef, length(plan.children))
+    for (index, child) in enumerate(plan.children)
+        children[index] = _nestedbuild(child, tree.children[index], logical,
+            false, budget)
+    end
+    if _nestedrequired(plan, keyed)
+        return StructVector{StructValue,Nothing}(names, nothing, children, count)
+    end
+    I = _nestedindextype(Base.count(presence))
+    _reservearray!(budget, I, count + 1)
+    ranks = Vector{I}(undef, count + 1)
+    ranks[1] = zero(I)
+    for index in 1:count
+        ranks[index + 1] = ranks[index] + I(presence[index])
+    end
+    return StructVector{Union{Missing,StructValue},Vector{I}}(names, ranks,
+        children, count)
+end
+
+function _nestedbuild(plan::_NestedListPlan, tree::_NestedShapeTree,
+        logical::Vector{AbstractVector}, keyed::Bool, budget::_LiveByteBudget)
+    _reserveobjects!(budget)
+    offsets = _nestedoffsets(tree.shape.counts, budget)
+    validity = _nestedvalidity(tree.shape.present, _nestedrequired(plan, keyed),
+        budget)
+    values = _nestedbuild(plan.element, tree.children[1], logical, false, budget)
+    E = eltype(values)
+    T = validity === nothing ? ListValue{E} : Union{Missing,ListValue{E}}
+    return ListVector{T,E,eltype(offsets),typeof(validity)}(offsets, validity,
+        values)
+end
+
+function _nestedbuild(plan::_NestedMapPlan, tree::_NestedShapeTree,
+        logical::Vector{AbstractVector}, keyed::Bool, budget::_LiveByteBudget)
+    _reserveobjects!(budget)
+    offsets = _nestedoffsets(tree.shape.counts, budget)
+    validity = _nestedvalidity(tree.shape.present, _nestedrequired(plan, keyed),
+        budget)
+    keys = _nestedbuild(plan.key, tree.children[1], logical, true, budget)
     Missing <: eltype(keys) && throw(FormatError(
         "$(_nestedreadlabel(plan)) exposes a nullable map key"))
-    values = length(state.children) == 1 ? nothing : state.children[2].result
+    values = plan.value === nothing ? nothing :
+        _nestedbuild(plan.value, tree.children[2], logical, false, budget)
     K = eltype(keys)
     hasvalues = values !== nothing
     V = hasvalues ? eltype(values) : Missing
     R = MapValue{K,V,hasvalues}
-    T = state.validity === nothing ? R : Union{Missing,R}
-    state.result = MapVector{T,K,V,hasvalues,eltype(state.buffer),
-        typeof(state.validity)}(state.buffer, state.validity, keys, values)
-    return
+    T = validity === nothing ? R : Union{Missing,R}
+    return MapVector{T,K,V,hasvalues,eltype(offsets),typeof(validity)}(offsets,
+        validity, keys, values)
+end
+
+# Logical conversions of each leaf's dense values. The converted arrays are temporary
+# (leaf outputs charge their own arrays); the converted payload is retained.
+function _nestedreadlogicalvalues(plan::_NestedSchemaPlan,
+        streams::Vector{LeafStream}, limits::Limits, budget::_LiveByteBudget)
+    output = Vector{AbstractVector}(undef, length(streams))
+    temporary = Int64(0)
+    for (index, stream) in enumerate(streams)
+        leaf = plan.leaves[index]
+        if _logicalkind(leaf.source) !== nothing
+            charge = _reservearray!(budget, _nestedreadlogicaltype(leaf),
+                length(stream.values))
+            temporary = _materializedsum(temporary, charge)
+            _reserve!(budget, _nestedreadpayloadbytes(leaf, stream))
+        end
+        output[index] = _logicalvalues(leaf.source, stream.values; limits=limits)
+    end
+    return output, temporary
 end
 
 function _assemblenested(plan::_NestedSchemaPlan, streams::AbstractVector,
@@ -785,37 +389,19 @@ function _assemblenested(plan::_NestedSchemaPlan, streams::AbstractVector,
     rowcount = _nestedreadint(rows, "nested row count")
     _checklimit(:container_elements, rowcount, limits.max_container_elements)
     _nestedreadvalidatestreams(plan, streams, rowcount, limits)
-    passbytes = _nestedreadpassbytes(plan)
-    _reserve!(budget, passbytes)
-    finalreserved = Int64(0)
+    normalized = _nestedreadstreams(streams)
+    start = _budgetused(budget)
     try
-        normalized = _nestedreadstreams(streams)
-        state = _nestedreadstate(plan.root)
-        positions = ones(Int, length(normalized))
-        densepositions = zeros(Int, length(normalized))
-        logical = Vector{AbstractVector}(undef, length(normalized))
-        context = _NestedReadContext(normalized, positions, densepositions,
-            logical, limits, false)
-        _nestedreadpass!(context, state, plan, rowcount)
-        _nestedreadverifycounts(state)
-        finalbytes, temporarybytes = _nestedreadcharges(state, normalized)
-        totalbytes = _materializedsum(finalbytes, temporarybytes)
-        _reserve!(budget, totalbytes)
-        finalreserved = totalbytes
-        _nestedreadlogicalvalues!(logical, plan, normalized, limits)
-        _nestedreadallocate!(state)
-        _nestedreadreset!(state)
-        fill!(positions, 1)
-        fill!(densepositions, 0)
-        context.fill = true
-        _nestedreadpass!(context, state, plan, rowcount)
-        _nestedreadverifyfills(state)
-        _nestedreadfinalize!(state)
-        _release!(budget, _materializedsum(passbytes, temporarybytes))
-        return state.result
+        tree, temporary = _nestedshapetree(plan.root, normalized, UInt64(0),
+            UInt64(0), rowcount, false, budget)
+        logical, logicalcharge = _nestedreadlogicalvalues(plan, normalized,
+            limits, budget)
+        root = _nestedbuild(plan.root, tree, logical, false, budget)
+        _release!(budget, _materializedsum(temporary, logicalcharge))
+        return root
     catch
-        iszero(finalreserved) || _release!(budget, finalreserved)
-        _release!(budget, passbytes)
+        used = _budgetused(budget) - start
+        used > 0 && _release!(budget, used)
         rethrow()
     end
 end
