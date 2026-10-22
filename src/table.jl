@@ -327,6 +327,8 @@ end
 
 # `map(f, indices)`, on one task per index when `parallel`. A task's error is rethrown
 # as itself rather than wrapped in a TaskFailedException.
+# ponytail: one task per column chunk; batch indices if files with very many small
+# chunks show task overhead.
 function _readmap(f, indices, parallel::Bool)
     parallel || return map(f, indices)
     tasks = map(indices) do index

@@ -43,8 +43,9 @@ throws a `LimitError`.
 - `max_materialized_bytes` and `max_container_elements` (unlimited): optional caps on the
   bytes one operation allocates and on row and element counts.
 
-Counts and sizes read from a file are checked against the bytes that back them before
-memory is allocated for them, so corrupt metadata fails fast without these caps.
+Counts a file declares (values, rows, list and map lengths) are checked against the
+bytes that back them before memory is reserved for them, and declared page sizes are
+bounded by `max_page_bytes`, so corrupt metadata fails fast without the two caps.
 """
 Base.@kwdef struct Limits
     max_footer_bytes::Int64 = 64 * 1024 * 1024

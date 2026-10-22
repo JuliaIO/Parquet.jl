@@ -162,8 +162,9 @@ Limits reject oversized metadata, pages, strings, decimals, and statistics bound
 Row counts and total memory are unlimited by default; set `max_container_elements` or
 `max_materialized_bytes` to cap them, for example when reading untrusted files.
 
-Counts and sizes a file declares are checked against the bytes that back them before
-memory is reserved for them, so corrupt metadata fails with a `FormatError` instead of
+Counts a file declares (values, rows, list and map lengths) are checked against the
+bytes that back them before memory is reserved for them, and declared page sizes are
+bounded by `max_page_bytes`, so corrupt metadata fails with a `FormatError` instead of
 a large allocation. Highly repetitive data, such as long runs of nulls or of one
 dictionary value, still decodes to its full size.
 
