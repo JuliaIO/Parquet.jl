@@ -318,10 +318,17 @@ end
         repetition=firstrepetition, rows=2)
     @test_throws Parquet.FormatError readsyntheticstream([wrongrows], leaf;
         num_values=2, rows=2, path=path, schemaelements=elements)
-    wrongnulls = datapagev2(Int32[1]; levels=[3, 2], maxlevel=3,
-        repetition=firstrepetition, rows=1, nulls=0)
-    @test_throws Parquet.FormatError readsyntheticstream([wrongnulls], leaf;
-        num_values=2, rows=1, path=path, schemaelements=elements)
+    # num_nulls is advisory. Arrow C++ counts only leaf-level nulls (definition level
+    # 2 here), the format text counts every entry below the maximum (0, 1, and 2).
+    for nulls in (0, 1, 3)
+        levels = datapagev2(Int32[7]; levels=[0, 1, 2, 3], maxlevel=3,
+            repetition=Parquet.encode_hybrid(UInt64[0, 0, 0, 1], 1), rows=3,
+            nulls=nulls)
+        advisory = readsyntheticstream([levels], leaf; num_values=4, rows=3,
+            path=path, schemaelements=elements, expected_rows=3)
+        @test advisory.definition == [0, 1, 2, 3]
+        @test advisory.values == Int32[7]
+    end
     trailingrepetition = datapagev2(Int32[1, 2]; levels=[3, 3], maxlevel=3,
         repetition=vcat(firstrepetition, UInt8[0x00]), rows=1)
     @test_throws Parquet.FormatError readsyntheticstream([trailingrepetition], leaf;
@@ -642,12 +649,13 @@ end
     value = Parquet.encode_plain(Int32[1])
     @test_throws Parquet.FormatError readsynthetic([rawv2page(value; values=1, rows=0)],
         required; num_values=1)
-    @test_throws Parquet.FormatError readsynthetic([rawv2page(value; values=1, nulls=1)],
-        required; num_values=1)
+    @test readsynthetic([rawv2page(value; values=1, nulls=1)], required;
+        num_values=1) == Int32[1]
     definitions = Parquet.encode_hybrid(UInt64[1, 0], 1)
     mismatch = rawv2page(vcat(definitions, value); values=2, nulls=0, rows=2,
         definition=length(definitions))
-    @test_throws Parquet.FormatError readsynthetic([mismatch], optional; num_values=2)
+    @test isequal(readsynthetic([mismatch], optional; num_values=2),
+        Union{Missing,Int32}[1, missing])
     trailinglevels = rawv2page(vcat(definitions, UInt8[0x00], value); values=2,
         nulls=1, rows=2, definition=length(definitions) + 1)
     @test_throws Parquet.FormatError readsynthetic([trailinglevels], optional; num_values=2)

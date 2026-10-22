@@ -494,10 +494,8 @@ function _decodedatapagev2(::Type{T}, frame::PageFrame, md::Metadata.ColumnMetaD
     budget::_LiveByteBudget) where {T}
     header = frame.header.data_page_header_v2
     count = Int(header.num_values)
-    nulls = Int(header.num_nulls)
     rows = Int(header.num_rows)
     count >= 0 || throw(FormatError("negative data page V2 value count"))
-    0 <= nulls <= count || throw(FormatError("invalid data page V2 null count $nulls for $count values"))
     rows >= 0 || throw(FormatError("negative data page V2 row count"))
     count <= remaining ||
         throw(FormatError("data pages carry more values than declared by the column chunk"))
@@ -512,9 +510,9 @@ function _decodedatapagev2(::Type{T}, frame::PageFrame, md::Metadata.ColumnMetaD
     actualrows = Base.count(iszero, repetition)
     rows == actualrows ||
         throw(FormatError("data page V2 declares $rows rows but its repetition levels contain $actualrows"))
+    # num_nulls is advisory: writers disagree on whether empty and null ancestors count
+    # (Arrow C++ counts only leaf-level nulls), so the definition levels decide.
     present = _validatelevels(definition, Int(node.max_definition_level), "definition")
-    count - present == nulls ||
-        throw(FormatError("data page V2 declares $nulls nulls but its definition levels contain $(count - present)"))
     decoded = _decodeencodedvalues(T, header.encoding, bytes, present,
         _fixedwidth(node), 1, limits, budget)
     if decoded === nothing
