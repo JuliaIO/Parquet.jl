@@ -33,6 +33,9 @@ An encoding symbol or string applies to all columns. A `Pair`, `NamedTuple`, or
 dictionary supplies exact column-name overrides. Unlisted columns use PLAIN, or use
 adaptive dictionary encoding when `dictionary=true`.
 
+The writer reads each value of a scalar column once: a column that is not a `Vector`
+is first collected into one, so lazy or computed vectors are evaluated a single time.
+
 ## Nested columns
 
 The development implementation reads and writes recursive structs, lists, and maps.
