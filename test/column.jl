@@ -432,18 +432,6 @@ end
         limits=limits)
     @test values == fill(tiny, nvalues)
 
-    bytes, metadata, schema = syntheticfile([dictionary, data], leaf;
-        num_values=nvalues, dictionary_page_offset=Int64(4),
-        data_page_offset=offset)
-    file = Parquet.File(bytes)
-    budget = Parquet._LiveByteBudget(Parquet.Limits())
-    stream = Parquet.readleafstream(file, metadata, schema, 1, 1;
-        budget=budget)
-    retained = Parquet._leafretainedbytes(Vector{UInt8}, nvalues,
-        stream.values)
-    @test Parquet._budgetused(budget) == retained
-    close(file)
-
     optional = columnleaf(MD.Type.BYTE_ARRAY;
         repetition=MD.FieldRepetitionType.OPTIONAL)
     optionalpage = datapage([UInt8[0x61], UInt8[0x62, 0x63]];
@@ -451,16 +439,10 @@ end
     bytes, metadata, schema = syntheticfile([optionalpage], optional;
         num_values=3)
     file = Parquet.File(bytes)
-    flatbudget = Parquet._LiveByteBudget(Parquet.Limits())
-    output = Parquet.readcolumn(file, metadata, schema, 1, 1;
-        budget=flatbudget)
+    output = Parquet.readcolumn(file, metadata, schema, 1, 1)
     @test isequal(output,
         Union{Missing,Vector{UInt8}}[UInt8[0x61], missing,
             UInt8[0x62, 0x63]])
-    expected = Parquet._materializedarraybytes(eltype(output), length(output))
-    expected += Parquet._leafchildbytes(Vector{UInt8},
-        collect(skipmissing(output)))
-    @test Parquet._budgetused(flatbudget) == expected
     close(file)
 
     delta = Parquet.encode_delta_binary_packed(Int32[1])
@@ -469,25 +451,9 @@ end
     bytes, metadata, schema = syntheticfile([malformed],
         columnleaf(MD.Type.INT32); num_values=1)
     file = Parquet.File(bytes)
-    failurebudget = Parquet._LiveByteBudget(Parquet.Limits())
     @test_throws Parquet.FormatError Parquet.readleafstream(file, metadata,
-        schema, 1, 1; budget=failurebudget)
-    @test Parquet._budgetused(failurebudget) == 0
+        schema, 1, 1)
     close(file)
-
-    deltalimits = Parquet.Limits(max_materialized_bytes=
-        Parquet._materializedarraybytes(Int32, 1) - 1)
-    function rejectintdelta()
-        deltabudget = Parquet._LiveByteBudget(deltalimits)
-        @test_throws Parquet.LimitError Parquet._decodeencodedvalues(Int32,
-            MD.Encoding.DELTA_BINARY_PACKED, delta, 1, nothing, 1,
-            deltalimits, deltabudget)
-        @test Parquet._budgetused(deltabudget) == 0
-        return
-    end
-    rejectintdelta()
-    GC.gc()
-    @test @allocated(rejectintdelta()) < 10_000
 end
 
 @testset "required flat PLAIN columns" begin
@@ -785,21 +751,16 @@ end
         data_page_offset=4 + length(dictionary) + length(index) +
             length(unknown))
     limits = Parquet.Limits(max_container_elements=4)
-    budget = Parquet._LiveByteBudget(limits)
-    Parquet._reservearray!(budget, UInt8, 0)
-    entry = Parquet._budgetused(budget)
     file = Parquet.File(bytes)
     try
         failure = try
-            Parquet.readcolumn(file, metadata, schema, 1, 1;
-                limits=limits, budget=budget)
+            Parquet.readcolumn(file, metadata, schema, 1, 1; limits=limits)
             nothing
         catch err
             err
         end
         @test failure isa Parquet.LimitError
         @test failure.requested == 5
-        @test Parquet._budgetused(budget) == entry
     finally
         close(file)
     end

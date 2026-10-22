@@ -1,3 +1,24 @@
+# Byte vectors the decoders read: page payloads and decompressed pages are always
+# contiguous views of a `Vector{UInt8}`.
+const _ByteView = SubArray{UInt8,1,Vector{UInt8},Tuple{UnitRange{Int}},true}
+
+function _byteview(bytes::_ByteView)
+    return bytes
+end
+
+function _byteview(bytes::Vector{UInt8})
+    return view(bytes, 1:length(bytes))
+end
+
+function _byteview(bytes::AbstractVector{UInt8})
+    return _byteview(_contiguous(bytes))
+end
+
+function _growto!(values::Vector, count::Int)
+    length(values) < count && resize!(values, count)
+    return values
+end
+
 function _requirebytes(bytes::AbstractVector{UInt8}, offset::Integer, count::Integer)
     offset >= 1 || throw(BoundsError(bytes, offset))
     count >= 0 || throw(ArgumentError("byte count must be nonnegative"))
@@ -47,33 +68,12 @@ function _toplainbits(::Type{U}, value::T) where {U<:Unsigned,T}
     return reinterpret(U, value)
 end
 
-function decode_plain(::Type{Bool}, bytes::AbstractVector{UInt8}, count::Integer;
-    offset::Integer=1, limits::Limits=Limits())
-    count >= 0 || throw(ArgumentError("value count must be nonnegative"))
-    _checklimit(:container_elements, count, limits.max_container_elements)
-    bytecount = cld(Int(count), 8)
-    position = Int(offset)
-    _requirebytes(bytes, position, bytecount)
-    output = Vector{Bool}(undef, Int(count))
-    @inbounds for index in 0:(Int(count) - 1)
-        output[index + 1] = !iszero(bytes[position + (index >> 3)] & (UInt8(1) << (index & 7)))
-    end
-    return output, position + bytecount
-end
-
 function decode_plain(::Type{T}, bytes::AbstractVector{UInt8}, count::Integer;
-    offset::Integer=1, limits::Limits=Limits()) where {T<:Union{Int32,Int64,Float32,Float64}}
+    offset::Integer=1, limits::Limits=Limits()) where {T<:Union{Bool,Int32,Int64,Float32,Float64}}
     count >= 0 || throw(ArgumentError("value count must be nonnegative"))
     _checklimit(:container_elements, count, limits.max_container_elements)
-    position = Int(offset)
-    total = Base.checked_mul(Int(count), sizeof(T))
-    _requirebytes(bytes, position, total)
-    output = Vector{T}(undef, Int(count))
-    U = _plainbits(T)
-    @inbounds for index in eachindex(output)
-        bits, position = _readlittle(U, bytes, position)
-        output[index] = _fromplainbits(T, bits)
-    end
+    output = T[]
+    position = _plain!(output, 0, Int(count), T, identity, _byteview(bytes), Int(offset))
     return output, position
 end
 
@@ -81,18 +81,9 @@ function decode_plain_byte_array(bytes::AbstractVector{UInt8}, count::Integer;
     offset::Integer=1, limits::Limits=Limits())
     count >= 0 || throw(ArgumentError("value count must be nonnegative"))
     _checklimit(:container_elements, count, limits.max_container_elements)
-    position = Int(offset)
-    _requirebytes(bytes, position, Base.checked_mul(Int(count), 4))
-    output = Vector{Vector{UInt8}}(undef, Int(count))
-    for index in eachindex(output)
-        rawlength, position = _readlittle(UInt32, bytes, position)
-        length = reinterpret(Int32, rawlength)
-        length >= 0 || throw(FormatError("negative PLAIN byte-array length"))
-        _checklimit(:string_bytes, length, limits.max_string_bytes)
-        _requirebytes(bytes, position, length)
-        output[index] = collect(@view bytes[position:(position + length - 1)])
-        position += length
-    end
+    output = Vector{UInt8}[]
+    position = _plainbytes!(output, 0, Int(count), identity, nothing,
+        _byteview(bytes), Int(offset), limits)
     return output, position
 end
 
@@ -108,6 +99,83 @@ function decode_plain_fixed(bytes::AbstractVector{UInt8}, count::Integer, width:
     output = Matrix{UInt8}(undef, Int(width), Int(count))
     isempty(output) || copyto!(output, 1, bytes, position, total)
     return output, position + total
+end
+
+# The PLAIN decoders below write `count` values to `dest[(offset + 1):(offset + count)]`,
+# applying `convert` to each physical value, and return the position after the values.
+# `dest` grows only after the bytes for all `count` values are known to be present.
+
+function _plain!(dest::Vector{L}, offset::Int, count::Int, ::Type{Bool}, convert::C,
+        bytes::_ByteView, position::Int) where {L,C}
+    total = cld(count, 8)
+    _requirebytes(bytes, position, total)
+    _growto!(dest, offset + count)
+    @inbounds for index in 0:(count - 1)
+        bit = bytes[position + (index >> 3)] & (UInt8(1) << (index & 7))
+        dest[offset + index + 1] = convert(!iszero(bit))
+    end
+    return position + total
+end
+
+function _plain!(dest::Vector{L}, offset::Int, count::Int, ::Type{P}, convert::C,
+        bytes::_ByteView, position::Int) where {L,P<:Union{Int32,Int64,Float32,Float64},C}
+    total = Base.checked_mul(count, sizeof(P))
+    _requirebytes(bytes, position, total)
+    _growto!(dest, offset + count)
+    GC.@preserve bytes dest begin
+        source = Ptr{P}(pointer(bytes, position))
+        if L === P && convert === identity
+            unsafe_copyto!(pointer(dest, offset + 1), source, count)
+        else
+            @inbounds for index in 1:count
+                dest[offset + index] = convert(ltoh(unsafe_load(source, index)))
+            end
+        end
+    end
+    return position + total
+end
+
+# BYTE_ARRAY values (`width === nothing`) carry a 4-byte little-endian length;
+# FIXED_LEN_BYTE_ARRAY values are `width` bytes each. `convert` receives a view of the
+# value's bytes and must copy what it keeps.
+function _plainbytes!(dest::Vector{L}, offset::Int, count::Int, convert::C,
+        width::Nothing, bytes::_ByteView, position::Int, limits::Limits) where {L,C}
+    _requirebytes(bytes, position, Base.checked_mul(count, 4))
+    _growto!(dest, offset + count)
+    for index in 1:count
+        raw = GC.@preserve bytes ltoh(unsafe_load(Ptr{UInt32}(pointer(bytes, position))))
+        position += 4
+        length = reinterpret(Int32, raw)
+        length >= 0 || throw(FormatError("negative PLAIN byte-array length"))
+        _checklimit(:string_bytes, length, limits.max_string_bytes)
+        _requirebytes(bytes, position, length)
+        dest[offset + index] = _bytevalue(convert, view(bytes, position:(position + length - 1)))
+        position += length
+        # The next length prefix must be present before it is loaded.
+        index < count && _requirebytes(bytes, position, 4)
+    end
+    return position
+end
+
+function _plainbytes!(dest::Vector{L}, offset::Int, count::Int, convert::C,
+        width::Int, bytes::_ByteView, position::Int, limits::Limits) where {L,C}
+    _checklimit(:string_bytes, width, limits.max_string_bytes)
+    total = Base.checked_mul(count, width)
+    _requirebytes(bytes, position, total)
+    _growto!(dest, offset + count)
+    for index in 1:count
+        dest[offset + index] = _bytevalue(convert, view(bytes, position:(position + width - 1)))
+        position += width
+    end
+    return position
+end
+
+function _bytevalue(::typeof(identity), bytes::_ByteView)
+    return collect(bytes)
+end
+
+function _bytevalue(convert, bytes::_ByteView)
+    return convert(bytes)
 end
 
 function encode_plain(values::AbstractVector{Bool})

@@ -33,39 +33,84 @@ function _readpackedvalue(bytes::AbstractVector{UInt8}, offset::Int, bitoffset::
     return value
 end
 
-function _decodebitpacked!(output::Vector{UInt64}, outputoffset::Int,
-    bytes::AbstractVector{UInt8}, offset::Int, groups::Int, bitwidth::Int)
-    payloadbytes = try
-        Base.checked_mul(groups, bitwidth)
-    catch err
-        err isa OverflowError || rethrow()
-        throw(FormatError("bit-packed payload size overflows Int"))
+# Writes `count` values of a bit-packed run of `bitwidth`-bit values starting at
+# `bytes[base]` (least significant bit first) to `output[(offset + 1):(offset + count)]`.
+# A value is read with one unaligned 8-byte load while those 8 bytes lie inside `bytes`.
+function _unpack!(output::Vector{U}, offset::Int, count::Int, bytes::_ByteView,
+        base::Int, bitwidth::Int) where {U<:Unsigned}
+    if bitwidth == 0
+        fill!(view(output, (offset + 1):(offset + count)), zero(U))
+        return
     end
-    _requirebytes(bytes, offset, payloadbytes)
-    available = try
-        Base.checked_mul(groups, 8)
-    catch err
-        err isa OverflowError || rethrow()
-        throw(FormatError("bit-packed value count overflows Int"))
+    mask = bitwidth == 64 ? typemax(UInt64) : (UInt64(1) << bitwidth) - 1
+    room = length(bytes) - 7 - base
+    fast = bitwidth > 56 || room < 0 ? 0 : min(count, (8 * room + 7) ÷ bitwidth + 1)
+    GC.@preserve bytes begin
+        pointer0 = pointer(bytes, base)
+        @inbounds for index in 0:(fast - 1)
+            bit = index * bitwidth
+            word = ltoh(unsafe_load(Ptr{UInt64}(pointer0 + (bit >> 3))))
+            output[offset + index + 1] = ((word >> (bit & 7)) & mask) % U
+        end
     end
-    count = min(available, length(output) - outputoffset + 1)
-    @inbounds for index in 0:(count - 1)
-        output[outputoffset + index] = _readpackedvalue(bytes, offset, index * bitwidth, bitwidth)
+    @inbounds for index in fast:(count - 1)
+        output[offset + index + 1] =
+            _readpackedvalue(bytes, base, index * bitwidth, bitwidth) % U
     end
-    return count, offset + payloadbytes
+    return
 end
 
-function _decoderlerun!(output::Vector{UInt64}, outputoffset::Int,
-    bytes::AbstractVector{UInt8}, offset::Int, runlength::Int, bitwidth::Int)
-    width = cld(bitwidth, 8)
-    _requirebytes(bytes, offset, width)
-    value = UInt64(0)
-    @inbounds for index in 0:(width - 1)
-        value |= UInt64(bytes[offset + index]) << (8 * index)
+# Decodes `count` RLE/bit-packed hybrid values of `bitwidth` bits from `bytes[position:]`
+# into `output[(offset + 1):(offset + count)]`; the runs must end by `stop`. `output`
+# grows run by run, so a count the runs do not back fails before it is allocated.
+# `U` must hold `cld(bitwidth, 8)` bytes. Returns the position after the last run.
+function _decodehybrid!(output::Vector{U}, offset::Int, count::Int, bitwidth::Int,
+        bytes::_ByteView, position::Int, stop::Int) where {U<:Unsigned}
+    filled = 0
+    while filled < count
+        position < stop || throw(FormatError("hybrid stream ended before all values"))
+        header, position = _readhybridvarint(bytes, position)
+        runs = header >> 1
+        runs > 0 || throw(FormatError("zero-length hybrid run"))
+        remaining = count - filled
+        if isodd(header)
+            runs <= UInt64(typemax(Int32) ÷ 8) ||
+                throw(FormatError("bit-packed hybrid run exceeds Int32 values"))
+            groups = Int(runs)
+            payload = groups * bitwidth
+            _requirebytes(bytes, position, payload)
+            produced = min(8 * groups, remaining)
+            _growto!(output, offset + filled + produced)
+            _unpack!(output, offset + filled, produced, bytes, position, bitwidth)
+            position += payload
+        else
+            runs <= UInt64(typemax(Int32)) ||
+                throw(FormatError("RLE hybrid run exceeds Int32 values"))
+            width = cld(bitwidth, 8)
+            _requirebytes(bytes, position, width)
+            value = UInt64(0)
+            for index in 0:(width - 1)
+                value |= UInt64(bytes[position + index]) << (8 * index)
+            end
+            position += width
+            produced = min(Int(runs), remaining)
+            _growto!(output, offset + filled + produced)
+            fill!(view(output, (offset + filled + 1):(offset + filled + produced)),
+                value % U)
+        end
+        position <= stop || throw(FormatError("hybrid run exceeds its declared length"))
+        filled += produced
     end
-    count = min(runlength, length(output) - outputoffset + 1)
-    fill!(@view(output[outputoffset:(outputoffset + count - 1)]), value)
-    return count, offset + width
+    return position
+end
+
+# Start and end of a hybrid stream at `position`, after its 4-byte length when prefixed.
+function _hybridbounds(bytes::AbstractVector{UInt8}, position::Int, length_prefix::Bool)
+    length_prefix || return position, length(bytes) + 1
+    rawlength, position = _readlittle(UInt32, bytes, position)
+    bodylength = Int(rawlength)
+    _requirebytes(bytes, position, bodylength)
+    return position, position + bodylength
 end
 
 function decode_hybrid(bytes::AbstractVector{UInt8}, count::Integer, bitwidth::Integer;
@@ -73,46 +118,11 @@ function decode_hybrid(bytes::AbstractVector{UInt8}, count::Integer, bitwidth::I
     count >= 0 || throw(ArgumentError("value count must be nonnegative"))
     0 <= bitwidth <= 64 || throw(ArgumentError("bit width must be between 0 and 64"))
     _checklimit(:container_elements, count, limits.max_container_elements)
-    position = Int(offset)
-    endposition = length(bytes) + 1
-    if length_prefix
-        rawlength, position = _readlittle(UInt32, bytes, position)
-        bodylength = Int(rawlength)
-        _requirebytes(bytes, position, bodylength)
-        endposition = position + bodylength
-    end
-    total = Int(count)
-    # `count` comes from a page header, so the output grows run by run as the encoded
-    # data reaches it instead of being allocated up front.
-    output = sizehint!(UInt64[], _claimcapacity(total, endposition - position))
-    outputoffset = 1
-    while outputoffset <= total
-        position < endposition || throw(FormatError("hybrid stream ended before all values"))
-        header, position = _readhybridvarint(bytes, position)
-        rawlength = header >> 1
-        rawlength > 0 || throw(FormatError("zero-length hybrid run"))
-        remainingvalues = total - outputoffset + 1
-        if isodd(header)
-            rawlength <= UInt64(typemax(Int32) ÷ 8) ||
-                throw(FormatError("bit-packed hybrid run exceeds Int32 values"))
-            runlength = Int(rawlength)
-            _requirebytes(bytes, position, runlength * Int(bitwidth))
-            resize!(output, outputoffset - 1 + min(8 * runlength, remainingvalues))
-            written, position = _decodebitpacked!(output, outputoffset, bytes, position,
-                runlength, Int(bitwidth))
-        else
-            rawlength <= UInt64(typemax(Int32)) ||
-                throw(FormatError("RLE hybrid run exceeds Int32 values"))
-            runlength = Int(rawlength)
-            _requirebytes(bytes, position, cld(Int(bitwidth), 8))
-            resize!(output, outputoffset - 1 + min(runlength, remainingvalues))
-            written, position = _decoderlerun!(output, outputoffset, bytes, position,
-                runlength, Int(bitwidth))
-        end
-        position <= endposition || throw(FormatError("hybrid run exceeds its declared length"))
-        outputoffset += written
-    end
-    length_prefix && position != endposition && throw(FormatError("hybrid stream has trailing bytes"))
+    data = _byteview(bytes)
+    position, stop = _hybridbounds(data, Int(offset), length_prefix)
+    output = UInt64[]
+    position = _decodehybrid!(output, 0, Int(count), Int(bitwidth), data, position, stop)
+    length_prefix && position != stop && throw(FormatError("hybrid stream has trailing bytes"))
     return output, position
 end
 

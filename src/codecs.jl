@@ -88,7 +88,7 @@ function _contiguouscopycharge(bytes::AbstractVector{UInt8})
     return _materializedarraybytes(UInt8, length(bytes))
 end
 
-function _codecfailure(err, codec::Metadata.CompressionCodec.T)
+function _codecfailure(@nospecialize(err), codec::Metadata.CompressionCodec.T)
     err isa ChunkCodecCore.DecodedSizeError &&
         throw(FormatError("$(codecname(codec)) page did not decompress to the declared size"))
     err isa ChunkCodecCore.DecodingError &&
@@ -249,6 +249,25 @@ function decompress(codec::Metadata.CompressionCodec.T,
     finally
         iszero(copycharge) || _release!(something(budget), copycharge)
     end
+end
+
+# `bytes` decompressed to exactly `expected` bytes in `buffer` (which is resized), or
+# `bytes` itself for UNCOMPRESSED. The same checks as `decompress` apply.
+function _decompressinto!(buffer::Vector{UInt8}, codec::Metadata.CompressionCodec.T,
+        bytes::_ByteView, expected::Integer, limits::Limits)
+    expected >= 0 || throw(FormatError("negative uncompressed page size $expected"))
+    _checklimit(:page_bytes, expected, limits.max_page_bytes)
+    _checklimit(:page_bytes, length(bytes), limits.max_page_bytes)
+    expected <= typemax(Int) || throw(FormatError("uncompressed page size $expected overflows"))
+    codecreadable(codec) || _unreadablecodec(codec)
+    codec == Metadata.CompressionCodec.UNCOMPRESSED && return _uncompressed(bytes, Int(expected))
+    resize!(buffer, Int(expected))
+    try
+        _decompress!(codec, buffer, bytes)
+    catch err
+        _codecfailure(err, codec)
+    end
+    return view(buffer, 1:Int(expected))
 end
 
 function _checklevel(codec::Metadata.CompressionCodec.T, level::Integer, range::UnitRange{Int})

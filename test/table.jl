@@ -202,7 +202,7 @@ end
         logicalType=Parquet.Metadata.LogicalType(STRING=Parquet.Metadata.StringType()),
     )
     node = Parquet.SchemaNode(element, ["bad"], Int16(0), Int16(0), Int32(1), Parquet.SchemaNode[])
-    @test_throws Parquet.FormatError Parquet._tablevalues(node, [UInt8[0xff]])
+    @test_throws Parquet.FormatError Parquet._logicalvalues(node, [UInt8[0xff]])
 end
 
 @testset "table name validation rollback and precedence" begin

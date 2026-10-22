@@ -104,70 +104,6 @@ function _readfilemetadata(file::File, limits::Limits)
     return _readfilemetadata(file, limits, _LiveByteBudget(limits))
 end
 
-function _tablecolumntype(node::SchemaNode)
-    physical = _physicaleltype(node.element.type_)
-    return _logicaleltype(node, physical)
-end
-
-function _tablecolumn(node::SchemaNode)
-    length(node.path) == 1 || throw(FormatError("nested columns are not supported yet"))
-    T = _tablecolumntype(node)
-    node.max_repetition_level == 0 || throw(FormatError("repeated columns are not supported yet"))
-    node.max_definition_level in (0, 1) ||
-        throw(FormatError("nested definition levels are not supported yet"))
-    optional = node.max_definition_level == 1
-    value_type = optional ? Union{Missing,T} : T
-    if node.element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
-            _logicalkind(node) === nothing
-        return FixedByteArrayVector(value_type, node.element.type_length)
-    end
-    return value_type[]
-end
-
-function _tablelogicalpayloadbytes(values::AbstractVector)
-    objects = Int64(0)
-    payload = Int64(0)
-    for value in values
-        ismissing(value) && continue
-        value isa AbstractVector{UInt8} || continue
-        objects = _materializedsum(objects, _MATERIALIZED_OBJECT_BYTES)
-        payload = _materializedsum(payload, length(value))
-    end
-    return _materializedsum(objects, payload)
-end
-
-function _tablevalues(node::SchemaNode, values::Vector, limits::Limits,
-    budget::_LiveByteBudget)
-    kind = _logicalkind(node)
-    kind === nothing && return values
-    physical = _physicaleltype(node.element.type_)
-    logical = _logicaleltype(node, physical)
-    outputtype = Missing <: eltype(values) ? Union{Missing,logical} : logical
-    _reservearray!(budget, outputtype, length(values))
-    _reserve!(budget, _tablelogicalpayloadbytes(values))
-    kind === :decimal && _reserveobjects!(budget,
-        count(!ismissing, values))
-    return _logicalvalues(node, values; limits=limits)
-end
-
-function _tablevalues(node::SchemaNode, values::Vector, limits::Limits)
-    return _tablevalues(node, values, limits, _LiveByteBudget(limits))
-end
-
-function _tablevalues(node::SchemaNode, values::Vector)
-    return _tablevalues(node, values, Limits())
-end
-
-function _readtablefield(file::File, metadata::Metadata.FileMetaData, schema::Schema,
-    rowindex::Int, node::SchemaNode, rows::Int64, limits::Limits,
-    budget::_LiveByteBudget)
-    values = readcolumn(file, metadata, schema, rowindex, node.column_index;
-        limits=limits, budget=budget)
-    length(values) == rows || throw(FormatError(
-        "flat column $(node.column_index) has $(length(values)) values for $rows rows"))
-    return _tablevalues(node, values, limits, budget)
-end
-
 function _tablenames(schema::Schema, limits::Limits,
     budget::_LiveByteBudget)
     charge = _reservearray!(budget, String, length(schema.root.children))
@@ -231,89 +167,7 @@ function _validatetablechunkranges(metadata::Metadata.FileMetaData,
     return
 end
 
-function _tablechunkmetrics(metadata::Metadata.FileMetaData, schema::Schema,
-    leaf::SchemaNode)
-    entries = Int64(0)
-    payload = Int64(0)
-    index = Int(leaf.column_index)
-    for (rowindex, group) in enumerate(metadata.row_groups)
-        index <= length(group.columns) || throw(FormatError(
-            "row group $rowindex has no column chunk for leaf $index"))
-        md = _chunkmetadata(group.columns[index], leaf)
-        entries = _materializedsum(entries, md.num_values)
-        payload = _materializedsum(payload, md.total_uncompressed_size)
-    end
-    return entries, payload
-end
-
-function _tablevaluepayload(value)
-    ismissing(value) && return Int64(0)
-    value isa AbstractString && return Int64(ncodeunits(value))
-    value isa AbstractVector{UInt8} && return Int64(length(value))
-    value isa JSONValue && return Int64(length(value.bytes))
-    value isa BSONValue && return Int64(length(value.bytes))
-    value isa AbstractVector || return Int64(0)
-    bytes = Int64(0)
-    for child in value
-        bytes = _materializedsum(bytes, _tablevaluepayload(child))
-    end
-    return bytes
-end
-
-function _tablefieldpayload(values::AbstractVector)
-    bytes = Int64(0)
-    for value in values
-        bytes = _materializedsum(bytes, _tablevaluepayload(value))
-    end
-    return bytes
-end
-
-function _tablefieldpayloadbaseline(metadata::Metadata.FileMetaData,
-    schema::Schema, rowindex::Int, node::SchemaNode)
-    node.element.type_ in (Metadata.Type.BYTE_ARRAY,
-        Metadata.Type.FIXED_LEN_BYTE_ARRAY) || return Int64(0)
-    chunk = metadata.row_groups[rowindex].columns[Int(node.column_index)]
-    md = _chunkmetadata(chunk, node)
-    return Int64(md.total_uncompressed_size)
-end
-
-function _reserveprimitivecolumn!(budget::_LiveByteBudget,
-    metadata::Metadata.FileMetaData, schema::Schema, node::SchemaNode,
-    rows::Int)
-    T = _tablecolumntype(node)
-    value_type = node.max_definition_level == 1 ? Union{Missing,T} : T
-    _reservearray!(budget, value_type, rows)
-    if node.element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
-            _logicalkind(node) === nothing
-        _reserveobjects!(budget)
-    end
-    if node.element.type_ in (Metadata.Type.BYTE_ARRAY,
-            Metadata.Type.FIXED_LEN_BYTE_ARRAY)
-        entries, payload = _tablechunkmetrics(metadata, schema, node)
-        _reserve!(budget, _materializedproduct(entries,
-            _MATERIALIZED_OBJECT_BYTES))
-        _reserve!(budget, payload)
-    end
-    _logicalkind(node) === :decimal && _reserveobjects!(budget, rows)
-    return
-end
-
-function _tablecolumns(metadata::Metadata.FileMetaData, schema::Schema,
-    rows::Int, budget::_LiveByteBudget, bytes::Int64)
-    nodes = schema.root.children
-    _reservearray!(budget, Any, length(nodes))
-    columns = Any[]
-    sizehint!(columns, length(nodes))
-    for node in nodes
-        _reserveprimitivecolumn!(budget, metadata, schema, node, rows)
-        column = _tablecolumn(node)
-        sizehint!(column, _claimcapacity(rows, bytes))
-        push!(columns, column)
-    end
-    return columns
-end
-
-# Decoding runs one task per column when the source allows concurrent reads, Julia has
+# Decoding runs on parallel tasks when the source allows concurrent reads, Julia has
 # more than one thread, and no `max_materialized_bytes` cap needs exact shared
 # accounting; each task then charges a private, unlimited budget.
 function _parallelread(file::File, limits::Limits, count::Int)
@@ -325,75 +179,139 @@ struct _ReadFailure
     error::Any
 end
 
-# `map(f, indices)`, on one task per index when `parallel`. A task's error is rethrown
-# as itself rather than wrapped in a TaskFailedException.
-# ponytail: one task per column chunk; batch indices if files with very many small
-# chunks show task overhead.
+mutable struct _ReadQueue
+    @atomic next::Int
+end
+
+# `map(index -> f(index, buffers), indices)`, where `buffers` are the `_PageBuffers` of
+# the task that runs `f`. When `parallel`, `Threads.nthreads()` tasks take the indices in
+# order. An error from `f` is rethrown as itself rather than in a TaskFailedException.
 function _readmap(f, indices, parallel::Bool)
-    parallel || return map(f, indices)
-    tasks = map(indices) do index
-        errormonitor(Threads.@spawn try
-            f(index)
-        catch err
-            _ReadFailure(err)
-        end)
+    if !parallel
+        buffers = _PageBuffers()
+        return map(index -> f(index, buffers), indices)
     end
-    results = map(fetch, tasks)
+    items = collect(indices)
+    results = Vector{Any}(undef, length(items))
+    queue = _ReadQueue(1)
+    workers = map(1:min(Threads.nthreads(), length(items))) do _
+        return errormonitor(Threads.@spawn _readworker(f, items, results, queue))
+    end
+    foreach(wait, workers)
     for result in results
         result isa _ReadFailure && throw(result.error)
     end
     return results
 end
 
-function _readrowgroups!(columns::Vector, file::File, metadata::Metadata.FileMetaData,
-    schema::Schema, rows::Int, limits::Limits, budget::_LiveByteBudget)
-    total = Int64(0)
-    for (rowindex, group) in enumerate(metadata.row_groups)
-        group.num_rows >= 0 || throw(FormatError("row group $rowindex has a negative row count"))
-        group.num_rows <= typemax(Int) || throw(FormatError("row group $rowindex row count overflows"))
-        length(group.columns) == length(schema.leaves) ||
-            throw(FormatError("row group $rowindex has $(length(group.columns)) columns for $(length(schema.leaves)) schema leaves"))
-        total = try
-            Base.checked_add(total, group.num_rows)
+function _readworker(f, items::Vector, results::Vector{Any}, queue::_ReadQueue)
+    buffers = _PageBuffers()
+    while true
+        index = (@atomic queue.next += 1) - 1
+        index > length(items) && return
+        results[index] = try
+            f(items[index], buffers)
         catch err
-            err isa OverflowError || rethrow()
-            throw(FormatError("row group row count overflows Int64"))
+            _ReadFailure(err)
         end
-        total <= rows || throw(FormatError(
-            "row groups contain more rows than the validated table count"))
-        _checklimit(:container_elements, total, limits.max_container_elements)
+    end
+end
+
+# Index of each row group's first row in the table, minus one.
+function _rowgroupstarts(metadata::Metadata.FileMetaData, rows::Int)
+    starts = Vector{Int}(undef, length(metadata.row_groups))
+    total = 0
+    for (rowindex, group) in enumerate(metadata.row_groups)
+        starts[rowindex] = total
+        total += Int(group.num_rows)
     end
     total == rows || throw(FormatError(
         "row groups contain $total rows but $rows were validated"))
-    fields = schema.root.children
-    chunks = vec([(fieldindex, rowindex) for rowindex in eachindex(metadata.row_groups),
-        fieldindex in eachindex(fields)])
-    parallel = _parallelread(file, limits, length(chunks))
-    pieces = _readmap(chunks, parallel) do (fieldindex, rowindex)
-        return _readtablechunk(file, metadata, schema, rowindex, fields[fieldindex],
-            limits, parallel ? _LiveByteBudget(limits) : budget)
+    return starts
+end
+
+# Whether every chunk of a flat field declares no more rows than its bytes could encode
+# (`_claimcapacity`). Only then is the column allocated at full length up front, so its
+# chunks can decode into it in any order.
+function _flatchunksbacked(metadata::Metadata.FileMetaData, node::SchemaNode)
+    index = Int(node.column_index)
+    for group in metadata.row_groups
+        md = group.columns[index].meta_data
+        md === nothing && return false
+        group.num_rows <= _claimcapacity(group.num_rows, md.total_compressed_size) ||
+            return false
     end
-    for ((fieldindex, _), values) in zip(chunks, pieces)
-        append!(columns[fieldindex], values)
-    end
+    return true
+end
+
+function _flatcolumnvector(node::SchemaNode, rows::Int, limits::Limits)
+    _, L = _valueconverter(node.element, limits)
+    return Vector{_flatoutputtype(L, node)}(undef, rows)
+end
+
+# One row group's chunk of a flat field, decoded into `column[(offset + 1):]`.
+function _readtablechunk!(column::Vector, offset::Int, file::File,
+        metadata::Metadata.FileMetaData, rowindex::Int, node::SchemaNode,
+        limits::Limits, budget::_LiveByteBudget, buffers::_PageBuffers)
+    group = metadata.row_groups[rowindex]
+    md = _chunkmetadata(group.columns[Int(node.column_index)], node)
+    md.num_values == group.num_rows || throw(FormatError(
+        "flat column $(node.column_index) has $(md.num_values) values for " *
+        "$(group.num_rows) rows"))
+    start, stop = _chunkrange(md, file.footer.offset)
+    convert, _ = _valueconverter(node.element, limits)
+    _readflatchunk!(column, offset, _physicaleltype(md.type_), convert, file.source, md,
+        node, start, stop, limits, budget, buffers)
     return
 end
 
-# One field's values from one row group; the charge for them stays on `budget`.
-function _readtablechunk(file::File, metadata::Metadata.FileMetaData,
-        schema::Schema, rowindex::Int, node::SchemaNode, limits::Limits,
-        budget::_LiveByteBudget)
-    before = _budgetused(budget)
-    group = metadata.row_groups[rowindex]
-    values = _readtablefield(file, metadata, schema, rowindex, node,
-        group.num_rows, limits, budget)
-    baseline = _tablefieldpayloadbaseline(metadata, schema, rowindex, node)
-    retained = max(Int64(0), _tablefieldpayload(values) - baseline)
-    transient = _budgetused(budget) - before
-    retained <= transient || throw(AssertionError(
-        "final variable-width values exceed their materialization charge"))
-    transient == retained || _release!(budget, transient - retained)
-    return values
+function _finishflatcolumn(column::Vector, node::SchemaNode)
+    node.element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
+        _logicalkind(node) === nothing || return column
+    return FixedByteArrayVector{eltype(column)}(column, node.element.type_length)
+end
+
+# Columns of a table whose fields are all flat leaves. Each chunk decodes straight into
+# its column, one task per chunk; a column whose chunks are not all backed by their
+# bytes grows as its chunks decode in order, on one task.
+function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Schema,
+        rows::Int, limits::Limits, budget::_LiveByteBudget)
+    fields = schema.root.children
+    starts = _rowgroupstarts(metadata, rows)
+    columns = AbstractVector[]
+    tasks = Tuple{Int,Int}[]
+    for (fieldindex, node) in enumerate(fields)
+        node.max_definition_level in (0, 1) ||
+            throw(FormatError("nested definition levels are not supported yet"))
+        backed = _flatchunksbacked(metadata, node)
+        column = _flatcolumnvector(node, backed ? rows : 0, limits)
+        backed || sizehint!(column, _claimcapacity(rows, _checkedsourcelength(file.source)))
+        push!(columns, column)
+        if backed
+            append!(tasks, (fieldindex, rowindex) for rowindex in eachindex(starts))
+        else
+            push!(tasks, (fieldindex, 0))
+        end
+    end
+    parallel = _parallelread(file, limits, length(tasks))
+    _readmap(tasks, parallel) do (fieldindex, rowindex), buffers
+        column = columns[fieldindex]
+        node = fields[fieldindex]
+        taskbudget = parallel ? _LiveByteBudget(limits) : budget
+        for index in (rowindex == 0 ? eachindex(starts) : (rowindex:rowindex))
+            offset = rowindex == 0 ? length(column) : starts[index]
+            _readtablechunk!(column, offset, file, metadata, index, node, limits,
+                taskbudget, buffers)
+        end
+        return nothing
+    end
+    for (fieldindex, node) in enumerate(fields)
+        length(columns[fieldindex]) == rows || throw(FormatError(
+            "flat column $(node.column_index) has $(length(columns[fieldindex])) " *
+            "values for $rows rows"))
+        columns[fieldindex] = _finishflatcolumn(columns[fieldindex], node)
+    end
+    return columns
 end
 
 # Copy of a Thrift struct with some fields replaced.
@@ -506,10 +424,7 @@ function Table(input; scan::Union{Nothing,Tables.Scan}=nothing,
             "nested schema plan has no root"))
         names = _tablenames(schema, limits, budget)
         if _isflattableplan(nested)
-            columns = _tablecolumns(metadata, schema, rows, budget,
-                _checkedsourcelength(file.source))
-            _readrowgroups!(columns, file, metadata, schema, rows, limits,
-                budget)
+            columns = _readflattable(file, metadata, schema, rows, limits, budget)
         else
             root = _readnestedroot(file, metadata, schema, nested, limits,
                 budget)

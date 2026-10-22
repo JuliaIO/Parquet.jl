@@ -52,35 +52,22 @@ function _nestedstreamentrycount(metadata::Metadata.FileMetaData,
     return Int(total)
 end
 
-function _nestedstreampayloadcharge(::Type{T}, retained::Int64,
-    count::Int) where {T}
-    structural = _materializedsum(_leaflevelbytes(count),
-        _materializedarraybytes(T, count))
-    retained >= structural || throw(AssertionError(
-        "leaf stream retained less than its level and value vectors"))
-    payload = retained - structural
-    T === Vector{UInt8} || iszero(payload) || throw(AssertionError(
-        "fixed-width leaf stream retained an unexpected payload charge"))
-    return payload
-end
-
 function _appendnestedrowgroup!(repetition::Vector{UInt64},
     definition::Vector{UInt64}, values::Vector{T}, position::Int,
     file::File, metadata::Metadata.FileMetaData, schema::Schema,
     rowindex::Int, leafindex::Int, count::Int, rows::Int64,
-    limits::Limits, budget::_LiveByteBudget) where {T}
+    limits::Limits, budget::_LiveByteBudget, buffers::_PageBuffers) where {T}
     before = _budgetused(budget)
     try
         stream = readleafstream(file, metadata, schema, rowindex, leafindex;
-            expected_rows=rows, limits=limits, budget=budget)
-        retained = _budgetused(budget) - before
+            expected_rows=rows, limits=limits, budget=budget, buffers=buffers)
         length(stream) == count || throw(FormatError(
             "row group $rowindex leaf $leafindex produced $(length(stream)) " *
             "of $count declared entries"))
         append!(repetition, stream.repetition)
         append!(definition, stream.definition)
         append!(values, stream.values)
-        payload = _nestedstreampayloadcharge(T, retained, count)
+        payload = _leafchildbytes(T, stream.values)
         structural = _materializedsum(_leaflevelbytes(count),
             _materializedarraybytes(T, count))
         _release!(budget, structural)
@@ -96,7 +83,7 @@ end
 
 function _readnestedstream(file::File, metadata::Metadata.FileMetaData,
     schema::Schema, leaf::_NestedLeafPlan, rows::Int, limits::Limits,
-    budget::_LiveByteBudget, entries::Int)
+    budget::_LiveByteBudget, entries::Int, buffers::_PageBuffers)
     T = _physicaleltype(leaf.source.element.type_)
     capacity = _claimcapacity(entries, _checkedsourcelength(file.source))
     repetition = sizehint!(UInt64[], capacity)
@@ -111,7 +98,7 @@ function _readnestedstream(file::File, metadata::Metadata.FileMetaData,
             count = Int(md.num_values)
             position, payload = _appendnestedrowgroup!(repetition,
                 definition, values, position, file, metadata, schema,
-                rowindex, index, count, group.num_rows, limits, budget)
+                rowindex, index, count, group.num_rows, limits, budget, buffers)
             payloadcharge = _materializedsum(payloadcharge, payload)
         end
         position == entries + 1 || throw(AssertionError(
@@ -171,10 +158,10 @@ function _readnestedroot(file::File, metadata::Metadata.FileMetaData,
         _reserve!(budget, structuralcharge)
         structuralreserved = true
         parallel = _parallelread(file, limits, length(plan.leaves))
-        results = _readmap(eachindex(plan.leaves), parallel) do index
+        results = _readmap(eachindex(plan.leaves), parallel) do index, buffers
             return _readnestedstream(file, metadata, schema, plan.leaves[index],
                 rows, limits, parallel ? _LiveByteBudget(limits) : budget,
-                entrycounts[index])
+                entrycounts[index], buffers)
         end
         for (index, (stream, payload)) in enumerate(results)
             push!(streams, stream)

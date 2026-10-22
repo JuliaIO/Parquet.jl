@@ -111,19 +111,21 @@ function oipagerows(frame, metadata::OIMD.ColumnMetaData,
         count = Int(page.num_values)
         node.max_repetition_level == 0 && return Int64(page.num_rows)
         bytes = @view frame.payload[1:Int(page.repetition_levels_byte_length)]
-        repetition = Parquet._decodelevelsv2(bytes, count,
-            Int(node.max_repetition_level), "repetition", Parquet.Limits())
-        return Int64(Base.count(iszero, repetition))
+        repetition = UInt16[]
+        Parquet._levelsv2!(repetition, Parquet._byteview(bytes), count,
+            Int(node.max_repetition_level), "repetition")
+        return Int64(Base.count(iszero, view(repetition, 1:count)))
     end
     page = header.data_page_header
     count = Int(page.num_values)
     node.max_repetition_level == 0 && return Int64(count)
     payload = Parquet.decompress(metadata.codec, frame.payload,
         header.uncompressed_page_size)
-    repetition, _ = Parquet._decodelevelv1(payload, count,
-        page.repetition_level_encoding, Int(node.max_repetition_level), 1,
+    repetition = UInt16[]
+    Parquet._levelsv1!(repetition, Parquet._byteview(payload), 1, count,
+        page.repetition_level_encoding, Int(node.max_repetition_level),
         "repetition", Parquet.Limits())
-    return Int64(Base.count(iszero, repetition))
+    return Int64(Base.count(iszero, view(repetition, 1:count)))
 end
 
 function oiexpectedlocations(frames, metadata::OIMD.ColumnMetaData,

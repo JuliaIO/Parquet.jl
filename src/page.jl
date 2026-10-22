@@ -70,7 +70,7 @@ function validatepageheader(header::Metadata.PageHeader)
     return kind
 end
 
-function _pageheaderfailure(err, reader::Thrift.Reader, window::Int64,
+function _pageheaderfailure(@nospecialize(err), reader::Thrift.Reader, window::Int64,
         available::Int64, limits::Limits)
     clipped = window < available
     if err isa FormatError && clipped && Thrift.remaining(reader) == 0
