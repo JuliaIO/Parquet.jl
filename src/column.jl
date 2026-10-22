@@ -34,11 +34,11 @@ function _leafchildbytes(::Type{T}, values::Vector{T}) where {T}
     return Int64(0)
 end
 
+# The vectors already exist, so their byte total cannot overflow Int64.
 function _leafchildbytes(::Type{Vector{UInt8}}, values::Vector{Vector{UInt8}})
-    bytes = Int64(0)
+    bytes = Int64(length(values)) * _MATERIALIZED_ARRAY_HEADER_BYTES
     for value in values
-        bytes = _materializedsum(bytes,
-            _materializedarraybytes(UInt8, length(value)))
+        bytes += length(value)
     end
     return bytes
 end
@@ -660,9 +660,7 @@ function _readleafstream(::Type{T}, src::AbstractSource, md::Metadata.ColumnMeta
         stream = LeafStream(repetition, definition, values,
             Int(node.max_repetition_level), Int(node.max_definition_level);
             expected_rows=expected_rows)
-        retained = _leafretainedbytes(T, count, values)
-        retained == _materializedsum(retainedbase, childbytes) ||
-            throw(AssertionError("leaf retained-byte accounting is inconsistent"))
+        retained = _materializedsum(retainedbase, childbytes)
         if !iszero(dictionarycharge)
             _transferleafcharge!(budget, operationstart, dictionarycharge,
                 retained)

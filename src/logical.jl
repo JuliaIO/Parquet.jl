@@ -88,10 +88,18 @@ function _toparquetdate(value::Dates.Date)
     return Int32(days)
 end
 
+const _EMPTY_BYTES = UInt8[]
+
+# Values of up to 12 bytes are stored inline; longer ones in one private copy.
 function _fromparquetstring(value::AbstractVector{UInt8}, limits::Limits)
-    _checklimit(:string_bytes, length(value), limits.max_string_bytes)
+    count = length(value)
+    _checklimit(:string_bytes, count, limits.max_string_bytes)
     isvalid(String, value) || throw(FormatError("STRING value contains invalid UTF-8"))
-    return DataStrings.DataString(String(copy(value)))
+    count <= DataStrings.INLINE_MAX && return DataStrings.DataString(
+        DataStrings.inline_payload(value, 1, count), _EMPTY_BYTES)
+    data = collect(value)
+    return DataStrings.DataString(DataStrings.view_payload(data, 1, count, 0, 0),
+        data)
 end
 
 function _toparquetstring(value::AbstractString, limits::Limits)
@@ -169,11 +177,24 @@ function _convertedvector(::Type{T}, values::AbstractVector) where {T}
     return Vector{U}(undef, length(values))
 end
 
+function _stringvalues(::Type{T}, values::AbstractVector, limits::Limits) where {T}
+    output = Vector{T}(undef, length(values))
+    for (index, value) in enumerate(values)
+        output[index] = ismissing(value) ? missing : _fromparquetstring(value, limits)
+    end
+    return output
+end
+
 function _logicalvalues(element::Metadata.SchemaElement, values::AbstractVector;
     limits::Limits=Limits())
     kind = _logicalkind(element)
     kind === nothing && return values
     _checklimit(:container_elements, length(values), limits.max_container_elements)
+    if kind === :string && eltype(values) <: Union{Missing,AbstractVector{UInt8}}
+        T = Missing <: eltype(values) ? Union{Missing,DataStrings.DataString} :
+            DataStrings.DataString
+        return _stringvalues(T, values, limits)
+    end
     kind === :decimal && _preflightdecimalconversion(element, limits)
     physical = _physicaleltype(element.type_)
     T = _logicaleltype(element, physical)
