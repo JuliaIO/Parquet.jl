@@ -205,14 +205,16 @@ function columnbitpacked(values, maxlevel::Int)
 end
 
 @testset "leaf stream invariants" begin
-    repetition = UInt64[0, 0, 0, 0, 1, 1, 0]
-    definition = UInt64[0, 1, 2, 3, 2, 3, 3]
+    repetition = UInt16[0, 0, 0, 0, 1, 1, 0]
+    definition = UInt16[0, 1, 2, 3, 2, 3, 3]
     values = Int32[0, -1, 11016]
     stream = Parquet.LeafStream(repetition, definition, values, 1, 3;
         expected_rows=5)
     @test stream.repetition === repetition
     @test stream.definition === definition
     @test stream.values === values
+    @test Parquet.LeafStream(UInt64.(repetition), UInt64.(definition), values, 1, 3;
+        expected_rows=5).definition == definition
     @test length(stream) == 7 && !isempty(stream)
     @test isempty(Parquet.LeafStream(UInt64[], UInt64[], Int32[], 1, 3;
         expected_rows=0))

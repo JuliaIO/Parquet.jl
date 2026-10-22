@@ -68,8 +68,21 @@ function _nestedreadvalidatestream(stream::LeafStream, leaf::_NestedLeafPlan,
         "leaf stream has $rowcount rows but $rows were expected"))
     densecount == length(stream.values) || throw(FormatError(
         "leaf stream has $(length(stream.values)) dense values for $densecount present entries"))
+    _nestedreadcheckvalues(stream.values, leaf)
+    return
+end
+
+# Streams decoded by this package hold the leaf's logical values (or its physical values
+# when it has no annotation), and PLAIN decoding fixes FIXED_LEN_BYTE_ARRAY widths;
+# other streams are checked value by value.
+function _nestedreadcheckvalues(values::Vector{T}, leaf::_NestedLeafPlan) where {T}
     expected = _physicaleltype(leaf.source.element.type_)
-    for value in stream.values
+    logical = _nestedreadlogicaltype(leaf)
+    T === logical && logical !== expected && return
+    T === DataStrings.StringPayload && _logicalkind(leaf.source) === :string && return
+    T === expected && leaf.source.element.type_ != Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
+        return
+    for value in values
         _nestedreadphysicalvalue(value, expected, leaf)
     end
     return
@@ -137,17 +150,22 @@ function _nestedshapebytes(slots::Integer, listing::Bool)
     return _materializedsum(bytes, _materializedarraybytes(Int, slots))
 end
 
+# Plan levels are schema levels, so they fit the UInt16 stream levels.
 function _nestedshape(stream::LeafStream, plan::_NestedPlan,
         repetition::UInt64, parent::UInt64, budget::_LiveByteBudget)
     reps = stream.repetition
     defs = stream.definition
-    present = UInt64(getfield(plan, :present_definition))
+    length(reps) == length(defs) || throw(FormatError(
+        "leaf stream repetition and definition counts differ"))
+    repetition = UInt16(repetition)
+    parent = UInt16(parent)
+    present = UInt16(getfield(plan, :present_definition))
     listing = _nestedlisting(plan)
-    level = listing ? UInt64(plan.repetition_level) : UInt64(0)
-    entry = listing ? UInt64(plan.entry_definition) : UInt64(0)
+    level = listing ? UInt16(plan.repetition_level) : UInt16(0)
+    entry = listing ? UInt16(plan.entry_definition) : UInt16(0)
     slots = 0
-    for i in eachindex(reps, defs)
-        (reps[i] <= repetition && defs[i] >= parent) && (slots += 1)
+    @inbounds for i in eachindex(reps)
+        slots += (reps[i] <= repetition) & (defs[i] >= parent)
     end
     charge = _nestedshapebytes(slots, listing)
     _reserve!(budget, charge)
@@ -155,7 +173,8 @@ function _nestedshape(stream::LeafStream, plan::_NestedPlan,
     counts = listing ? zeros(Int, slots) : Int[]
     slot = 0
     open = false
-    for i in eachindex(reps, defs)
+    # `slot` is at least 1 wherever `open` is true, which guards every slot access.
+    @inbounds for i in eachindex(reps)
         r = reps[i]
         d = defs[i]
         if r <= repetition
@@ -264,6 +283,25 @@ function _nestedvalidity(present::BitVector, required::Bool,
     return copy(present)
 end
 
+# A STRING leaf read from a table: its present values as a StringVector, spread over
+# the leaf's occurrences with null payloads where it is absent.
+function _nestedstrings(values::DataStrings.StringVector{DataStrings.DataString},
+        presence::BitVector, required::Bool)
+    required && return values
+    payloads = Vector{DataStrings.StringPayload}(undef, length(presence))
+    next = 0
+    for index in eachindex(payloads, presence)
+        if presence[index]
+            next += 1
+            payloads[index] = values.payloads[next]
+        else
+            payloads[index] = DataStrings.PAYLOAD_MISSING
+        end
+    end
+    return DataStrings.StringVector{Union{Missing,DataStrings.DataString}}(payloads,
+        values.buffers, Val(:trusted))
+end
+
 function _nestedbuild(plan::_NestedLeafPlan, tree::_NestedShapeTree,
         logical::Vector{AbstractVector}, keyed::Bool, budget::_LiveByteBudget)
     presence = tree.shape.present
@@ -271,6 +309,8 @@ function _nestedbuild(plan::_NestedLeafPlan, tree::_NestedShapeTree,
     count(presence) == length(values) || throw(FormatError(
         "$(_nestedreadlabel(plan)) has $(length(values)) dense values for " *
         "$(count(presence)) present occurrences"))
+    values isa DataStrings.StringVector &&
+        return _nestedstrings(values, presence, _nestedrequired(plan, keyed))
     T = _nestedreadlogicaltype(plan)
     output = if _nestedrequired(plan, keyed)
         _reservearray!(budget, T, length(values))
@@ -291,7 +331,7 @@ end
 function _nestedfill(::Type{T}, presence::BitVector, values::AbstractVector) where {T}
     output = Vector{T}(undef, length(presence))
     next = 0
-    for index in eachindex(output)
+    @inbounds for index in eachindex(output)
         if presence[index]
             next += 1
             output[index] = values[next]
@@ -365,25 +405,36 @@ end
 # Logical conversions of each leaf's dense values. The converted arrays are temporary
 # (leaf outputs charge their own arrays); the converted payload is retained.
 function _nestedreadlogicalvalues(plan::_NestedSchemaPlan,
-        streams::Vector{LeafStream}, limits::Limits, budget::_LiveByteBudget)
+        streams::Vector{LeafStream}, limits::Limits, budget::_LiveByteBudget,
+        strings)
     output = Vector{AbstractVector}(undef, length(streams))
     temporary = Int64(0)
     for (index, stream) in enumerate(streams)
         leaf = plan.leaves[index]
-        if _logicalkind(leaf.source) !== nothing
-            charge = _reservearray!(budget, _nestedreadlogicaltype(leaf),
-                length(stream.values))
-            temporary = _materializedsum(temporary, charge)
-            _reserve!(budget, _nestedreadpayloadbytes(leaf, stream))
+        if strings !== nothing && strings[index] !== nothing
+            output[index] = DataStrings.StringVector{DataStrings.DataString}(
+                stream.values, strings[index], Val(:trusted))
+            continue
         end
+        logical = _nestedreadlogicaltype(leaf)
+        # Streams read from a table already hold logical values.
+        if _logicalkind(leaf.source) === nothing || eltype(stream.values) === logical
+            output[index] = stream.values
+            continue
+        end
+        charge = _reservearray!(budget, logical, length(stream.values))
+        temporary = _materializedsum(temporary, charge)
+        _reserve!(budget, _nestedreadpayloadbytes(leaf, stream))
         output[index] = _logicalvalues(leaf.source, stream.values; limits=limits)
     end
     return output, temporary
 end
 
+# `strings` holds, per leaf, the page buffers of a STRING leaf whose stream values are
+# DataStrings payloads (as `_readnestedstream` decodes them), or `nothing`.
 function _assemblenested(plan::_NestedSchemaPlan, streams::AbstractVector,
     rows::Integer; limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
+    budget::_LiveByteBudget=_LiveByteBudget(limits), strings=nothing)
     plan.depth <= _NESTED_READ_MAX_DEPTH || throw(LimitError(:nested_read_depth,
         Int64(plan.depth), Int64(_NESTED_READ_MAX_DEPTH)))
     rowcount = _nestedreadint(rows, "nested row count")
@@ -395,7 +446,7 @@ function _assemblenested(plan::_NestedSchemaPlan, streams::AbstractVector,
         tree, temporary = _nestedshapetree(plan.root, normalized, UInt64(0),
             UInt64(0), rowcount, false, budget)
         logical, logicalcharge = _nestedreadlogicalvalues(plan, normalized,
-            limits, budget)
+            limits, budget, strings)
         root = _nestedbuild(plan.root, tree, logical, false, budget)
         _release!(budget, _materializedsum(temporary, logicalcharge))
         return root

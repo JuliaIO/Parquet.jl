@@ -13,40 +13,9 @@ function _physicaleltype(type::Metadata.Type.T)
     throw(FormatError("unknown physical type $type"))
 end
 
-function _leafdensebytes(::Type{T}, count::Integer,
-    md::Metadata.ColumnMetaData) where {T}
-    bytes = _materializedarraybytes(T, count)
-    T === Vector{UInt8} || return bytes
-    payload = Int64(md.total_uncompressed_size)
-    payload >= 0 || throw(FormatError("negative column chunk uncompressed size"))
-    bytes = _materializedsum(bytes,
-        _materializedproduct(count, _MATERIALIZED_ARRAY_HEADER_BYTES))
-    return _materializedsum(bytes, payload)
-end
-
 function _leaflevelbytes(count::Integer)
     bytes = _materializedarraybytes(UInt64, count)
     return _materializedsum(bytes, _materializedarraybytes(UInt64, count))
-end
-
-function _leafchildbytes(::Type{T}, values::Vector{T}) where {T}
-    return Int64(0)
-end
-
-# The vectors already exist, so their byte total cannot overflow Int64.
-function _leafchildbytes(::Type{Vector{UInt8}}, values::Vector{Vector{UInt8}})
-    bytes = Int64(length(values)) * _MATERIALIZED_ARRAY_HEADER_BYTES
-    for value in values
-        bytes += length(value)
-    end
-    return bytes
-end
-
-function _leafretainedbytes(::Type{T}, entries::Integer,
-    values::Vector{T}) where {T}
-    bytes = _materializedsum(_leaflevelbytes(entries),
-        _materializedarraybytes(T, entries))
-    return _materializedsum(bytes, _leafchildbytes(T, values))
 end
 
 function _pageentrycount(frame::PageFrame)
@@ -274,7 +243,8 @@ function (logical::_LogicalValue{L})(value) where {L}
         logical.limits))::L
 end
 
-# The conversion of `element`'s physical values and the type it produces.
+# The conversion of `element`'s physical values and the type it produces. STRING values
+# become DataStrings payloads (`_StringPayloads`).
 function _valueconverter(element::Metadata.SchemaElement, limits::Limits)
     physical = _physicaleltype(element.type_)
     kind = _logicalkind(element)
@@ -774,23 +744,22 @@ function _sinkpage!(decode, sink::_FlatSink{O,L,false}, count::Int, present::Int
     return position
 end
 
-# Leaf streams: every entry's levels and the dense present values.
+# Leaf streams: every entry's levels and the dense present values, appended page by
+# page (and chunk by chunk when one sink reads several chunks).
 struct _StreamSink{L}
-    repetition::Vector{UInt64}
-    definition::Vector{UInt64}
+    repetition::Vector{UInt16}
+    definition::Vector{UInt16}
     values::Vector{L}
 end
 
-function _appendlevels!(levels::Vector{UInt64}, page::Vector{UInt16}, count::Int,
+function _appendlevels!(levels::Vector{UInt16}, page::Vector{UInt16}, count::Int,
         stored::Bool)
     offset = length(levels)
     resize!(levels, offset + count)
     if stored
-        @inbounds for index in 1:count
-            levels[offset + index] = page[index]
-        end
+        copyto!(levels, offset + 1, page, 1, count)
     else
-        fill!(view(levels, (offset + 1):(offset + count)), UInt64(0))
+        fill!(view(levels, (offset + 1):(offset + count)), UInt16(0))
     end
     return
 end
@@ -829,15 +798,13 @@ function readleafstream(src::AbstractSource, chunk::Metadata.ColumnChunk,
     T = _physicaleltype(md.type_)
     start, stop = _leafchunkrange(src, md, footeroffset, limits)
     capacity = _claimcapacity(md.num_values, stop - start)
-    sink = _StreamSink(sizehint!(UInt64[], capacity), sizehint!(UInt64[], capacity),
+    sink = _StreamSink(sizehint!(UInt16[], capacity), sizehint!(UInt16[], capacity),
         sizehint!(T[], capacity))
     _readchunk!(sink, T, T, identity, src, md, node, start, stop, limits, budget,
         buffers)
-    stream = LeafStream(sink.repetition, sink.definition, sink.values,
+    return LeafStream(sink.repetition, sink.definition, sink.values,
         Int(node.max_repetition_level), Int(node.max_definition_level);
         expected_rows=expected_rows)
-    _reserve!(budget, _leafretainedbytes(T, length(stream), stream.values))
-    return stream
 end
 
 # STRING payloads mark nulls themselves (`DataStrings.PAYLOAD_MISSING`).

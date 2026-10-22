@@ -52,65 +52,51 @@ function _nestedstreamentrycount(metadata::Metadata.FileMetaData,
     return Int(total)
 end
 
-function _appendnestedrowgroup!(repetition::Vector{UInt64},
-    definition::Vector{UInt64}, values::Vector{T}, position::Int,
-    file::File, metadata::Metadata.FileMetaData, schema::Schema,
-    rowindex::Int, leafindex::Int, count::Int, rows::Int64,
-    limits::Limits, budget::_LiveByteBudget, buffers::_PageBuffers) where {T}
-    before = _budgetused(budget)
-    try
-        stream = readleafstream(file, metadata, schema, rowindex, leafindex;
-            expected_rows=rows, limits=limits, budget=budget, buffers=buffers)
-        length(stream) == count || throw(FormatError(
-            "row group $rowindex leaf $leafindex produced $(length(stream)) " *
-            "of $count declared entries"))
-        append!(repetition, stream.repetition)
-        append!(definition, stream.definition)
-        append!(values, stream.values)
-        payload = _leafchildbytes(T, stream.values)
-        structural = _materializedsum(_leaflevelbytes(count),
-            _materializedarraybytes(T, count))
-        _release!(budget, structural)
-        return position + count, payload
-    catch
-        retained = _budgetused(budget) - before
-        retained >= 0 || throw(AssertionError(
-            "leaf stream failure decreased the shared budget"))
-        iszero(retained) || _release!(budget, retained)
-        rethrow()
-    end
+# Checks that one chunk's entries, appended to `repetition` after `before`, start a row
+# and hold `rows` rows.
+function _checkchunkrows(repetition::Vector{UInt16}, before::Int, rows::Int64,
+        rowindex::Int, leafindex::Int)
+    after = length(repetition)
+    after > before && !iszero(repetition[before + 1]) && throw(FormatError(
+        "row group $rowindex leaf $leafindex starts with repetition level " *
+        "$(repetition[before + 1])"))
+    actual = count(iszero, view(repetition, (before + 1):after))
+    actual == rows || throw(FormatError(
+        "row group $rowindex leaf $leafindex has $actual rows but $rows were expected"))
+    return
 end
 
+# One leaf's stream across all row groups, decoded into one set of arrays with the
+# leaf's logical conversion applied, and the page buffers of a STRING leaf's payloads.
 function _readnestedstream(file::File, metadata::Metadata.FileMetaData,
     schema::Schema, leaf::_NestedLeafPlan, rows::Int, limits::Limits,
     budget::_LiveByteBudget, entries::Int, buffers::_PageBuffers)
-    T = _physicaleltype(leaf.source.element.type_)
+    node = leaf.source
+    T = _physicaleltype(node.element.type_)
+    convert, L = _valueconverter(node.element, limits)
     capacity = _claimcapacity(entries, _checkedsourcelength(file.source))
-    repetition = sizehint!(UInt64[], capacity)
-    definition = sizehint!(UInt64[], capacity)
-    values = sizehint!(T[], capacity)
-    position = 1
-    payloadcharge = Int64(0)
-    index = Int(leaf.source.column_index)
-    try
-        for (rowindex, group) in enumerate(metadata.row_groups)
-            md = _chunkmetadata(group.columns[index], leaf.source)
-            count = Int(md.num_values)
-            position, payload = _appendnestedrowgroup!(repetition,
-                definition, values, position, file, metadata, schema,
-                rowindex, index, count, group.num_rows, limits, budget, buffers)
-            payloadcharge = _materializedsum(payloadcharge, payload)
+    sink = _StreamSink(sizehint!(UInt16[], capacity), sizehint!(UInt16[], capacity),
+        sizehint!(L[], capacity))
+    index = Int(node.column_index)
+    for (rowindex, group) in enumerate(metadata.row_groups)
+        md = _chunkmetadata(group.columns[index], node)
+        start, stop = _leafchunkrange(file.source, md, file.footer.offset, limits)
+        before = length(sink.repetition)
+        _readchunk!(sink, T, L, convert, file.source, md, node, start, stop, limits,
+            budget, buffers)
+        if node.max_repetition_level == 0
+            length(sink.repetition) - before == group.num_rows || throw(FormatError(
+                "row group $rowindex leaf $index has $(length(sink.repetition) - before) " *
+                "rows but $(group.num_rows) were expected"))
+        else
+            _checkchunkrows(sink.repetition, before, group.num_rows, rowindex, index)
         end
-        position == entries + 1 || throw(AssertionError(
-            "nested leaf concatenation did not fill its level arrays"))
-        return LeafStream(repetition, definition, values,
-            leaf.source.max_repetition_level,
-            leaf.source.max_definition_level; expected_rows=rows),
-            payloadcharge
-    catch
-        iszero(payloadcharge) || _release!(budget, payloadcharge)
-        rethrow()
     end
+    length(sink.repetition) == entries || throw(AssertionError(
+        "nested leaf concatenation did not fill its level arrays"))
+    stream = LeafStream(sink.repetition, sink.definition, sink.values,
+        node.max_repetition_level, node.max_definition_level; expected_rows=rows)
+    return stream, convert isa _StringPayloads ? convert.buffers : nothing
 end
 
 function _nestedstreamlayout!(entries::Vector{Int},
@@ -148,8 +134,6 @@ function _readnestedroot(file::File, metadata::Metadata.FileMetaData,
         rethrow()
     end
     entrycounts = zeros(Int, count)
-    payloadcharges = zeros(Int64, count)
-    assembled = false
     structuralcharge = Int64(0)
     structuralreserved = false
     try
@@ -163,30 +147,17 @@ function _readnestedroot(file::File, metadata::Metadata.FileMetaData,
                 rows, limits, parallel ? _LiveByteBudget(limits) : budget,
                 entrycounts[index], buffers)
         end
-        for (index, (stream, payload)) in enumerate(results)
+        for (stream, _) in results
             push!(streams, stream)
-            # A private budget holds a parallel read's payload charge.
-            payloadcharges[index] = parallel ? Int64(0) : payload
         end
-        root = _assemblenested(plan, streams, rows;
-            limits=limits, budget=budget)
-        assembled = true
-        for index in eachindex(streams)
-            if _logicalkind(plan.leaves[index].source) !== nothing
-                _release!(budget, payloadcharges[index])
-                payloadcharges[index] = 0
-            end
-        end
+        pages = Union{Nothing,Vector{Vector{UInt8}}}[last(result) for result in results]
+        root = _assemblenested(plan, streams, rows; limits=limits, budget=budget,
+            strings=pages)
         _release!(budget, structuralcharge)
         structuralreserved = false
         _release!(budget, _materializedsum(streamcharge, accountingcharge))
         return root
     catch
-        if !assembled
-            for charge in payloadcharges
-                iszero(charge) || _release!(budget, charge)
-            end
-        end
         structuralreserved && _release!(budget, structuralcharge)
         _release!(budget, _materializedsum(streamcharge, accountingcharge))
         rethrow()
