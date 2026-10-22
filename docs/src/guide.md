@@ -159,8 +159,10 @@ Use `Parquet.LogicalColumn` to select the exact annotation when it matters.
 
 Pass a `Parquet.Limits` value to `Parquet.File`, `Parquet.Table`, or `Parquet.write`.
 Limits reject oversized metadata, pages, strings, decimals, and statistics bounds.
-Row counts and total memory are unlimited by default; set `max_container_elements` or
-`max_materialized_bytes` to cap them, for example when reading untrusted files.
+Row counts and total memory are unlimited by default. Set `max_container_elements` to
+cap row and element counts, or `max_materialized_bytes` to cap the bytes a read
+allocates, for example when reading untrusted files. `max_materialized_bytes` does not
+cap writes.
 
 Counts a file declares (values, rows, list and map lengths) are checked against the
 bytes that back them before memory is reserved for them, and declared page sizes are
@@ -189,10 +191,10 @@ the garbage collector finalizes it. On Windows the file may therefore stay locke
 `close`. If another process truncates a mapped file while it is open, reads of the
 removed region terminate the process, and no bounds check can prevent that.
 
-When set, `max_materialized_bytes` covers the bytes this package allocates. A byte
-vector is borrowed and a mapped path is not copied, so neither is charged. An `IO`
-source is copied and is charged. A source type supplied by another package owns its
-own storage, so bytes it allocates are not charged here.
+When set, `max_materialized_bytes` covers the bytes this package allocates while
+reading. A byte vector is borrowed and a mapped path is not copied, so neither is
+charged. An `IO` source is copied and is charged. A source type supplied by another
+package owns its own storage, so bytes it allocates are not charged here.
 
 ## Shared data values
 

@@ -2,20 +2,6 @@ using Dates
 using SHA
 import Tables
 
-struct DeferredWriterName <: AbstractString
-    converted::Base.RefValue{Bool}
-    bytes::Int
-end
-
-function Base.ncodeunits(name::DeferredWriterName)
-    return name.bytes
-end
-
-function Base.String(name::DeferredWriterName)
-    name.converted[] = true
-    return "deferred"
-end
-
 function writtenpages(bytes::Vector{UInt8}, column::Int)
     file = Parquet.File(bytes)
     metadata = TH.decode(file.footer.bytes, MD.FileMetaData)
@@ -82,15 +68,6 @@ function minimalfootermetadata(; unknown_fields=())
     )
 end
 
-function boundedfooter(value; limits=Parquet.Limits())
-    budget = Parquet._LiveByteBudget(limits)
-    bytes, charge = Parquet._writeencodefooter(value, limits, budget)
-    @test Parquet._budgetused(budget) == charge
-    Parquet._release!(budget, charge)
-    @test Parquet._budgetused(budget) == 0
-    return bytes
-end
-
 struct NestedPathTable{T}
     table::T
 end
@@ -101,8 +78,8 @@ Tables.columns(source::NestedPathTable) = Tables.columns(source.table)
 
 # Send a scalar table through the nested shredder instead of the flat fast path.
 function Parquet._writefieldsencoded(source::NestedPathTable, limits::Parquet.Limits,
-        budget::Parquet._LiveByteBudget, encoding, dictionary::Bool)
-    columns, rows, _ = Parquet._writeinputcolumns(source.table, limits, budget)
+        encoding, dictionary::Bool)
+    columns, rows = Parquet._writeinputcolumns(source.table, limits)
     preflight = semantic -> Parquet._preflightwriteencoding(semantic, encoding,
         dictionary)
     return Parquet._nestedwritefields(columns, rows, limits;
@@ -148,39 +125,21 @@ end
 end
 
 @testset "flat writer snapshots only non-Vector columns" begin
-    budget = Parquet._LiveByteBudget(Parquet.Limits())
     values = Int32[1, 2]
-    @test Parquet._flatsnapshot(values, budget) === values
-    @test Parquet._budgetused(budget) == 0
-    @test Parquet._flatsnapshot(Int32(1):Int32(3), budget) == Int32[1, 2, 3]
-    @test Parquet._budgetused(budget) ==
-        Parquet._materializedarraybytes(Int32, 3)
+    @test Parquet._flatsnapshot(values) === values
+    @test Parquet._flatsnapshot(Int32(1):Int32(3)) == Int32[1, 2, 3]
 end
 
 @testset "exact bounded footer encoding" begin
     metadata = minimalfootermetadata()
     dynamic = TH.encode(metadata)
     exact = Int64(length(dynamic))
-    valuecharge = Parquet._materializedarraybytes(UInt8, exact)
-    controlcharge = Parquet._WRITE_FOOTER_CONTROL_BYTES
-    entry = Int64(17)
-    maximum = entry + controlcharge + valuecharge
-    limits = Parquet.Limits(max_footer_bytes=exact,
-        max_materialized_bytes=maximum)
-    budget = Parquet._LiveByteBudget(limits)
-    Parquet._reserve!(budget, entry)
-    bytes, charge = Parquet._writeencodefooter(metadata, limits, budget)
-    @test bytes == dynamic
-    @test charge == valuecharge
-    @test Parquet._budgetused(budget) == entry + charge
-    Parquet._release!(budget, charge)
-    @test Parquet._budgetused(budget) == entry
+    limits = Parquet.Limits(max_footer_bytes=exact)
+    @test Parquet._writeencodefooter(metadata, limits) == dynamic
 
-    footerbudget = Parquet._LiveByteBudget(Parquet.Limits())
-    Parquet._reserve!(footerbudget, entry)
     footererr = try
         Parquet._writeencodefooter(metadata,
-            Parquet.Limits(max_footer_bytes=exact - 1), footerbudget)
+            Parquet.Limits(max_footer_bytes=exact - 1))
         nothing
     catch caught
         caught
@@ -189,34 +148,17 @@ end
     @test footererr.resource == :footer_bytes
     @test footererr.requested == exact
     @test footererr.maximum == exact - 1
-    @test Parquet._budgetused(footerbudget) == entry
-
-    tightlimits = Parquet.Limits(max_footer_bytes=exact,
-        max_materialized_bytes=maximum - 1)
-    tightbudget = Parquet._LiveByteBudget(tightlimits)
-    Parquet._reserve!(tightbudget, entry)
-    materialerr = try
-        Parquet._writeencodefooter(metadata, tightlimits, tightbudget)
-        nothing
-    catch caught
-        caught
-    end
-    @test materialerr isa Parquet.LimitError
-    @test materialerr.resource == :materialized_bytes
-    @test materialerr.requested == maximum
-    @test materialerr.maximum == maximum - 1
-    @test Parquet._budgetused(tightbudget) == entry
 
     verbatim = TH.RawField(Int16(10), TH.I32, Int16(6), Int8(2),
         UInt8[TH.I32, 0x14, 0x02])
     preserved = minimalfootermetadata(unknown_fields=(verbatim,))
-    preservedbytes = boundedfooter(preserved)
+    preservedbytes = Parquet._writeencodefooter(preserved, Parquet.Limits())
     @test preservedbytes == TH.encode(preserved)
     @test preservedbytes[(end - 3):end] == UInt8[TH.I32, 0x14, 0x02, TH.STOP]
     synthesized = TH.RawField(Int16(10), TH.I32, Int16(5), Int8(2),
         UInt8[TH.I32, 0x14, 0x02])
     canonical = minimalfootermetadata(unknown_fields=(synthesized,))
-    canonicalbytes = boundedfooter(canonical)
+    canonicalbytes = Parquet._writeencodefooter(canonical, Parquet.Limits())
     @test canonicalbytes == TH.encode(canonical)
     @test canonicalbytes[(end - 2):end] == UInt8[0x45, 0x02, TH.STOP]
 
@@ -238,7 +180,7 @@ end
     @test only(decoded.schema).unknown_fields == [nestedraw]
     @test decoded.unknown_fields == [topraw]
     @test TH.encode(decoded) == original
-    @test boundedfooter(decoded) == original
+    @test Parquet._writeencodefooter(decoded, Parquet.Limits()) == original
 
     rowgroup = MD.RowGroup(columns=MD.ColumnChunk[], total_byte_size=Int64(0),
         num_rows=Int64(0))
@@ -247,55 +189,40 @@ end
         created_by=metadata.created_by)
     largedynamic = TH.encode(large)
     largeexact = Int64(length(largedynamic))
-    largebytes = boundedfooter(large; limits=Parquet.Limits(
-        max_footer_bytes=largeexact,
-        max_materialized_bytes=Parquet._WRITE_FOOTER_CONTROL_BYTES +
-            Parquet._materializedarraybytes(UInt8, largeexact)))
-    @test largebytes == largedynamic
+    @test Parquet._writeencodefooter(large,
+        Parquet.Limits(max_footer_bytes=largeexact)) == largedynamic
 
     for (actions, expected) in (
             (Any[UInt8[1], UInt8[1, 2]], AssertionError),
             (Any[UInt8[1, 2], UInt8[1]], AssertionError))
         phase = FooterPhaseValue(actions, 0)
-        phasebudget = Parquet._LiveByteBudget(Parquet.Limits())
-        Parquet._reserve!(phasebudget, entry)
-        @test_throws expected Parquet._writeencodefooter(phase,
-            Parquet.Limits(), phasebudget)
-        @test Parquet._budgetused(phasebudget) == entry
+        @test_throws expected Parquet._writeencodefooter(phase, Parquet.Limits())
     end
     sentinel = ErrorException("footer second-pass sentinel")
     throwing = FooterPhaseValue(Any[UInt8[1], sentinel], 0)
-    throwbudget = Parquet._LiveByteBudget(Parquet.Limits())
-    Parquet._reserve!(throwbudget, entry)
     thrown = try
-        Parquet._writeencodefooter(throwing, Parquet.Limits(), throwbudget)
+        Parquet._writeencodefooter(throwing, Parquet.Limits())
         nothing
     catch caught
         caught
     end
     @test thrown === sentinel
-    @test Parquet._budgetused(throwbudget) == entry
 
     countsentinel = ErrorException("footer count-pass sentinel")
     countthrowing = FooterPhaseValue(Any[countsentinel], 0)
-    countbudget = Parquet._LiveByteBudget(Parquet.Limits())
-    Parquet._reserve!(countbudget, entry)
     countthrown = try
-        Parquet._writeencodefooter(countthrowing, Parquet.Limits(), countbudget)
+        Parquet._writeencodefooter(countthrowing, Parquet.Limits())
         nothing
     catch caught
         caught
     end
     @test countthrown === countsentinel
-    @test Parquet._budgetused(countbudget) == entry
 
     wiremaximum = Int64(typemax(UInt32))
     boundary = FooterTestValue(FooterVirtualBytes(Int(wiremaximum)))
-    boundarylimits = Parquet.Limits(max_footer_bytes=wiremaximum - 1)
-    boundarybudget = Parquet._LiveByteBudget(boundarylimits)
-    Parquet._reserve!(boundarybudget, entry)
     boundaryerr = try
-        Parquet._writeencodefooter(boundary, boundarylimits, boundarybudget)
+        Parquet._writeencodefooter(boundary,
+            Parquet.Limits(max_footer_bytes=wiremaximum - 1))
         nothing
     catch caught
         caught
@@ -304,16 +231,13 @@ end
     @test boundaryerr.resource == :footer_bytes
     @test boundaryerr.requested == wiremaximum
     @test boundaryerr.maximum == wiremaximum - 1
-    @test Parquet._budgetused(boundarybudget) == entry
 
     wireexact = wiremaximum + 1
     virtual = FooterTestValue(FooterVirtualBytes(Int(wireexact)))
     for maximum in (wireexact - 1, typemax(Int64))
-        virtualbudget = Parquet._LiveByteBudget(Parquet.Limits())
-        Parquet._reserve!(virtualbudget, entry)
         virtualerr = try
             Parquet._writeencodefooter(virtual,
-                Parquet.Limits(max_footer_bytes=maximum), virtualbudget)
+                Parquet.Limits(max_footer_bytes=maximum))
             nothing
         catch caught
             caught
@@ -321,16 +245,12 @@ end
         @test virtualerr isa ArgumentError
         @test virtualerr isa ArgumentError &&
             virtualerr.msg == "Parquet footer exceeds UInt32 bytes"
-        @test Parquet._budgetused(virtualbudget) == entry
     end
 
     for limits in (Parquet.Limits(),
             Parquet.Limits(max_footer_bytes=typemax(Int64)))
-        overflowbudget = Parquet._LiveByteBudget(limits)
-        Parquet._reserve!(overflowbudget, entry)
         overflowerr = try
-            Parquet._writeencodefooter(FooterOverflowValue(), limits,
-                overflowbudget)
+            Parquet._writeencodefooter(FooterOverflowValue(), limits)
             nothing
         catch caught
             caught
@@ -338,7 +258,6 @@ end
         @test overflowerr isa ArgumentError
         @test overflowerr isa ArgumentError &&
             overflowerr.msg == "Parquet footer exceeds UInt32 bytes"
-        @test Parquet._budgetused(overflowbudget) == entry
     end
 end
 
@@ -379,64 +298,10 @@ end
     end
 end
 
-@testset "writer allocation accounting" begin
-    duplicatebudget = Parquet._LiveByteBudget(Parquet.Limits())
+@testset "writer column-name validation" begin
     @test_throws ArgumentError Parquet._validatewritecolumnnames(
-        Symbol[:duplicate, :duplicate], duplicatebudget)
-    @test Parquet._budgetused(duplicatebudget) == 0
-
-    invalidbudget = Parquet._LiveByteBudget(Parquet.Limits())
-    @test_throws ArgumentError Parquet._validatewritecolumnnames(
-        Any[1], invalidbudget)
-    @test Parquet._budgetused(invalidbudget) == 0
-
-    converted = Ref(false)
-    deferred = DeferredWriterName(converted, 10_000)
-    preflightbudget = Parquet._LiveByteBudget(
-        Parquet.Limits(max_materialized_bytes=512))
-    @test_throws Parquet.LimitError Parquet._validatewritecolumnnames(
-        AbstractString[deferred], preflightbudget)
-    @test !converted[]
-    @test Parquet._budgetused(preflightbudget) == 0
-
-    source = Parquet._writecolumn(:value, Int32[1])
-    field = Parquet._writefieldplan(source)
-    elements = MD.SchemaElement[
-        MD.SchemaElement(name="schema", num_children=Int32(1)),
-        field.schema...,
-    ]
-    schema = Parquet.Schema(elements)
-    leafbudget = Parquet._LiveByteBudget(Parquet.Limits())
-    leaves, leafcharge = Parquet._writeplanleaves(
-        Parquet.WriteFieldPlan[field], schema, 1, Parquet.Limits(),
-        leafbudget)
-    prefixcharge = Parquet._materializedproduct(3,
-        Parquet._materializedarraybytes(Int64, 2))
-    @test length(leaves) == 1
-    @test leafcharge == Parquet._writeleafplanbytes(schema.leaves) +
-        prefixcharge
-    @test Parquet._budgetused(leafbudget) == leafcharge
-    Parquet._release!(leafbudget, leafcharge)
-    @test Parquet._budgetused(leafbudget) == 0
-
-    zerocolumn = Parquet._writecolumn(:value, Int32[])
-    zerofield = Parquet._writefieldplan(zerocolumn)
-    zerobudget = Parquet._LiveByteBudget(Parquet.Limits())
-    zeroplan = Parquet._writeplan(Parquet.WriteFieldPlan[zerofield], 0,
-        Parquet.Limits(), zerobudget)
-    onecolumn = Parquet._writecolumn(:value, Int32[1])
-    onefield = Parquet._writefieldplan(onecolumn)
-    onebudget = Parquet._LiveByteBudget(Parquet.Limits())
-    oneplan = Parquet._writeplan(Parquet.WriteFieldPlan[onefield], 1,
-        Parquet.Limits(), onebudget)
-    rowgroupcharge = Parquet._materializedarraybytes(
-        Parquet.WriteRowGroupPlan, 1) - Parquet._materializedarraybytes(
-        Parquet.WriteRowGroupPlan, 0)
-    @test isempty(zeroplan.rowgroups)
-    @test length(oneplan.rowgroups) == 1
-    @test Parquet._budgetused(onebudget) - Parquet._budgetused(zerobudget) ==
-        Parquet._writeleafplanbytes(oneplan.schema.leaves) + rowgroupcharge +
-        prefixcharge
+        Symbol[:duplicate, :duplicate])
+    @test_throws ArgumentError Parquet._validatewritecolumnnames(Any[1])
 end
 
 @testset "file writer schema ownership" begin

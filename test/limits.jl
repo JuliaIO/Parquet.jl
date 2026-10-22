@@ -109,11 +109,6 @@ end
 @testset "operation materialization budgets" begin
     one = (a=Int32[1, 2, 3, 4],)
     two = (a=Int32[1, 2, 3, 4], b=Int32[5, 6, 7, 8])
-    for maximum in (0, 1)
-        limits = Parquet.Limits(max_materialized_bytes=maximum)
-        @test_throws Parquet.LimitError Parquet._encodefile(one; limits=limits)
-    end
-
     onebytes = Parquet._encodefile(one)
     twobytes = Parquet._encodefile(two)
     for maximum in (0, 1)
@@ -130,18 +125,6 @@ end
         limits = Parquet.Limits(max_materialized_bytes=maximum)
         @test_throws Parquet.LimitError Parquet._nestedplan(schema; limits=limits)
     end
-
-    writeone = minimummaterializedlimit() do limits
-        Parquet._encodefile(one; limits=limits)
-        return
-    end
-    writetwo = minimummaterializedlimit() do limits
-        Parquet._encodefile(two; limits=limits)
-        return
-    end
-    @test writetwo > writeone
-    @test_throws Parquet.LimitError Parquet._encodefile(two;
-        limits=Parquet.Limits(max_materialized_bytes=writeone))
 
     readone = minimummaterializedlimit() do limits
         table = Parquet.Table(onebytes; limits=limits)

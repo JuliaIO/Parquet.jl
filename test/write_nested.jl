@@ -180,11 +180,10 @@ function Base.getindex(values::WNChangingStrings, ::Int)
 end
 
 # Scalar columns are read once, so a source that changes between reads still
-# writes one consistent column, checked against the limits it was read under.
+# writes one consistent column.
 function wnchangingsource(large::String)
     source = WNChangingStrings(Ref(0), "x", large)
-    limits = Parquet.Limits(max_materialized_bytes=50_000)
-    fields, rows = Parquet._writefields((value=source,), limits)
+    fields, rows = Parquet._writefields((value=source,), Parquet.Limits())
     return source.calls[], rows, only(only(fields).leaves).values
 end
 
@@ -968,25 +967,14 @@ end
 end
 
 @testset "recursive writer resource preflight and arbitrary axes" begin
-    for limits in (
-            Parquet.Limits(max_container_elements=1),
-            Parquet.Limits(max_materialized_bytes=1024),
-        )
-        source = WNTrackedRows{Base.HasLength}(Ref(0), 100_000)
-        budget = Parquet._LiveByteBudget(limits)
-        @test_throws Parquet.LimitError Parquet._writefields(source,
-            limits, budget)
-        @test source.consumed[] == 0
-        @test Parquet._budgetused(budget) == 0
-    end
+    rowlimits = Parquet.Limits(max_container_elements=1)
+    source = WNTrackedRows{Base.HasLength}(Ref(0), 100_000)
+    @test_throws Parquet.LimitError Parquet._writefields(source, rowlimits)
+    @test source.consumed[] == 0
 
     unknown = WNTrackedRows{Base.SizeUnknown}(Ref(0), 100_000)
-    unknownlimits = Parquet.Limits(max_container_elements=1)
-    unknownbudget = Parquet._LiveByteBudget(unknownlimits)
-    @test_throws Parquet.LimitError Parquet._writefields(unknown,
-        unknownlimits, unknownbudget)
+    @test_throws Parquet.LimitError Parquet._writefields(unknown, rowlimits)
     @test unknown.consumed[] == 2
-    @test Parquet._budgetused(unknownbudget) == 0
 
     schemaless = WNSchemaLessRows([
         (value=Int32(1), items=Int32[1,2]),
@@ -1001,28 +989,20 @@ end
         close(table)
     end
     unnamed = WNSchemaLessRows(NTuple{3,Int32}[])
-    unnamedlimits = Parquet.Limits(max_materialized_bytes=1,
-        max_container_elements=1)
-    unnamedbudget = Parquet._LiveByteBudget(unnamedlimits)
-    @test_throws ArgumentError Parquet._writefields(unnamed,
-        unnamedlimits, unnamedbudget)
-    @test Parquet._budgetused(unnamedbudget) == 0
+    @test_throws ArgumentError Parquet._writefields(unnamed, rowlimits)
 
     wide = WNSchemaLessRows(
         NamedTuple{(:left,:right),Tuple{Int32,Int32}}[])
-    widebudget = Parquet._LiveByteBudget(unnamedlimits)
-    @test_throws Parquet.LimitError Parquet._writefields(wide,
-        unnamedlimits, widebudget)
-    @test Parquet._budgetused(widebudget) == 0
+    @test_throws Parquet.LimitError Parquet._writefields(wide, rowlimits)
 
+    # Row values are checked as they are collected, so the first oversized row
+    # stops the read.
+    valuelimits = Parquet.Limits(max_string_bytes=50_000,
+        max_decimal_bytes=50_000)
     for size in (Base.HasLength, Base.SizeUnknown)
         fresh = WNFreshStringRows{size}(Ref(0), 20, 100_000)
-        freshlimits = Parquet.Limits(max_materialized_bytes=100_000)
-        freshbudget = Parquet._LiveByteBudget(freshlimits)
-        @test_throws Parquet.LimitError Parquet._writefields(fresh,
-            freshlimits, freshbudget)
+        @test_throws Parquet.LimitError Parquet._writefields(fresh, valuelimits)
         @test fresh.consumed[] == 1
-        @test Parquet._budgetused(freshbudget) == 0
     end
 
     for (type, maker) in (
@@ -1032,12 +1012,8 @@ end
         )
         fresh = WNFreshPayloadRows{type,typeof(maker)}(
             Ref(0), 20, 100_000, maker)
-        freshlimits = Parquet.Limits(max_materialized_bytes=200_000)
-        freshbudget = Parquet._LiveByteBudget(freshlimits)
-        @test_throws Parquet.LimitError Parquet._writefields(fresh,
-            freshlimits, freshbudget)
-        @test fresh.consumed[] == 2
-        @test Parquet._budgetused(freshbudget) == 0
+        @test_throws Parquet.LimitError Parquet._writefields(fresh, valuelimits)
+        @test fresh.consumed[] == 1
     end
 
     UnionType = Union{Int32,Float32}

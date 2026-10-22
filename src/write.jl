@@ -282,147 +282,31 @@ function _writecolumn(name, values::FixedByteArrayVector)
     return _writecolumn(name, values, Limits())
 end
 
-function _writervaluepayload(value)
-    value isa AbstractString && return Int64(ncodeunits(value))
-    value isa AbstractVector{UInt8} && return Int64(length(value))
-    value isa JSONValue && return Int64(length(value.bytes))
-    value isa BSONValue && return Int64(length(value.bytes))
-    value isa UUIDs.UUID && return Int64(16)
-    value isa Interval && return Int64(12)
-    return Int64(0)
+function _writecolumnname(name::Symbol)
+    return String(name)
 end
 
-function _reservewritenormalization!(budget::_LiveByteBudget,
-    values::AbstractVector, limits::Limits)
-    count = length(values)
-    _reserveobjects!(budget, 4)
-    _reservearray!(budget, UInt64, count)
-    value_type = Base.nonmissingtype(eltype(values))
-    if value_type <: AbstractVector && !(value_type <: AbstractVector{UInt8})
-        entries = _listdateentrycount(values, limits)
-        _reservearray!(budget, UInt64, entries)
-        _reservearray!(budget, UInt64, entries)
-        _reservearray!(budget, Int32, entries)
-        return
-    end
-    objects = Int64(0)
-    payload = Int64(0)
-    for value in values
-        ismissing(value) && continue
-        bytes = _writervaluepayload(value)
-        iszero(bytes) && continue
-        objects = _materializedsum(objects, _MATERIALIZED_OBJECT_BYTES)
-        payload = _materializedsum(payload, bytes)
-    end
-    _reserve!(budget, _materializedsum(objects, payload))
-    if values isa LogicalColumn && values.spec isa _DecimalLogicalColumnSpec &&
-            values.spec.precision > 18
-        width = _decimalwritewidth(values.spec.precision, limits)
-        _reserve!(budget, _materializedproduct(count,
-            _materializedsum(_MATERIALIZED_ARRAY_HEADER_BYTES, width)))
-    end
-    return
+function _writecolumnname(name::AbstractString)
+    return String(name)
 end
 
-function _writecolumnnamebytes(name::Symbol)
-    return Int64(sizeof(name))
-end
-
-function _writecolumnnamebytes(name::AbstractString)
-    return Int64(ncodeunits(name))
-end
-
-function _writecolumnnamebytes(name)
+function _writecolumnname(name)
     throw(ArgumentError(
         "Parquet column names must be Symbols or strings, got $(typeof(name))"))
 end
 
-function _validatewritecolumnnames(names, budget::_LiveByteBudget)
-    temporary = Int64(0)
-    retained = Int64(0)
-    try
-        arraycharge = _reservearray!(budget, String, length(names))
-        temporary = _materializedsum(temporary, arraycharge)
-        temporary = _materializedsum(temporary, _reserveobjects!(budget))
-        normalized = String[]
-        sizehint!(normalized, length(names))
-        seen = Set{String}()
-        for raw in names
-            bytes = _writecolumnnamebytes(raw)
-            payloadcharge = _materializedproduct(bytes, 2)
-            objectcharge = _materializedproduct(2, _MATERIALIZED_OBJECT_BYTES)
-            itemcharge = _materializedsum(objectcharge, payloadcharge)
-            _reserve!(budget, itemcharge)
-            temporary = _materializedsum(temporary, itemcharge)
-            name = String(raw)
-            name in seen && throw(ArgumentError(
-                "Parquet column names must be unique"))
-            push!(normalized, name)
-            push!(seen, name)
-            retained = _materializedsum(retained,
-                _materializedsum(_MATERIALIZED_OBJECT_BYTES, bytes))
-        end
-        _release!(budget, temporary - arraycharge - retained)
-        return normalized, arraycharge
-    catch
-        iszero(temporary) || _release!(budget, temporary)
-        rethrow()
+function _validatewritecolumnnames(names)
+    normalized = String[]
+    sizehint!(normalized, length(names))
+    seen = Set{String}()
+    for raw in names
+        name = _writecolumnname(raw)
+        name in seen && throw(ArgumentError(
+            "Parquet column names must be unique"))
+        push!(normalized, name)
+        push!(seen, name)
     end
-end
-
-function _writecolumns(table, limits::Limits, budget::_LiveByteBudget)
-    columns = Tables.columns(table)
-    raw_names = Tables.columnnames(columns)
-    rawcharge = _reservearray!(budget, Any, length(raw_names))
-    try
-        names = collect(raw_names)
-        isempty(names) && throw(ArgumentError(
-            "a Parquet table must have at least one column"))
-        normalized, namearraycharge = _validatewritecolumnnames(names, budget)
-        try
-            _reservearray!(budget, WriteColumn, length(names))
-            output = WriteColumn[]
-            sizehint!(output, length(names))
-            rows = nothing
-            for (raw, name) in zip(names, normalized)
-                values = Tables.getcolumn(columns, raw)
-                values isa AbstractVector || throw(ArgumentError(
-                    "Parquet columns must be vectors"))
-                if rows === nothing
-                    rows = length(values)
-                    _checklimit(:container_elements, rows,
-                        limits.max_container_elements)
-                end
-                length(values) == rows || throw(ArgumentError(
-                    "Parquet columns have different lengths"))
-                _reservewritenormalization!(budget, values, limits)
-                push!(output, _writecolumn(name, values, limits))
-            end
-            return output, something(rows, 0)
-        finally
-            _release!(budget, namearraycharge)
-        end
-    finally
-        _release!(budget, rawcharge)
-    end
-end
-
-function _writecolumns(table, limits::Limits)
-    return _writecolumns(table, limits, _LiveByteBudget(limits))
-end
-
-function _preflightwriterowcolumncount(count::Int, limits::Limits,
-        budget::_LiveByteBudget)
-    _checklimit(:container_elements, count,
-        limits.max_container_elements)
-    minimum = _materializedsum(
-        _materializedarraybytes(String, count),
-        _materializedarraybytes(Pair{String,AbstractVector}, count))
-    minimum = _materializedsum(minimum,
-        _materializedarraybytes(AbstractVector, count))
-    _reserve!(budget, minimum)
-    _release!(budget, minimum)
-    return
+    return normalized
 end
 
 Base.@noinline function _writerownamedtupleschema(T::Type)
@@ -430,23 +314,22 @@ Base.@noinline function _writerownamedtupleschema(T::Type)
     return fieldnames(T), fieldtypes(T)
 end
 
-Base.@noinline function _preflightwriteroweltype(rows, limits::Limits,
-        budget::_LiveByteBudget)
+Base.@noinline function _preflightwriteroweltype(rows, limits::Limits)
     Base.@nospecialize rows
     Base.IteratorEltype(typeof(rows)) isa Base.HasEltype || return nothing
     T = eltype(rows)
     isconcretetype(T) || return nothing
     if T <: NamedTuple
-        _preflightwriterowcolumncount(fieldcount(T), limits, budget)
+        _checklimit(:container_elements, fieldcount(T),
+            limits.max_container_elements)
         return T
     end
     return nothing
 end
 
-Base.@noinline function _writerowschema(rows, limits::Limits,
-        budget::_LiveByteBudget)
+Base.@noinline function _writerowschema(rows, limits::Limits)
     Base.@nospecialize rows
-    declared = _preflightwriteroweltype(rows, limits, budget)
+    declared = _preflightwriteroweltype(rows, limits)
     schema = Tables.schema(rows)
     if schema === nothing
         declared === nothing && throw(ArgumentError(
@@ -459,7 +342,8 @@ Base.@noinline function _writerowschema(rows, limits::Limits,
         "row-oriented Tables sources must declare column names"))
     types === nothing && throw(ArgumentError(
         "row-oriented Tables sources must declare column types"))
-    _preflightwriterowcolumncount(length(names), limits, budget)
+    _checklimit(:container_elements, length(names),
+        limits.max_container_elements)
     isempty(names) && throw(ArgumentError(
         "a Parquet table must have at least one column"))
     length(names) == length(types) || throw(ArgumentError(
@@ -475,31 +359,14 @@ function _writerowcount(rows, limits::Limits)
     return count
 end
 
-function _writerowarraycharge(types, count::Int)
-    bytes = Int64(0)
-    for T in types
+function _preflightwriterowtypes(names::Vector{String}, types,
+        limits::Limits)
+    for (name, T) in zip(names, types)
         T isa Type || throw(ArgumentError(
             "row-oriented Tables schemas must contain Julia types"))
-        bytes = _materializedsum(bytes,
-            _materializedarraybytes(T, count))
+        _nestedwriteshape(name, T, nothing, limits)
     end
-    return bytes
-end
-
-function _preflightwriterowtypes(names::Vector{String}, types,
-        limits::Limits, budget::_LiveByteBudget)
-    start = _budgetused(budget)
-    try
-        for (name, T) in zip(names, types)
-            T isa Type || throw(ArgumentError(
-                "row-oriented Tables schemas must contain Julia types"))
-            _nestedwriteshape(name, T, nothing, limits)
-        end
-        return
-    finally
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-    end
+    return
 end
 
 function _writerowarrays(types, count::Int)
@@ -511,257 +378,137 @@ function _writerowarrays(types, count::Int)
     return columns
 end
 
-function _writerowretain!(budget::_LiveByteBudget, value, limits::Limits,
-        depth::Int=1)
+# Checked as rows are collected, so a value over a limit fails before later rows are read.
+function _checkwriterowvalue(value, limits::Limits, depth::Int=1)
     _checklimit(:metadata_depth, depth, limits.max_metadata_depth)
-    (ismissing(value) || isbits(value)) && return Int64(0)
+    (ismissing(value) || isbits(value)) && return
     if value isa Union{JSONValue,BSONValue}
-        bytes = Int64(length(value.bytes))
-        _checklimit(:string_bytes, bytes, limits.max_string_bytes)
-        charge = _materializedsum(
-            _materializedproduct(3, _MATERIALIZED_OBJECT_BYTES), bytes)
-        _reserve!(budget, charge)
-        return charge
+        _checklimit(:string_bytes, length(value.bytes), limits.max_string_bytes)
     elseif value isa Decimal
-        bytes = Int64(_twoscomplementwidth(value.unscaled))
-        _checklimit(:decimal_bytes, bytes, limits.max_decimal_bytes)
-        charge = _materializedsum(
-            _materializedproduct(2, _MATERIALIZED_OBJECT_BYTES), bytes)
-        _reserve!(budget, charge)
-        return charge
+        _checklimit(:decimal_bytes, _twoscomplementwidth(value.unscaled),
+            limits.max_decimal_bytes)
     elseif value isa AbstractString
-        bytes = Int64(ncodeunits(value))
-        _checklimit(:string_bytes, bytes, limits.max_string_bytes)
-        charge = _materializedsum(_MATERIALIZED_OBJECT_BYTES, bytes)
-        _reserve!(budget, charge)
-        return charge
+        _checklimit(:string_bytes, ncodeunits(value), limits.max_string_bytes)
     elseif value isa AbstractVector
-        count = length(value)
-        _checklimit(:container_elements, count,
+        _checklimit(:container_elements, length(value),
             limits.max_container_elements)
-        charge = _materializedarraybytes(eltype(value), count)
-        _reserve!(budget, charge)
         for item in value
-            charge = _materializedsum(charge,
-                _writerowretain!(budget, item, limits, depth + 1))
+            _checkwriterowvalue(item, limits, depth + 1)
         end
-        return charge
     elseif value isa NamedTuple
-        charge = _reserveobjects!(budget)
         for item in values(value)
-            charge = _materializedsum(charge,
-                _writerowretain!(budget, item, limits, depth + 1))
+            _checkwriterowvalue(item, limits, depth + 1)
         end
-        return charge
     elseif value isa Pair
-        charge = _reserveobjects!(budget)
-        charge = _materializedsum(charge,
-            _writerowretain!(budget, first(value), limits, depth + 1))
-        return _materializedsum(charge,
-            _writerowretain!(budget, last(value), limits, depth + 1))
+        _checkwriterowvalue(first(value), limits, depth + 1)
+        _checkwriterowvalue(last(value), limits, depth + 1)
     elseif value isa AbstractDict
-        count = length(value)
-        _checklimit(:container_elements, count,
+        _checklimit(:container_elements, length(value),
             limits.max_container_elements)
-        charge = _materializedsum(_MATERIALIZED_OBJECT_BYTES,
-            _materializedproduct(count, 4 * _MATERIALIZED_OBJECT_BYTES))
-        _reserve!(budget, charge)
         for (key, item) in value
-            charge = _materializedsum(charge,
-                _writerowretain!(budget, key, limits, depth + 1))
-            charge = _materializedsum(charge,
-                _writerowretain!(budget, item, limits, depth + 1))
+            _checkwriterowvalue(key, limits, depth + 1)
+            _checkwriterowvalue(item, limits, depth + 1)
         end
-        return charge
     end
-    _reserveobjects!(budget)
-    return _MATERIALIZED_OBJECT_BYTES
+    return
 end
 
 function _fillwriterowarrays!(columns::Vector{AbstractVector}, rows,
-        count::Int, limits::Limits, budget::_LiveByteBudget)
+        count::Int, limits::Limits)
     position = 0
-    retained = Int64(0)
     for row in rows
         position += 1
         position <= count || throw(ArgumentError(
             "row-oriented Tables source yielded more rows than declared"))
         for index in eachindex(columns)
             value = Tables.getcolumn(row, index)
-            retained = _materializedsum(retained,
-                _writerowretain!(budget, value, limits))
+            _checkwriterowvalue(value, limits)
             columns[index][position] = value
         end
     end
     position == count || throw(ArgumentError(
         "row-oriented Tables source yielded $position rows but declared $count"))
-    return retained
+    return columns
 end
 
-function _knownwriterowcolumns(rows, types, count::Int, limits::Limits,
-        budget::_LiveByteBudget)
-    start = _budgetused(budget)
-    try
-        charge = _materializedsum(
-            _materializedarraybytes(AbstractVector, length(types)),
-            _writerowarraycharge(types, count))
-        _reserve!(budget, charge)
-        columns = _writerowarrays(types, count)
-        retained = _fillwriterowarrays!(columns, rows, count, limits, budget)
-        return columns, count, _materializedsum(charge, retained)
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
-    end
+function _knownwriterowcolumns(rows, types, count::Int, limits::Limits)
+    columns = _writerowarrays(types, count)
+    _fillwriterowarrays!(columns, rows, count, limits)
+    return columns, count
 end
 
-function _writerowgrowthcharge(types)
-    bytes = Int64(0)
-    for T in types
-        item = _materializedarraybytes(T, 1; header=false)
-        bytes = _materializedsum(bytes,
-            _materializedproduct(4, max(item, Int64(1))))
-    end
-    return bytes
-end
-
-function _pushwriterow!(columns::Vector{AbstractVector}, row,
-        limits::Limits, budget::_LiveByteBudget)
-    retained = Int64(0)
+function _pushwriterow!(columns::Vector{AbstractVector}, row, limits::Limits)
     for index in eachindex(columns)
         value = Tables.getcolumn(row, index)
-        retained = _materializedsum(retained,
-            _writerowretain!(budget, value, limits))
+        _checkwriterowvalue(value, limits)
         push!(columns[index], value)
     end
-    return retained
+    return
 end
 
-function _copywriterowarrays(columns::Vector{AbstractVector}, types,
-        count::Int, budget::_LiveByteBudget)
-    outputcharge = _materializedsum(
-        _materializedarraybytes(AbstractVector, length(types)),
-        _writerowarraycharge(types, count))
-    _reserve!(budget, outputcharge)
-    output = AbstractVector[]
-    sizehint!(output, length(types))
-    for column in columns
-        push!(output, copy(column))
-    end
-    return output, outputcharge
-end
-
-function _unknownwriterowcolumns(rows, types, limits::Limits,
-        budget::_LiveByteBudget)
-    start = _budgetused(budget)
-    scratchcharge = Int64(0)
-    retainedcharge = Int64(0)
-    try
-        scratchcharge = _materializedsum(scratchcharge,
-            _reservearray!(budget, AbstractVector, length(types)))
-        headers = _writerowarraycharge(types, 0)
-        _reserve!(budget, headers)
-        scratchcharge = _materializedsum(scratchcharge, headers)
-        columns = _writerowarrays(types, 0)
-        growth = _writerowgrowthcharge(types)
-        count = 0
-        for row in rows
-            requested = try
-                Base.checked_add(count, 1)
-            catch err
-                err isa OverflowError || rethrow()
-                throw(LimitError(:container_elements, typemax(Int64),
-                    limits.max_container_elements))
-            end
-            _checklimit(:container_elements, requested,
-                limits.max_container_elements)
-            _reserve!(budget, growth)
-            scratchcharge = _materializedsum(scratchcharge, growth)
-            retainedcharge = _materializedsum(retainedcharge,
-                _pushwriterow!(columns, row, limits, budget))
-            count = requested
+function _unknownwriterowcolumns(rows, types, limits::Limits)
+    columns = _writerowarrays(types, 0)
+    count = 0
+    for row in rows
+        requested = try
+            Base.checked_add(count, 1)
+        catch err
+            err isa OverflowError || rethrow()
+            throw(LimitError(:container_elements, typemax(Int64),
+                limits.max_container_elements))
         end
-        output, outputcharge = _copywriterowarrays(columns, types, count,
-            budget)
-        _release!(budget, scratchcharge)
-        return output, count,
-            _materializedsum(outputcharge, retainedcharge)
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
+        _checklimit(:container_elements, requested,
+            limits.max_container_elements)
+        _pushwriterow!(columns, row, limits)
+        count = requested
     end
+    return columns, count
 end
 
-function _writeinputrowcolumns(table, limits::Limits,
-        budget::_LiveByteBudget)
+function _writeinputrowcolumns(table, limits::Limits)
     Base.@nospecialize table
     rowsource = Tables.rows(table)
-    names, types = _writerowschema(rowsource, limits, budget)
-    start = _budgetused(budget)
-    try
-        normalized, namearraycharge = _validatewritecolumnnames(names, budget)
-        _preflightwriterowtypes(normalized, types, limits, budget)
-        count = _writerowcount(rowsource, limits)
-        columns, rowcount, rowcharge = count === nothing ?
-            _unknownwriterowcolumns(rowsource, types, limits, budget) :
-            _knownwriterowcolumns(rowsource, types, count, limits, budget)
-        paircharge = _reservearray!(budget, Pair{String,AbstractVector},
-            length(columns))
-        output = Pair{String,AbstractVector}[]
-        sizehint!(output, length(columns))
-        for index in eachindex(columns, normalized)
-            push!(output, Pair{String,AbstractVector}(
-                normalized[index], columns[index]))
-        end
-        _release!(budget, namearraycharge)
-        return output, rowcount, _materializedsum(rowcharge, paircharge)
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
+    names, types = _writerowschema(rowsource, limits)
+    normalized = _validatewritecolumnnames(names)
+    _preflightwriterowtypes(normalized, types, limits)
+    count = _writerowcount(rowsource, limits)
+    columns, rowcount = count === nothing ?
+        _unknownwriterowcolumns(rowsource, types, limits) :
+        _knownwriterowcolumns(rowsource, types, count, limits)
+    output = Pair{String,AbstractVector}[]
+    sizehint!(output, length(columns))
+    for index in eachindex(columns, normalized)
+        push!(output, Pair{String,AbstractVector}(
+            normalized[index], columns[index]))
     end
+    return output, rowcount
 end
 
-function _writeinputcolumns(table, limits::Limits, budget::_LiveByteBudget)
+function _writeinputcolumns(table, limits::Limits)
     Base.@nospecialize table
-    Tables.columnaccess(table) || return _writeinputrowcolumns(table,
-        limits, budget)
+    Tables.columnaccess(table) || return _writeinputrowcolumns(table, limits)
     columns = Tables.columns(table)
-    raw_names = Tables.columnnames(columns)
-    rawcharge = _reservearray!(budget, Any, length(raw_names))
-    try
-        names = collect(raw_names)
-        isempty(names) && throw(ArgumentError(
-            "a Parquet table must have at least one column"))
-        normalized, namearraycharge = _validatewritecolumnnames(names, budget)
-        try
-            paircharge = _reservearray!(budget,
-                Pair{String,AbstractVector}, length(names))
-            output = Pair{String,AbstractVector}[]
-            sizehint!(output, length(names))
-            rows = nothing
-            for (raw, name) in zip(names, normalized)
-                values = Tables.getcolumn(columns, raw)
-                values isa AbstractVector || throw(ArgumentError(
-                    "Parquet columns must be vectors"))
-                if rows === nothing
-                    rows = length(values)
-                    _checklimit(:container_elements, rows,
-                        limits.max_container_elements)
-                end
-                length(values) == rows || throw(ArgumentError(
-                    "Parquet columns have different lengths"))
-                push!(output, Pair{String,AbstractVector}(name, values))
-            end
-            return output, something(rows, 0), paircharge
-        finally
-            _release!(budget, namearraycharge)
+    names = collect(Tables.columnnames(columns))
+    isempty(names) && throw(ArgumentError(
+        "a Parquet table must have at least one column"))
+    normalized = _validatewritecolumnnames(names)
+    output = Pair{String,AbstractVector}[]
+    sizehint!(output, length(names))
+    rows = nothing
+    for (raw, name) in zip(names, normalized)
+        values = Tables.getcolumn(columns, raw)
+        values isa AbstractVector || throw(ArgumentError(
+            "Parquet columns must be vectors"))
+        if rows === nothing
+            rows = length(values)
+            _checklimit(:container_elements, rows,
+                limits.max_container_elements)
         end
-    finally
-        _release!(budget, rawcharge)
+        length(values) == rows || throw(ArgumentError(
+            "Parquet columns have different lengths"))
+        push!(output, Pair{String,AbstractVector}(name, values))
     end
+    return output, something(rows, 0)
 end
 
 # Resolves the encoding policy against the schema leaves before any value is read.
@@ -805,64 +552,48 @@ end
 # The flat writer reads a column several times (limits, statistics, pages), so a
 # source that is not a plain Vector is read once into one; every pass then sees the
 # same values.
-function _flatsnapshot(values::Vector, ::_LiveByteBudget)
+function _flatsnapshot(values::Vector)
     return values
 end
 
-function _flatsnapshot(values::FixedByteArrayVector, ::_LiveByteBudget)
+function _flatsnapshot(values::FixedByteArrayVector)
     return values
 end
 
-function _flatsnapshot(values::AbstractVector, budget::_LiveByteBudget)
-    _reservearray!(budget, eltype(values), length(values))
+function _flatsnapshot(values::AbstractVector)
     return collect(values)
 end
 
 # Columns of scalars skip the nested shredder: every value is one PLAIN leaf entry.
 function _flatwritefields(columns::Vector{Pair{String,AbstractVector}},
-        limits::Limits, budget::_LiveByteBudget)
-    _reservearray!(budget, WriteFieldPlan, length(columns))
+        limits::Limits)
     fields = WriteFieldPlan[]
     sizehint!(fields, length(columns))
     for (name, source) in columns
         occursin('\0', name) && throw(ArgumentError(
             "Parquet top-level field names cannot contain NUL"))
-        values = _flatsnapshot(source, budget)
-        _reservewritenormalization!(budget, values, limits)
-        push!(fields, _writefieldplan(_writecolumn(name, values, limits), budget))
+        values = _flatsnapshot(source)
+        push!(fields, _writefieldplan(_writecolumn(name, values, limits)))
     end
     return fields
 end
 
-function _writefieldsencoded(table, limits::Limits,
-        budget::_LiveByteBudget, encoding, dictionary::Bool)
+function _writefieldsencoded(table, limits::Limits, encoding, dictionary::Bool)
     Base.@nospecialize table
-    start = _budgetused(budget)
-    try
-        columns, rows, inputcharge = _writeinputcolumns(table, limits, budget)
-        fields = if all(column -> _flatwritable(last(column)), columns)
-            _flatwritefields(columns, limits, budget)
-        else
-            preflight = semantic -> _preflightwriteencoding(semantic, encoding,
-                dictionary)
-            _nestedwritefields(columns, rows, limits; preflight=preflight)
-        end
-        _release!(budget, inputcharge)
-        return fields, rows
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
+    columns, rows = _writeinputcolumns(table, limits)
+    fields = if all(column -> _flatwritable(last(column)), columns)
+        _flatwritefields(columns, limits)
+    else
+        preflight = semantic -> _preflightwriteencoding(semantic, encoding,
+            dictionary)
+        _nestedwritefields(columns, rows, limits; preflight=preflight)
     end
-end
-
-function _writefields(table, limits::Limits, budget::_LiveByteBudget)
-    Base.@nospecialize table
-    return _writefieldsencoded(table, limits, budget, nothing, false)
+    return fields, rows
 end
 
 function _writefields(table, limits::Limits)
-    return _writefields(table, limits, _LiveByteBudget(limits))
+    Base.@nospecialize table
+    return _writefieldsencoded(table, limits, nothing, false)
 end
 
 function _presentvalues(column::WriteColumn, ::Type{T}) where {T}
@@ -1322,58 +1053,23 @@ function _writerrawpayloadbytes(column::WriteColumn)
     physical = column.physical
     physical == Metadata.Type.BOOLEAN && return Int64(cld(present, 8))
     physical in (Metadata.Type.INT32, Metadata.Type.FLOAT) &&
-        return _materializedproduct(present, 4)
+        return Base.checked_mul(Int64(present), Int64(4))
     physical in (Metadata.Type.INT64, Metadata.Type.DOUBLE) &&
-        return _materializedproduct(present, 8)
+        return Base.checked_mul(Int64(present), Int64(8))
     if physical == Metadata.Type.FIXED_LEN_BYTE_ARRAY
         width = column.type_length
         width === nothing && throw(ArgumentError(
             "fixed byte-array column has no width"))
-        return _materializedproduct(present, width)
+        return Base.checked_mul(Int64(present), Int64(width))
     end
     physical == Metadata.Type.BYTE_ARRAY || return Int64(0)
     bytes = Int64(0)
     for value in column.values
         ismissing(value) && continue
         payload = value isa AbstractString ? ncodeunits(value) : length(value)
-        bytes = _materializedsum(bytes, _materializedsum(4, payload))
+        bytes = Base.checked_add(bytes, Base.checked_add(Int64(4), Int64(payload)))
     end
     return bytes
-end
-
-function _writerpageworkingbytes(column::WriteColumn, dictionary::Bool)
-    entries = _columnentrycount(column)
-    raw = _writerrawpayloadbytes(column)
-    encoded = _materializedsum(raw, _materializedsum(
-        _materializedproduct(entries, 24), 2048))
-    factor = dictionary && column.physical != Metadata.Type.BOOLEAN ? 16 : 8
-    bytes = _materializedproduct(encoded, factor)
-    bytes = _materializedsum(bytes,
-        _materializedproduct(entries, _MATERIALIZED_OBJECT_BYTES))
-    return _materializedsum(bytes,
-        _materializedproduct(8, _MATERIALIZED_OBJECT_BYTES))
-end
-
-function _columnpageslivebytes(pages::ColumnPages)
-    bytes = _materializedarraybytes(UInt8, length(pages.bytes))
-    bytes = _materializedsum(bytes,
-        _materializedarraybytes(Metadata.Encoding.T, length(pages.encodings)))
-    bytes = _materializedsum(bytes,
-        _materializedarraybytes(Metadata.PageEncodingStats,
-            length(pages.encoding_stats)))
-    bytes = _materializedsum(bytes,
-        _materializedarraybytes(Metadata.PageLocation,
-            length(pages.page_locations)))
-    return _materializedsum(bytes,
-        _materializedproduct(3, _MATERIALIZED_OBJECT_BYTES))
-end
-
-function _columnpagestransferredbytes(pages::ColumnPages)
-    bytes = _materializedarraybytes(Metadata.Encoding.T,
-        length(pages.encodings))
-    return _materializedsum(bytes,
-        _materializedarraybytes(Metadata.PageEncodingStats,
-            length(pages.encoding_stats)))
 end
 
 function _columnnullcount(column::WriteColumn)
@@ -1562,13 +1258,11 @@ function _writeschemaelementcount(fields::Vector{WriteFieldPlan}, limits::Limits
     return total
 end
 
-function _flattenwriteschema(fields::Vector{WriteFieldPlan}, limits::Limits,
-    budget::_LiveByteBudget)
+function _flattenwriteschema(fields::Vector{WriteFieldPlan}, limits::Limits)
     isempty(fields) && throw(ArgumentError("a Parquet table must have at least one column"))
     length(fields) <= typemax(Int32) ||
         throw(ArgumentError("Parquet schema has more than Int32 top-level fields"))
     count = _writeschemaelementcount(fields, limits)
-    _reservearray!(budget, Metadata.SchemaElement, count)
     elements = Metadata.SchemaElement[
         Metadata.SchemaElement(name="schema", num_children=Int32(length(fields))),
     ]
@@ -1613,132 +1307,49 @@ function _validatewriteleaf(node::SchemaNode, column::WriteColumn, rows::Int)
     return
 end
 
-function _writeleafplanbytes(nodes)
-    bytes = _materializedarraybytes(WriteLeafPlan, length(nodes))
-    for node in nodes
-        bytes = _materializedsum(bytes,
-            _materializedarraybytes(String, length(node.path)))
-        bytes = _materializedsum(bytes, _MATERIALIZED_OBJECT_BYTES)
-    end
-    return bytes
-end
-
 function _writeplanleaves(fields::Vector{WriteFieldPlan}, schema::Schema, rows::Int,
-    limits::Limits, budget::_LiveByteBudget)
-    start = _budgetused(budget)
+    limits::Limits)
     length(fields) == length(schema.root.children) || throw(ArgumentError(
         "writer top-level fields do not match the parsed schema"))
-    columncharge = _reservearray!(budget, WriteColumn, length(schema.leaves))
-    try
-        columns = WriteColumn[]
-        sizehint!(columns, length(schema.leaves))
-        for (field, node) in zip(fields, schema.root.children)
-            length(field.leaves) == _writeschemaleafcount(node) ||
-                throw(ArgumentError(
-                    "writer field $(repr(node.element.name)) does not own its schema leaves"))
-            append!(columns, field.leaves)
-        end
-        length(columns) == length(schema.leaves) || throw(ArgumentError(
-            "writer physical leaves do not match the parsed schema"))
-        leafcharge = _writeleafplanbytes(schema.leaves)
-        _reserve!(budget, leafcharge)
-        leaves = WriteLeafPlan[]
-        sizehint!(leaves, length(columns))
-        for (index, (node, column)) in enumerate(zip(schema.leaves, columns))
-            prepared, entries, dense, payload, preparedcharge =
-                _writeprepareleaf(node, column, rows, limits, budget)
-            leafcharge = _materializedsum(leafcharge, preparedcharge)
-            _validatewriteleaf(node, prepared, rows)
-            ordinal = Int32(index)
-            node.column_index == ordinal || throw(ArgumentError(
-                "writer leaf ordinal does not match the parsed schema"))
-            push!(leaves, WriteLeafPlan(ordinal, copy(node.path), prepared,
-                entries, dense, payload))
-        end
-        _release!(budget, columncharge)
-        return leaves, leafcharge
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
+    columns = WriteColumn[]
+    sizehint!(columns, length(schema.leaves))
+    for (field, node) in zip(fields, schema.root.children)
+        length(field.leaves) == _writeschemaleafcount(node) ||
+            throw(ArgumentError(
+                "writer field $(repr(node.element.name)) does not own its schema leaves"))
+        append!(columns, field.leaves)
     end
-end
-
-function _writeplan(fields::Vector{WriteFieldPlan}, rows::Int, limits::Limits,
-    budget::_LiveByteBudget)
-    start = _budgetused(budget)
-    try
-        rows >= 0 || throw(ArgumentError(
-            "Parquet row count must be nonnegative"))
-        elements = _flattenwriteschema(fields, limits, budget)
-        schema = Schema(elements; limits=limits, budget=budget)
-        leaves, leafcharge = _writeplanleaves(fields, schema, rows, limits,
-            budget)
-        _reservearray!(budget, WriteRowGroupPlan, iszero(rows) ? 0 : 1)
-        _reserveobjects!(budget, 2)
-        rowgroups = iszero(rows) ? WriteRowGroupPlan[] :
-            WriteRowGroupPlan[WriteRowGroupPlan(rows, leaves)]
-        plan = WritePlan(elements, schema, rows, rowgroups)
-        iszero(rows) && _release!(budget, leafcharge)
-        return plan
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
+    length(columns) == length(schema.leaves) || throw(ArgumentError(
+        "writer physical leaves do not match the parsed schema"))
+    leaves = WriteLeafPlan[]
+    sizehint!(leaves, length(columns))
+    for (index, (node, column)) in enumerate(zip(schema.leaves, columns))
+        prepared, entries, dense, payload =
+            _writeprepareleaf(node, column, rows, limits)
+        _validatewriteleaf(node, prepared, rows)
+        ordinal = Int32(index)
+        node.column_index == ordinal || throw(ArgumentError(
+            "writer leaf ordinal does not match the parsed schema"))
+        push!(leaves, WriteLeafPlan(ordinal, copy(node.path), prepared,
+            entries, dense, payload))
     end
+    return leaves
 end
 
 function _writeplan(fields::Vector{WriteFieldPlan}, rows::Int, limits::Limits)
-    return _writeplan(fields, rows, limits, _LiveByteBudget(limits))
-end
-
-function _writefieldplan(column::WriteColumn, budget::_LiveByteBudget)
-    schema = _schemaelements(column)
-    isempty(schema) && throw(ArgumentError(
-        "writer column $(repr(column.name)) has no top-level field schema"))
-    _reservearray!(budget, Metadata.SchemaElement, length(schema))
-    _reservearray!(budget, WriteColumn, 1)
-    _reservearray!(budget, String, length(column.path))
-    _reserveobjects!(budget, 2)
-    return WriteFieldPlan(copy(schema), WriteColumn[_withoutcolumnschema(column)])
-end
-
-function _writeplan(columns::Vector{WriteColumn}, rows::Int, limits::Limits,
-    budget::_LiveByteBudget)
-    start = _budgetused(budget)
-    try
-        _reservearray!(budget, WriteFieldPlan, length(columns))
-        fields = WriteFieldPlan[]
-        sizehint!(fields, length(columns))
-        for column in columns
-            push!(fields, _writefieldplan(column, budget))
-        end
-        return _writeplan(fields, rows, limits, budget)
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
-    end
-end
-
-function _writeplan(columns::Vector{WriteColumn}, rows::Int, limits::Limits)
-    return _writeplan(columns, rows, limits, _LiveByteBudget(limits))
-end
-
-function _writeplan(table, limits::Limits, budget::_LiveByteBudget)
-    start = _budgetused(budget)
-    try
-        fields, rows = _writefields(table, limits, budget)
-        return _writeplan(fields, rows, limits, budget)
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
-    end
+    rows >= 0 || throw(ArgumentError(
+        "Parquet row count must be nonnegative"))
+    elements = _flattenwriteschema(fields, limits)
+    schema = Schema(elements; limits=limits)
+    leaves = _writeplanleaves(fields, schema, rows, limits)
+    rowgroups = iszero(rows) ? WriteRowGroupPlan[] :
+        WriteRowGroupPlan[WriteRowGroupPlan(rows, leaves)]
+    return WritePlan(elements, schema, rows, rowgroups)
 end
 
 function _writeplan(table, limits::Limits)
-    return _writeplan(table, limits, _LiveByteBudget(limits))
+    fields, rows = _writefields(table, limits)
+    return _writeplan(fields, rows, limits)
 end
 
 function _writeplan(table)
@@ -1777,43 +1388,24 @@ function _addgroupsize(total::Int64, value::Int64)
     end
 end
 
-const _WRITE_FOOTER_CONTROL_BYTES =
-    _materializedproduct(2, _MATERIALIZED_OBJECT_BYTES)
-
-function _writeencodefooter(value, limits::Limits, budget::_LiveByteBudget)
-    start = _budgetused(budget)
+# Counts the encoded footer first so max_footer_bytes is checked before it is allocated.
+function _writeencodefooter(value, limits::Limits)
     try
-        _reserve!(budget, _WRITE_FOOTER_CONTROL_BYTES)
-        exact = try
-            Thrift._encodedsize(value)
-        finally
-            _release!(budget, _WRITE_FOOTER_CONTROL_BYTES)
-        end
+        exact = Thrift._encodedsize(value)
         exact <= typemax(UInt32) || throw(ArgumentError(
             "Parquet footer exceeds UInt32 bytes"))
         _checklimit(:footer_bytes, exact, limits.max_footer_bytes)
-        _reserve!(budget, _WRITE_FOOTER_CONTROL_BYTES)
-        charge = _reservearray!(budget, UInt8, exact)
         bytes = Vector{UInt8}(undef, Int(exact))
         Thrift._encodefixed!(bytes, value)
-        _release!(budget, _WRITE_FOOTER_CONTROL_BYTES)
-        return bytes, charge
+        return bytes
     catch err
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
         err isa Thrift._WriteCountOverflow && throw(ArgumentError(
             "Parquet footer exceeds UInt32 bytes"))
         rethrow()
     end
 end
 
-function _reserveoutputgrowth!(budget::_LiveByteBudget, bytes::Integer)
-    charge = _materializedproduct(bytes, 2)
-    _reserve!(budget, charge)
-    return charge
-end
-
-function _writekeyvaluemetadata(table, ::Limits, ::_LiveByteBudget)
+function _writekeyvaluemetadata(table, ::Limits)
     Base.@nospecialize table
     return nothing
 end
@@ -1825,58 +1417,35 @@ function _encodefile(table; checksum::Bool=true, dictionary::Bool=false,
     limits::Limits=Limits())
     Base.@nospecialize table
     statisticslimit = _statisticlimit(limits)
-    budget = _LiveByteBudget(limits)
-    _reserveobjects!(budget, 2)
     compression = _writecodec(codec)
     version = _writepageversion(pageversion)
     target = _writepagesize(pagesize)
     _writerowgroupsize(rowgroupsize, 0)
-    fields, rows = _writefieldsencoded(table, limits, budget, encoding,
-        dictionary)
-    initialplan = _writeplan(fields, rows, limits, budget)
-    selectorcharge = Int64(0)
-    leaves = if isempty(initialplan.rowgroups)
-        selected, charge = _writeplanleaves(fields, initialplan.schema, rows, limits,
-            budget)
-        selectorcharge = charge
-        selected
-    else
+    fields, rows = _writefieldsencoded(table, limits, encoding, dictionary)
+    initialplan = _writeplan(fields, rows, limits)
+    leaves = isempty(initialplan.rowgroups) ?
+        _writeplanleaves(fields, initialplan.schema, rows, limits) :
         only(initialplan.rowgroups).leaves
-    end
-    _reservearray!(budget, WriteEncodingChoice, length(leaves))
-    _reserveobjects!(budget, 4 * length(leaves) + 1)
-    choices = try
-        _writeencodingchoices(leaves, encoding, dictionary)
-    finally
-        iszero(selectorcharge) || _release!(budget, selectorcharge)
-    end
-    plan = _splitwriteplan(initialplan, rowgroupsize, limits, budget)
+    choices = _writeencodingchoices(leaves, encoding, dictionary)
+    plan = _splitwriteplan(initialplan, rowgroupsize, limits)
     leaves = nothing
     initialplan = nothing
-    columnorders = statistics ? _writecolumnorders(plan.schema, budget) : nothing
-    _reservearray!(budget, UInt8, length(PARQUET_MAGIC))
+    columnorders = statistics ? _writecolumnorders(plan.schema) : nothing
     output = copy(PARQUET_MAGIC)
-    _reservearray!(budget, Metadata.RowGroup, length(plan.rowgroups))
     rowgroups = Metadata.RowGroup[]
     sizehint!(rowgroups, length(plan.rowgroups))
     indexgroups = nothing
     if pageindex
-        _reservearray!(budget, Vector{Metadata.OffsetIndex},
-            length(plan.rowgroups))
         indexgroups = Vector{Metadata.OffsetIndex}[]
         sizehint!(indexgroups, length(plan.rowgroups))
     end
     emitordinals = length(plan.rowgroups) <= Int(typemax(Int16)) + 1
     for (groupindex, rowgroupplan) in enumerate(plan.rowgroups)
         _validatewritechoicecount(rowgroupplan.leaves, choices)
-        _reservearray!(budget, Metadata.ColumnChunk,
-            length(rowgroupplan.leaves))
         chunks = Metadata.ColumnChunk[]
         sizehint!(chunks, length(rowgroupplan.leaves))
         indexes = nothing
         if pageindex
-            _reservearray!(budget, Metadata.OffsetIndex,
-                length(rowgroupplan.leaves))
             indexes = Metadata.OffsetIndex[]
             sizehint!(indexes, length(rowgroupplan.leaves))
         end
@@ -1887,31 +1456,24 @@ function _encodefile(table; checksum::Bool=true, dictionary::Bool=false,
             column = leaf.column
             columnstatistics = if statistics
                 element = plan.schema.leaves[Int(leaf.ordinal)].element
-                _writecolumnstatistics(leaf, element, statisticslimit, budget)
+                _writecolumnstatistics(leaf, element, statisticslimit)
             else
                 nothing
             end
             offset = Int64(length(output))
-            pages, pagecharge = _budgetedsplitcolumnpages(leaf, limits, budget;
-                pagesize=target, checksum=checksum,
-                dictionary=choice.dictionary, codec=compression,
-                compressionlevel=compressionlevel, pageversion=version,
-                encoding=choice.encoding, capturelocations=pageindex)
-            _reserveoutputgrowth!(budget, length(pages.bytes))
+            pages = _writesplitcolumnpages(leaf, limits; pagesize=target,
+                checksum=checksum, dictionary=choice.dictionary,
+                codec=compression, compressionlevel=compressionlevel,
+                pageversion=version, encoding=choice.encoding,
+                capturelocations=pageindex)
             append!(output, pages.bytes)
-            _reserveobjects!(budget, 4)
             push!(chunks, _columnchunk(leaf, offset, pages, compression,
                 columnstatistics))
             pageindex && push!(indexes, _writeabsoluteoffsetindex(pages,
-                offset, rowgroupplan.rows, budget))
-            transferred = _columnpagestransferredbytes(pages)
-            transferred <= pagecharge || throw(AssertionError(
-                "writer page metadata exceeds its live-page charge"))
+                offset, rowgroupplan.rows))
             uncompressedsize = _addgroupsize(uncompressedsize, pages.uncompressed_size)
             compressedsize = _addgroupsize(compressedsize, Int64(length(pages.bytes)))
-            _release!(budget, pagecharge - transferred)
         end
-        _reserveobjects!(budget, 2)
         push!(rowgroups, Metadata.RowGroup(
             columns=chunks,
             total_byte_size=uncompressedsize,
@@ -1923,33 +1485,22 @@ function _encodefile(table; checksum::Bool=true, dictionary::Bool=false,
         pageindex && push!(indexgroups, indexes)
     end
     if pageindex
-        obsolete = _writeoffsetindexobsoletebytes(rowgroups, indexgroups)
-        rowgroups = _writeoffsetindexsection!(output, rowgroups,
-            indexgroups, limits, budget)
-        indexgroups = nothing
-        indexes = nothing
-        chunks = nothing
-        _release!(budget, obsolete)
+        rowgroups = _writeoffsetindexsection!(output, rowgroups, indexgroups,
+            limits)
     end
-    _reserveobjects!(budget, 2)
     metadata = Metadata.FileMetaData(
         version=Int32(1),
         schema=plan.elements,
         num_rows=Int64(plan.rows),
         row_groups=rowgroups,
-        key_value_metadata=_writekeyvaluemetadata(table, limits, budget),
+        key_value_metadata=_writekeyvaluemetadata(table, limits),
         created_by="Parquet.jl version 1.0.0-DEV",
         column_orders=columnorders,
     )
-    footer, footercharge = _writeencodefooter(metadata, limits, budget)
-    try
-        _reserveoutputgrowth!(budget, _materializedsum(length(footer), 8))
-        append!(output, footer)
-        _writelittle!(output, UInt32(length(footer)))
-        append!(output, PARQUET_MAGIC)
-    finally
-        _release!(budget, footercharge)
-    end
+    footer = _writeencodefooter(metadata, limits)
+    append!(output, footer)
+    _writelittle!(output, UInt32(length(footer)))
+    append!(output, PARQUET_MAGIC)
     return output
 end
 

@@ -240,9 +240,8 @@ function _logicalcolumnwriteelement(name, spec::_DecimalLogicalColumnSpec,
         scale=spec.scale, precision=spec.precision)
 end
 
-function _flatsnapshot(values::LogicalColumn, budget::_LiveByteBudget)
+function _flatsnapshot(values::LogicalColumn)
     values.values isa Vector && return values
-    _reservearray!(budget, eltype(values.values), length(values.values))
     return LogicalColumn{eltype(values),Vector{eltype(values.values)},
         typeof(values.spec)}(collect(values.values), values.spec)
 end

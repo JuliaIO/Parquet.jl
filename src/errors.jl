@@ -40,8 +40,9 @@ throws a `LimitError`.
 - `max_string_bytes` (256 MiB), `max_decimal_bytes` (1 MiB): one value.
 - `max_schema_name_bytes` (1 MiB): new column names one operation may intern.
 - `max_metadata_depth` (128): schema and nested-value depth.
-- `max_materialized_bytes` and `max_container_elements` (unlimited): optional caps on the
-  bytes one operation allocates and on row and element counts.
+- `max_materialized_bytes` (unlimited): optional cap on the bytes one read allocates.
+  Writes are not capped.
+- `max_container_elements` (unlimited): optional cap on row and element counts.
 
 Counts a file declares (values, rows, list and map lengths) are checked against the
 bytes that back them before memory is reserved for them, and declared page sizes are

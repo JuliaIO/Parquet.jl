@@ -9,61 +9,12 @@ mutable struct Table{F<:File,C<:NamedTuple}
     @atomic closed::Bool
 end
 
-function _tablewritecolumn(name, values::AbstractVector, node::SchemaNode,
-    limits::Limits)
-    node.element.type_ === nothing && return _writecolumn(name, values, limits)
-    length(node.path) == 1 || throw(ArgumentError(
-        "cannot write a nested primitive as a top-level table column"))
-    String(name) == node.element.name || throw(ArgumentError(
-        "table column $(repr(name)) does not match stored schema field " *
-        repr(node.element.name)))
-    return _writescalarlogicalcolumn(name, values, node.element, limits)
-end
-
-function _writecolumns(table::Table, limits::Limits,
-    budget::_LiveByteBudget)
-    columns = Tables.columns(table)
-    raw_names = Tables.columnnames(columns)
-    _reservearray!(budget, Any, length(raw_names))
-    names = collect(raw_names)
-    nodes = table.schema.root.children
-    length(names) == length(nodes) || throw(ArgumentError(
-        "table columns no longer match the stored Parquet schema"))
-    _reservearray!(budget, WriteColumn, length(names))
-    output = WriteColumn[]
-    sizehint!(output, length(names))
-    rows = nothing
-    for (name, node) in zip(names, nodes)
-        values = Tables.getcolumn(columns, name)
-        values isa AbstractVector || throw(ArgumentError(
-            "Parquet columns must be vectors"))
-        if rows === nothing
-            rows = length(values)
-            _checklimit(:container_elements, rows, limits.max_container_elements)
-        end
-        length(values) == rows || throw(ArgumentError(
-            "Parquet columns have different lengths"))
-        _reservewritenormalization!(budget, values, limits)
-        push!(output, _tablewritecolumn(name, values, node, limits))
-    end
-    return output, something(rows, 0)
-end
-
-function _writecolumns(table::Table, limits::Limits)
-    return _writecolumns(table, limits, _LiveByteBudget(limits))
-end
-
-function _writefields(table::Table, limits::Limits, ::_LiveByteBudget)
-    return _provenancewritefields(table, limits, nothing, false)
-end
-
-function _writefieldsencoded(table::Table, limits::Limits, ::_LiveByteBudget,
-        encoding, dictionary::Bool)
+function _writefieldsencoded(table::Table, limits::Limits, encoding,
+        dictionary::Bool)
     return _provenancewritefields(table, limits, encoding, dictionary)
 end
 
-function _writekeyvaluemetadata(table::Table, limits::Limits,
-        budget::_LiveByteBudget)
+function _writekeyvaluemetadata(table::Table, limits::Limits)
     metadata = table.metadata.key_value_metadata
     metadata === nothing && return nothing
     _checklimit(:container_elements, length(metadata),
@@ -74,7 +25,6 @@ function _writekeyvaluemetadata(table::Table, limits::Limits,
         item.value === nothing || _checklimit(:string_bytes,
             ncodeunits(item.value), limits.max_string_bytes)
     end
-    _reservearray!(budget, Metadata.KeyValue, length(metadata))
     return copy(metadata)
 end
 

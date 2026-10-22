@@ -1134,15 +1134,13 @@ function _provenancewritefields(table::Table, limits::Limits, encoding,
 end
 
 function _writeplanleaves(fields::_ProvenanceWriteFields, schema::Schema,
-        rows::Int, limits::Limits, budget::_LiveByteBudget)
-    return _writeplanleaves(fields.fields, schema, rows, limits, budget)
+        rows::Int, limits::Limits)
+    return _writeplanleaves(fields.fields, schema, rows, limits)
 end
 
-function _writeplan(fields::_ProvenanceWriteFields, rows::Int, limits::Limits,
-        budget::_LiveByteBudget)
+function _writeplan(fields::_ProvenanceWriteFields, rows::Int, limits::Limits)
     rows >= 0 || throw(ArgumentError("Parquet row count must be nonnegative"))
-    leaves, _ = _writeplanleaves(fields.fields, fields.schema, rows, limits,
-        budget)
+    leaves = _writeplanleaves(fields.fields, fields.schema, rows, limits)
     rowgroups = iszero(rows) ? WriteRowGroupPlan[] :
         WriteRowGroupPlan[WriteRowGroupPlan(rows, leaves)]
     return WritePlan(fields.elements, fields.schema, rows, rowgroups)

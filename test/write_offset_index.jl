@@ -562,34 +562,6 @@ function oierror(f)
     return nothing
 end
 
-function oiwritesuccess(input, maximum::Int64; pageindex::Bool)
-    try
-        Parquet._encodefile(input; pagesize=4, checksum=false,
-            pageindex=pageindex, limits=Parquet.Limits(
-                max_materialized_bytes=maximum))
-        return true
-    catch err
-        err isa Parquet.LimitError || rethrow()
-        return false
-    end
-end
-
-function oiminimumwrite(input; pageindex::Bool)
-    low = Int64(-1)
-    high = Int64(1_000_000)
-    oiwritesuccess(input, high; pageindex=pageindex) ||
-        throw(ArgumentError("writer minimum search upper bound is too low"))
-    while high - low > 1
-        middle = (low + high) ÷ 2
-        if oiwritesuccess(input, middle; pageindex=pageindex)
-            high = middle
-        else
-            low = middle
-        end
-    end
-    return high
-end
-
 const OICODECS = (:uncompressed, :snappy, :gzip, :brotli, :zstd,
     :lz4_raw)
 
@@ -844,40 +816,12 @@ end
     end
     @test writerlimit isa Parquet.LimitError
     @test writerlimit.resource == :page_index_bytes
-    falseminimum = oiminimumwrite(probe; pageindex=false)
-    trueminimum = oiminimumwrite(probe; pageindex=true)
-    @test trueminimum > falseminimum
-    @test oiwritesuccess(probe, falseminimum; pageindex=false)
-    @test !oiwritesuccess(probe, falseminimum - 1; pageindex=false)
-    @test !oiwritesuccess(probe, falseminimum; pageindex=true)
-    @test oiwritesuccess(probe, trueminimum; pageindex=true)
-    @test !oiwritesuccess(probe, trueminimum - 1; pageindex=true)
 
     index = oiindexobjects(indexed)[1][1]
     exact = Parquet._writeoffsetindexencodedsize(index)
-    insufficient = Parquet.Limits(max_materialized_bytes=exact + 64)
-    insufficientbudget = Parquet._LiveByteBudget(insufficient)
-    Parquet._reservearray!(insufficientbudget, UInt8, 0)
-    entry = Parquet._budgetused(insufficientbudget)
-    peakfailure = oierror() do
-        Parquet._writeencodeoffsetindex(index, Int64(0), insufficient,
-            insufficientbudget)
-    end
-    @test peakfailure isa Parquet.LimitError
-    @test peakfailure.resource == :materialized_bytes
-    @test Parquet._budgetused(insufficientbudget) == entry
-    charge = Parquet._materializedsum(
-        Parquet._materializedarraybytes(UInt8, exact),
-        Parquet._MATERIALIZED_OBJECT_BYTES)
-    sufficient = Parquet.Limits(max_materialized_bytes=entry + charge)
-    sufficientbudget = Parquet._LiveByteBudget(sufficient)
-    Parquet._reservearray!(sufficientbudget, UInt8, 0)
-    encoded, live, cumulativebytes = Parquet._writeencodeoffsetindex(index,
-        Int64(0), sufficient, sufficientbudget)
+    encoded, cumulativebytes = Parquet._writeencodeoffsetindex(index,
+        Int64(0), Parquet.Limits())
     @test length(encoded) == exact == cumulativebytes
-    @test live == charge
-    Parquet._release!(sufficientbudget, live)
-    @test Parquet._budgetused(sufficientbudget) == 64
 end
 
 @testset "offset-index public failure atomicity" begin

@@ -6,7 +6,7 @@ struct _WritePageCapacityError <: Exception
     maximum::Int64
 end
 
-function _writedensecopy(values::AbstractVector, budget::_LiveByteBudget)
+function _writedensecopy(values::AbstractVector)
     T = Base.nonmissingtype(eltype(values))
     T === Missing && throw(ArgumentError(
         "a physical Parquet leaf cannot contain only missing dense values"))
@@ -14,21 +14,18 @@ function _writedensecopy(values::AbstractVector, budget::_LiveByteBudget)
     for value in values
         ismissing(value) || (count = Base.checked_add(count, 1))
     end
-    charge = _reservearray!(budget, T, count)
     output = T[]
     sizehint!(output, count)
     for value in values
         ismissing(value) && continue
         push!(output, convert(T, value))
     end
-    return output, charge
+    return output
 end
 
-function _writenormalizedense(column::WriteColumn, rows::Int,
-        budget::_LiveByteBudget)
+function _writenormalizedense(column::WriteColumn, rows::Int)
     definitions = column.definitions
     values = column.values
-    charge = Int64(0)
     if definitions === nothing && !iszero(column.max_definition_level)
         iszero(column.max_repetition_level) || throw(ArgumentError(
             "a repeated writer leaf with definition levels must provide its level stream"))
@@ -36,13 +33,7 @@ function _writenormalizedense(column::WriteColumn, rows::Int,
             "a nested writer leaf with definition levels must provide its level stream"))
         length(values) == rows || throw(ArgumentError(
             "optional writer leaf input does not match the table row count"))
-        definitioncharge = _reservearray!(budget, UInt64, rows)
-        dense, densecharge = try
-            _writedensecopy(values, budget)
-        catch
-            _release!(budget, definitioncharge)
-            rethrow()
-        end
+        dense = _writedensecopy(values)
         definitions = Vector{UInt64}(undef, rows)
         index = 0
         for value in values
@@ -50,29 +41,24 @@ function _writenormalizedense(column::WriteColumn, rows::Int,
             definitions[index] = ismissing(value) ? UInt64(0) : UInt64(1)
         end
         values = dense
-        charge = _materializedsum(definitioncharge, densecharge)
     elseif Missing <: eltype(values) || !(values isa Vector)
-        dense, densecharge = _writedensecopy(values, budget)
-        if length(dense) != length(values)
-            _release!(budget, densecharge)
-            throw(ArgumentError(
-                "writer dense physical values contain missing"))
-        end
+        dense = _writedensecopy(values)
+        length(dense) == length(values) || throw(ArgumentError(
+            "writer dense physical values contain missing"))
         values = dense
-        charge = densecharge
     else
         for value in values
             ismissing(value) && throw(ArgumentError(
                 "writer dense physical values contain missing"))
         end
     end
-    values === column.values && definitions === column.definitions && return column, charge
+    values === column.values && definitions === column.definitions && return column
     normalized = WriteColumn(column.name, values, column.physical,
         column.type_length, column.optional, column.logical, column.converted,
         column.path, column.repetitions, definitions,
         column.max_repetition_level, column.max_definition_level, column.rows,
         column.schema)
-    return normalized, charge
+    return normalized
 end
 
 function _writeentryoffsets(column::WriteColumn, rows::Int)
@@ -243,24 +229,13 @@ function _writevalidaterowstarts(repetitions, entries::Vector{Int64})
 end
 
 function _writeprepareleaf(node::SchemaNode, column::WriteColumn, rows::Int,
-        limits::Limits, budget::_LiveByteBudget)
-    start = _budgetused(budget)
-    try
-        normalized, densecharge = _writenormalizedense(column, rows, budget)
-        prefixcharge = _materializedproduct(3,
-            _materializedarraybytes(Int64, rows + 1))
-        _reserve!(budget, prefixcharge)
-        entries = _writeentryoffsets(normalized, rows)
-        dense = _writedenseoffsets(normalized, entries)
-        payload = _writepayloadoffsets(normalized, dense, limits)
-        _writevalidateprefixes(normalized, rows, entries, dense, payload)
-        return normalized, entries, dense, payload,
-            _materializedsum(densecharge, prefixcharge)
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
-    end
+        limits::Limits)
+    normalized = _writenormalizedense(column, rows)
+    entries = _writeentryoffsets(normalized, rows)
+    dense = _writedenseoffsets(normalized, entries)
+    payload = _writepayloadoffsets(normalized, dense, limits)
+    _writevalidateprefixes(normalized, rows, entries, dense, payload)
+    return normalized, entries, dense, payload
 end
 
 function _writerowgroupsize(value, rows::Int)
@@ -286,10 +261,9 @@ function _writepagesize(value)
 end
 
 function _writeslicelevels(levels::Union{Nothing,AbstractVector{UInt64}}, first::Int,
-        last::Int, budget::_LiveByteBudget)
-    levels === nothing && return nothing, Int64(0)
-    _reserveobjects!(budget)
-    return @view(levels[(first + 1):last]), _MATERIALIZED_OBJECT_BYTES
+        last::Int)
+    levels === nothing && return nothing
+    return @view(levels[(first + 1):last])
 end
 
 function _writesliceprefixvalues(prefix::Vector{Int64}, firstrow::Int,
@@ -303,58 +277,34 @@ function _writesliceprefixvalues(prefix::Vector{Int64}, firstrow::Int,
     return output
 end
 
-function _writesliceprefix(prefix::Vector{Int64}, firstrow::Int, lastrow::Int,
-        budget::_LiveByteBudget)
-    count = lastrow - firstrow + 1
-    charge = _reservearray!(budget, Int64, count)
-    output = _writesliceprefixvalues(prefix, firstrow, lastrow)
-    return output, charge
-end
-
 function _writesliceleaf(leaf::WriteLeafPlan, firstrow::Int, lastrow::Int,
-        limits::Limits, budget::_LiveByteBudget)
+        limits::Limits)
     0 <= firstrow <= lastrow <= leaf.column.rows || throw(ArgumentError(
         "writer row-group slice is outside its leaf"))
-    start = _budgetused(budget)
-    try
-        entrystart = Int(leaf.entry_offsets[firstrow + 1])
-        entrystop = Int(leaf.entry_offsets[lastrow + 1])
-        densestart = Int(leaf.dense_offsets[firstrow + 1])
-        densestop = Int(leaf.dense_offsets[lastrow + 1])
-        repetitions, repetitioncharge = _writeslicelevels(
-            leaf.column.repetitions, entrystart, entrystop, budget)
-        definitions, definitioncharge = _writeslicelevels(
-            leaf.column.definitions, entrystart, entrystop, budget)
-        repetitioncharge >= 0 && definitioncharge >= 0 || throw(AssertionError(
-            "writer level slice charge is negative"))
-        _reserveobjects!(budget, 2)
-        values = @view leaf.column.values[(densestart + 1):densestop]
-        entries, entrycharge = _writesliceprefix(leaf.entry_offsets,
-            firstrow, lastrow, budget)
-        dense, densecharge = _writesliceprefix(leaf.dense_offsets,
-            firstrow, lastrow, budget)
-        payloadcharge = _reservearray!(budget, Int64,
-            lastrow - firstrow + 1)
-        entrycharge >= 0 && densecharge >= 0 && payloadcharge >= 0 ||
-            throw(AssertionError("writer prefix slice charge is negative"))
-        rows = lastrow - firstrow
-        source = leaf.column
-        payload = source.physical == Metadata.Type.BOOLEAN ?
-            _writepayloadoffsets(source, dense, limits) :
-            _writesliceprefixvalues(leaf.payload_offsets, firstrow, lastrow)
-        column = WriteColumn(source.name, values, source.physical,
-            source.type_length, source.optional, source.logical,
-            source.converted, leaf.path, repetitions, definitions,
-            source.max_repetition_level, source.max_definition_level, rows,
-            source.schema)
-        _writevalidateprefixes(column, rows, entries, dense, payload)
-        return WriteLeafPlan(leaf.ordinal, leaf.path, column, entries,
-            dense, payload)
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
-    end
+    entrystart = Int(leaf.entry_offsets[firstrow + 1])
+    entrystop = Int(leaf.entry_offsets[lastrow + 1])
+    densestart = Int(leaf.dense_offsets[firstrow + 1])
+    densestop = Int(leaf.dense_offsets[lastrow + 1])
+    repetitions = _writeslicelevels(leaf.column.repetitions, entrystart,
+        entrystop)
+    definitions = _writeslicelevels(leaf.column.definitions, entrystart,
+        entrystop)
+    values = @view leaf.column.values[(densestart + 1):densestop]
+    entries = _writesliceprefixvalues(leaf.entry_offsets, firstrow, lastrow)
+    dense = _writesliceprefixvalues(leaf.dense_offsets, firstrow, lastrow)
+    rows = lastrow - firstrow
+    source = leaf.column
+    payload = source.physical == Metadata.Type.BOOLEAN ?
+        _writepayloadoffsets(source, dense, limits) :
+        _writesliceprefixvalues(leaf.payload_offsets, firstrow, lastrow)
+    column = WriteColumn(source.name, values, source.physical,
+        source.type_length, source.optional, source.logical,
+        source.converted, leaf.path, repetitions, definitions,
+        source.max_repetition_level, source.max_definition_level, rows,
+        source.schema)
+    _writevalidateprefixes(column, rows, entries, dense, payload)
+    return WriteLeafPlan(leaf.ordinal, leaf.path, column, entries,
+        dense, payload)
 end
 
 function _writegroupcount(rows::Int, size::Int)
@@ -362,8 +312,7 @@ function _writegroupcount(rows::Int, size::Int)
     return Base.checked_add(fld(rows - 1, size), 1)
 end
 
-function _splitwriteplan(plan::WritePlan, rowgroupsize, limits::Limits,
-        budget::_LiveByteBudget)
+function _splitwriteplan(plan::WritePlan, rowgroupsize, limits::Limits)
     size = _writerowgroupsize(rowgroupsize, plan.rows)
     isempty(plan.rowgroups) && return plan
     length(plan.rowgroups) == 1 || throw(AssertionError(
@@ -388,44 +337,22 @@ function _splitwriteplan(plan::WritePlan, rowgroupsize, limits::Limits,
             limits.max_container_elements))
     end
     _checklimit(:container_elements, leafcount, limits.max_container_elements)
-    start = _budgetused(budget)
-    try
-        _reservearray!(budget, WriteRowGroupPlan, count)
-        _reserveobjects!(budget, count + 1)
-        groups = WriteRowGroupPlan[]
-        sizehint!(groups, count)
-        firstrow = 0
-        while firstrow < plan.rows
-            lastrow = min(Base.checked_add(firstrow, size), plan.rows)
-            _reservearray!(budget, WriteLeafPlan, length(source.leaves))
-            leaves = WriteLeafPlan[]
-            sizehint!(leaves, length(source.leaves))
-            for leaf in source.leaves
-                push!(leaves, _writesliceleaf(leaf, firstrow, lastrow, limits,
-                    budget))
-            end
-            push!(groups, WriteRowGroupPlan(lastrow - firstrow, leaves))
-            firstrow = lastrow
+    groups = WriteRowGroupPlan[]
+    sizehint!(groups, count)
+    firstrow = 0
+    while firstrow < plan.rows
+        lastrow = min(Base.checked_add(firstrow, size), plan.rows)
+        leaves = WriteLeafPlan[]
+        sizehint!(leaves, length(source.leaves))
+        for leaf in source.leaves
+            push!(leaves, _writesliceleaf(leaf, firstrow, lastrow, limits))
         end
-        length(groups) == count || throw(AssertionError(
-            "writer row-group split count changed"))
-        output = WritePlan(plan.elements, plan.schema, plan.rows, groups)
-        obsolete = _materializedarraybytes(WriteRowGroupPlan, 1)
-        obsolete = _materializedsum(obsolete,
-            _materializedarraybytes(WriteLeafPlan, length(source.leaves)))
-        obsolete = _materializedsum(obsolete,
-            _materializedproduct(2, _MATERIALIZED_OBJECT_BYTES))
-        prefixbytes = _materializedproduct(3,
-            _materializedarraybytes(Int64, plan.rows + 1))
-        obsolete = _materializedsum(obsolete,
-            _materializedproduct(length(source.leaves), prefixbytes))
-        _release!(budget, obsolete)
-        return output
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
+        push!(groups, WriteRowGroupPlan(lastrow - firstrow, leaves))
+        firstrow = lastrow
     end
+    length(groups) == count || throw(AssertionError(
+        "writer row-group split count changed"))
+    return WritePlan(plan.elements, plan.schema, plan.rows, groups)
 end
 
 struct _WriteDataFrame
@@ -805,32 +732,4 @@ function _writesplitcolumnpages(leaf::WriteLeafPlan, limits::Limits;
     encoded === nothing && return plain
     length(encoded.bytes) < length(plain.bytes) || return plain
     return encoded
-end
-
-function _budgetedsplitcolumnpages(leaf::WriteLeafPlan, limits::Limits,
-        budget::_LiveByteBudget; pagesize::Union{Nothing,Int64},
-        checksum::Bool, dictionary::Bool,
-        codec::Metadata.CompressionCodec.T,
-        compressionlevel::Union{Nothing,Integer}, pageversion::Symbol,
-        encoding::Union{Nothing,Metadata.Encoding.T}=nothing,
-        capturelocations::Bool=true)
-    working = _writerpageworkingbytes(leaf.column, dictionary)
-    _reserve!(budget, working)
-    pages = try
-        _writesplitcolumnpages(leaf, limits; pagesize=pagesize,
-            checksum=checksum, dictionary=dictionary, codec=codec,
-            compressionlevel=compressionlevel, pageversion=pageversion,
-            encoding=encoding, capturelocations=capturelocations)
-    catch
-        _release!(budget, working)
-        rethrow()
-    end
-    live = _columnpageslivebytes(pages)
-    live <= working || begin
-        _release!(budget, working)
-        throw(AssertionError(
-            "writer split-page allocation exceeded its materialization preflight"))
-    end
-    _release!(budget, working - live)
-    return pages, live
 end

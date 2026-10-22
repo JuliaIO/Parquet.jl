@@ -340,32 +340,11 @@ end
 
     plan = Parquet._writeplan(input)
     leaf = only(only(plan.rowgroups).leaves)
-    budget = Parquet._LiveByteBudget(limits)
-    pages, charge = Parquet._budgetedsplitcolumnpages(leaf, limits, budget;
+    pages = Parquet._writesplitcolumnpages(leaf, limits;
         pagesize=nothing, checksum=true, dictionary=false,
         codec=WSMD.CompressionCodec.UNCOMPRESSED, compressionlevel=nothing,
         pageversion=:v1)
     @test only(pages.encoding_stats).count == 4
-    @test Parquet._budgetused(budget) == charge
-    Parquet._release!(budget, charge)
-    @test Parquet._budgetused(budget) == 0
-
-    # A page build that throws must release its working reservation, leaving only
-    # what the caller already held.
-    failbudget = Parquet._LiveByteBudget(Parquet.Limits())
-    Parquet._reserve!(failbudget, Int64(64))
-    failerror = try
-        Parquet._budgetedsplitcolumnpages(leaf,
-            Parquet.Limits(max_page_bytes=3), failbudget;
-            pagesize=nothing, checksum=true, dictionary=false,
-            codec=WSMD.CompressionCodec.UNCOMPRESSED, compressionlevel=nothing,
-            pageversion=:v1)
-        nothing
-    catch err
-        err
-    end
-    @test failerror isa Parquet.LimitError
-    @test Parquet._budgetused(failbudget) == 64
 
     error = try
         Parquet._encodefile((value=Int32[1],); pagesize=nothing,
@@ -639,50 +618,17 @@ end
     @test all(group -> group.ordinal === nothing, metadata.row_groups)
 end
 
-@testset "writer plan construction budget rollback" begin
+@testset "writer plan construction rejects row-count mismatches" begin
     limits = Parquet.Limits()
     field = Parquet._writefieldplan(Parquet._writecolumn(:value, Int32[1]))
-    ordinary = Parquet._LiveByteBudget(limits)
-    Parquet._reservearray!(ordinary, UInt8, 0)
-    ordinaryentry = Parquet._budgetused(ordinary)
-    @test ordinaryentry == 64
     @test_throws ArgumentError Parquet._writeplan(
-        Parquet.WriteFieldPlan[field], 2, limits, ordinary)
-    @test Parquet._budgetused(ordinary) == ordinaryentry
+        Parquet.WriteFieldPlan[field], 2, limits)
 
     table = Parquet.Table(Parquet._encodefile((value=Int32[1],)))
     try
-        owner = Parquet._LiveByteBudget(limits)
-        fields, rows = Parquet._writefieldsencoded(table, limits, owner,
-            nothing, false)
-        provenance = Parquet._LiveByteBudget(limits)
-        Parquet._reservearray!(provenance, UInt8, 0)
-        provenanceentry = Parquet._budgetused(provenance)
-        @test provenanceentry == 64
-        @test_throws ArgumentError Parquet._writeplan(fields, rows + 1,
-            limits, provenance)
-        @test Parquet._budgetused(provenance) == provenanceentry
+        fields, rows = Parquet._writefieldsencoded(table, limits, nothing, false)
+        @test_throws ArgumentError Parquet._writeplan(fields, rows + 1, limits)
     finally
         close(table)
     end
-
-    columnlimits = Parquet.Limits(max_materialized_bytes=1800)
-    columnbudget = Parquet._LiveByteBudget(columnlimits)
-    Parquet._reservearray!(columnbudget, UInt8, 0)
-    columnentry = Parquet._budgetused(columnbudget)
-    columns = Parquet.WriteColumn[
-        Parquet._writecolumn(:value, Int32[1]),
-    ]
-    @test_throws Parquet.LimitError Parquet._writeplan(columns, 1,
-        columnlimits, columnbudget)
-    @test Parquet._budgetused(columnbudget) == columnentry == 64
-
-    ordinarylimits = Parquet.Limits(max_materialized_bytes=2000)
-    ordinarytable = Parquet._LiveByteBudget(ordinarylimits)
-    Parquet._reservearray!(ordinarytable, UInt8, 0)
-    ordinarytableentry = Parquet._budgetused(ordinarytable)
-    @test_throws Parquet.LimitError Parquet._writeplan(
-        (value=Int32[1],), ordinarylimits, ordinarytable)
-    @test Parquet._budgetused(ordinarytable) == ordinarytableentry == 64
-
 end

@@ -7,23 +7,13 @@ function _writecolumnorder(element::Metadata.SchemaElement)
     return Metadata.ColumnOrder(TYPE_ORDER=Metadata.TypeDefinedOrder())
 end
 
-function _writecolumnorders(schema::Schema, budget::_LiveByteBudget)
-    start = _budgetused(budget)
-    try
-        count = length(schema.leaves)
-        _reservearray!(budget, Metadata.ColumnOrder, count)
-        _reserveobjects!(budget, 2 * count)
-        orders = Metadata.ColumnOrder[]
-        sizehint!(orders, count)
-        for leaf in schema.leaves
-            push!(orders, _writecolumnorder(leaf.element))
-        end
-        return orders
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
+function _writecolumnorders(schema::Schema)
+    orders = Metadata.ColumnOrder[]
+    sizehint!(orders, length(schema.leaves))
+    for leaf in schema.leaves
+        push!(orders, _writecolumnorder(leaf.element))
     end
+    return orders
 end
 
 function _writeunsignedlittle!(output::Vector{UInt8}, value::T) where
@@ -98,9 +88,7 @@ function _writecountnans(element::Metadata.SchemaElement, values)
 end
 
 function _writestatisticsmetadata(nulls::Int64, nans::Union{Nothing,Int64},
-        lower::Union{Nothing,Vector{UInt8}}, upper::Union{Nothing,Vector{UInt8}},
-        budget::_LiveByteBudget)
-    _reserveobjects!(budget)
+        lower::Union{Nothing,Vector{UInt8}}, upper::Union{Nothing,Vector{UInt8}})
     exact = lower === nothing ? nothing : true
     return Metadata.Statistics(
         null_count=nulls,
@@ -114,14 +102,11 @@ end
 
 function _writefixedstatistics(element::Metadata.SchemaElement, values,
         comparison::Symbol, nulls::Int64, nans::Union{Nothing,Int64},
-        width::Int, limit::Int64, budget::_LiveByteBudget)
+        width::Int, limit::Int64)
     isempty(values) && return _writestatisticsmetadata(
-        nulls, nans, nothing, nothing, budget)
+        nulls, nans, nothing, nothing)
     width > limit && return _writestatisticsmetadata(
-        nulls, nans, nothing, nothing, budget)
-    _reservearray!(budget, UInt8, width)
-    _reservearray!(budget, UInt8, width)
-    scratchcharge = _reservearray!(budget, UInt8, width)
+        nulls, nans, nothing, nothing)
     lower = Vector{UInt8}(undef, width)
     upper = Vector{UInt8}(undef, width)
     scratch = Vector{UInt8}(undef, width)
@@ -147,15 +132,13 @@ function _writefixedstatistics(element::Metadata.SchemaElement, values,
     end
     initialized || throw(AssertionError(
         "writer statistics found no value for a defined order"))
-    _release!(budget, scratchcharge)
-    return _writestatisticsmetadata(nulls, nans, lower, upper, budget)
+    return _writestatisticsmetadata(nulls, nans, lower, upper)
 end
 
 function _writevariablestatistics(element::Metadata.SchemaElement, values,
-        comparison::Symbol, nulls::Int64, limit::Int64,
-        budget::_LiveByteBudget)
+        comparison::Symbol, nulls::Int64, limit::Int64)
     isempty(values) && return _writestatisticsmetadata(
-        nulls, nothing, nothing, nothing, budget)
+        nulls, nothing, nothing, nothing)
     lowerindex = firstindex(values)
     upperindex = lowerindex
     for index in Iterators.drop(eachindex(values), 1)
@@ -171,38 +154,28 @@ function _writevariablestatistics(element::Metadata.SchemaElement, values,
     upperraw = _writevariablestatistic(values[upperindex])
     (length(lowerraw) > limit || length(upperraw) > limit) &&
         return _writestatisticsmetadata(
-            nulls, nothing, nothing, nothing, budget)
-    _reservearray!(budget, UInt8, length(lowerraw))
-    _reservearray!(budget, UInt8, length(upperraw))
+            nulls, nothing, nothing, nothing)
     lower = collect(lowerraw)
     upper = collect(upperraw)
-    return _writestatisticsmetadata(nulls, nothing, lower, upper, budget)
+    return _writestatisticsmetadata(nulls, nothing, lower, upper)
 end
 
 function _writecolumnstatistics(leaf::WriteLeafPlan,
-        element::Metadata.SchemaElement, limit::Int64,
-        budget::_LiveByteBudget)
-    start = _budgetused(budget)
-    try
-        entries = Int64(_columnentrycount(leaf.column))
-        dense = Int64(length(leaf.column.values))
-        dense <= entries || throw(AssertionError(
-            "writer dense statistics count exceeds its entry count"))
-        nulls = entries - dense
-        semantics = _leafstatisticsemantics(element)
-        nans = semantics.floating ?
-            _writecountnans(element, leaf.column.values) : nothing
-        comparison = semantics.floating ? :ieee_total_order : semantics.comparison
-        comparison === :undefined && return _writestatisticsmetadata(
-            nulls, nans, nothing, nothing, budget)
-        width = _statisticplainwidth(element)
-        width === nothing && return _writevariablestatistics(element,
-            leaf.column.values, comparison, nulls, limit, budget)
-        return _writefixedstatistics(element, leaf.column.values, comparison,
-            nulls, nans, width, limit, budget)
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
-    end
+        element::Metadata.SchemaElement, limit::Int64)
+    entries = Int64(_columnentrycount(leaf.column))
+    dense = Int64(length(leaf.column.values))
+    dense <= entries || throw(AssertionError(
+        "writer dense statistics count exceeds its entry count"))
+    nulls = entries - dense
+    semantics = _leafstatisticsemantics(element)
+    nans = semantics.floating ?
+        _writecountnans(element, leaf.column.values) : nothing
+    comparison = semantics.floating ? :ieee_total_order : semantics.comparison
+    comparison === :undefined && return _writestatisticsmetadata(
+        nulls, nans, nothing, nothing)
+    width = _statisticplainwidth(element)
+    width === nothing && return _writevariablestatistics(element,
+        leaf.column.values, comparison, nulls, limit)
+    return _writefixedstatistics(element, leaf.column.values, comparison,
+        nulls, nans, width, limit)
 end

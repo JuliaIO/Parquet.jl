@@ -417,7 +417,7 @@ end
         statistics=false, limits=limits)
 end
 
-@testset "writer statistics live-budget rollback" begin
+@testset "writer statistics reject malformed fixed values" begin
     malformed = WSMD.SchemaElement(
         type_=WSMD.Type.FIXED_LEN_BYTE_ARRAY,
         type_length=Int32(2),
@@ -429,48 +429,21 @@ end
         String["value"], nothing, nothing, Int16(0), Int16(0), 1,
         WSMD.SchemaElement[])
     leaf = Parquet.WriteLeafPlan(Int32(1), String["value"], column)
-    budget = Parquet._LiveByteBudget(Parquet.Limits())
-    before = Parquet._budgetused(budget)
     @test_throws ArgumentError Parquet._writecolumnstatistics(
-        leaf, malformed, Int64(4096), budget)
-    @test Parquet._budgetused(budget) == before
+        leaf, malformed, Int64(4096))
     validcolumn = Parquet._writecolumn("value", Int32[1, 2])
-    validelement = only(validcolumn.schema)
     validleaf = Parquet.WriteLeafPlan(Int32(1), String["value"], validcolumn)
-    arraycharge = Parquet._materializedarraybytes(UInt8, 4)
-    tight = Parquet._LiveByteBudget(Parquet.Limits(
-        max_materialized_bytes=3 * arraycharge))
-    @test_throws Parquet.LimitError Parquet._writecolumnstatistics(
-        validleaf, validelement, Int64(4096), tight)
-    @test Parquet._budgetused(tight) == 0
-    success = Parquet._LiveByteBudget(Parquet.Limits())
     statistics = Parquet._writecolumnstatistics(
-        validleaf, validelement, Int64(4096), success)
-    expected = 2 * Parquet._materializedarraybytes(UInt8, 4) +
-        Parquet._MATERIALIZED_OBJECT_BYTES
+        validleaf, only(validcolumn.schema), Int64(4096))
     @test statistics.null_count == 0
-    @test Parquet._budgetused(success) == expected
-    Parquet._release!(success, expected)
-    @test Parquet._budgetused(success) == 0
-    elements = WSMD.SchemaElement[
-        WSMD.SchemaElement(name="schema", num_children=Int32(1)),
-        validelement,
-    ]
-    schema = Parquet.Schema(elements)
-    orderarray = Parquet._materializedarraybytes(WSMD.ColumnOrder, 1)
-    orderbudget = Parquet._LiveByteBudget(Parquet.Limits(
-        max_materialized_bytes=orderarray))
-    @test_throws Parquet.LimitError Parquet._writecolumnorders(schema, orderbudget)
-    @test Parquet._budgetused(orderbudget) == 0
 end
 
 @testset "writer fixed statistics allocation stays value-independent" begin
     function allocation(values::Vector{Int32})
         column = Parquet._writecolumn("value", values)
         leaf = Parquet.WriteLeafPlan(Int32(1), String["value"], column)
-        budget = Parquet._LiveByteBudget(Parquet.Limits())
         return @allocated Parquet._writecolumnstatistics(
-            leaf, only(column.schema), Int64(4096), budget)
+            leaf, only(column.schema), Int64(4096))
     end
     allocation(Int32[1])
     allocation(fill(Int32(1), 100_000))
