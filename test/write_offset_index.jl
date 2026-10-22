@@ -962,6 +962,12 @@ end
     oireject(oichunkrewrite(leading, 1, 1;
         meta_data=oireplace(something(leadingchunk.meta_data);
             index_page_offset=Int64(0))))
+    # parquet-cpp before 1.4 (pyarrow < 0.9) wrote index_page_offset=0 for "absent".
+    plain = oilegacyfile([data1, data2])
+    plainchunk = oimetadata(plain).row_groups[1].columns[1]
+    oiroundtrip(oichunkrewrite(plain, 1, 1;
+        meta_data=oireplace(something(plainchunk.meta_data);
+            index_page_offset=Int64(0))), (; value=Int32[1, 2]))
     oireject(oichunkrewrite(leading, 1, 1;
         meta_data=oireplace(something(leadingchunk.meta_data);
             index_page_offset=Int64(-1))))

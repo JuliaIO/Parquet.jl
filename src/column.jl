@@ -118,15 +118,22 @@ function _chunkmetadata(chunk::Metadata.ColumnChunk, node::SchemaNode)
     return md
 end
 
-# The chunk starts at its dictionary page, or at the earliest data/index page. Only the
-# dictionary offset retains the historical zero sentinel.
+# parquet-cpp before 1.4 (pyarrow < 0.9) wrote 0 for an absent index page, the same
+# sentinel old writers used for the dictionary offset.
+function _indexpageoffset(md::Metadata.ColumnMetaData)
+    index = md.index_page_offset
+    return index === nothing || iszero(index) ? nothing : Int64(index)
+end
+
+# The chunk starts at its dictionary page, or at the earliest data/index page. The
+# dictionary and index offsets both retain the historical zero sentinel.
 function _chunkstart(md::Metadata.ColumnMetaData)
     data = Int64(md.data_page_offset)
     data >= 0 || throw(FormatError("negative data page offset $data"))
     dictionary = md.dictionary_page_offset
     dictionary === nothing || dictionary >= 0 || throw(FormatError(
         "negative dictionary page offset $dictionary"))
-    index = md.index_page_offset
+    index = _indexpageoffset(md)
     index === nothing || index >= 4 || throw(FormatError(
         "index page offset $index is inside the file header"))
     if dictionary !== nothing && dictionary > 0
@@ -155,7 +162,7 @@ function _chunkrange(md::Metadata.ColumnMetaData, footeroffset::Int64)
         dictionary = md.dictionary_page_offset
         (dictionary === nothing || dictionary == 0) || throw(FormatError(
             "dictionary page offset is present for an empty column chunk"))
-        md.index_page_offset === nothing || throw(FormatError(
+        _indexpageoffset(md) === nothing || throw(FormatError(
             "index page offset is present for an empty column chunk"))
         return start, start
     end
@@ -165,7 +172,7 @@ function _chunkrange(md::Metadata.ColumnMetaData, footeroffset::Int64)
     data = Int64(md.data_page_offset)
     data == 0 || data < stop || throw(FormatError(
         "data page offset $(md.data_page_offset) is outside the column chunk"))
-    index = md.index_page_offset
+    index = _indexpageoffset(md)
     index === nothing || index < stop || throw(FormatError(
         "index page offset $index is outside the column chunk"))
     return start, stop
@@ -206,7 +213,7 @@ function _chunkpageoffsetstate(md::Metadata.ColumnMetaData, position::Int64,
             "first data page does not match data_page_offset"))
         dataseen = true
     end
-    index = md.index_page_offset
+    index = _indexpageoffset(md)
     if index !== nothing && position == index
         kind === :index || throw(FormatError(
             "index_page_offset does not point to an INDEX_PAGE"))
@@ -223,7 +230,7 @@ function _validatechunkpageoffsets(md::Metadata.ColumnMetaData,
             "dictionary_page_offset does not identify a page frame"))
     (iszero(md.data_page_offset) || dataseen) || throw(FormatError(
         "data_page_offset does not identify a data page frame"))
-    (md.index_page_offset === nothing || indexseen) || throw(FormatError(
+    (_indexpageoffset(md) === nothing || indexseen) || throw(FormatError(
         "index_page_offset does not identify a page frame"))
     return
 end
