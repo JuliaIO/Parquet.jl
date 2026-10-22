@@ -677,7 +677,7 @@ end
         columnlimits, columnbudget)
     @test Parquet._budgetused(columnbudget) == columnentry == 64
 
-    ordinarylimits = Parquet.Limits(max_materialized_bytes=5000)
+    ordinarylimits = Parquet.Limits(max_materialized_bytes=2000)
     ordinarytable = Parquet._LiveByteBudget(ordinarylimits)
     Parquet._reservearray!(ordinarytable, UInt8, 0)
     ordinarytableentry = Parquet._budgetused(ordinarytable)
@@ -687,7 +687,7 @@ end
 
     source = Parquet.Table(Parquet._encodefile((value=Int32[1],)))
     try
-        provenancelimits = Parquet.Limits(max_materialized_bytes=4000)
+        provenancelimits = Parquet.Limits(max_materialized_bytes=2000)
         provenancetable = Parquet._LiveByteBudget(provenancelimits)
         Parquet._reservearray!(provenancetable, UInt8, 0)
         provenanceentry = Parquet._budgetused(provenancetable)

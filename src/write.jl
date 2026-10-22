@@ -865,6 +865,55 @@ function _preflightwriteencoding(semantic::_NestedSchemaPlan, encoding,
     end
 end
 
+# Scalar element types the flat column writer maps exactly as the nested writer does.
+function _flatwritetype(::Type{T}) where {T}
+    T === Missing && return true
+    S = Base.nonmissingtype(T)
+    (S === Union{} || !isconcretetype(S)) && return false
+    S <: Union{Bool,Int8,Int16,Int32,Int64,UInt8,UInt16,UInt32,UInt64,Float16,
+        Float32,Float64,AbstractString,Dates.Date,Dates.Time,Dates.DateTime,
+        Timestamp,Decimal,DataDecimals.AbstractDecimal,UUIDs.UUID,JSONValue,
+        BSONValue,Interval,Durations.Duration,Vector{UInt8}} && return true
+    return S <: NTuple{N,UInt8} where {N}
+end
+
+function _flatwritable(values::AbstractVector)
+    values isa Union{LogicalColumn,FixedByteArrayVector} && return true
+    return _flatwritetype(eltype(values))
+end
+
+# The flat writer reads a column several times (limits, statistics, pages), so a
+# source that is not a plain Vector is read once into one; every pass then sees the
+# same values.
+function _flatsnapshot(values::Vector)
+    return values
+end
+
+function _flatsnapshot(values::FixedByteArrayVector)
+    return values
+end
+
+function _flatsnapshot(values::AbstractVector)
+    return collect(values)
+end
+
+# Columns of scalars skip the nested shredder: every value is one PLAIN leaf entry.
+function _flatwritefields(columns::Vector{Pair{String,AbstractVector}},
+        limits::Limits, budget::_LiveByteBudget)
+    _reservearray!(budget, WriteFieldPlan, length(columns))
+    fields = WriteFieldPlan[]
+    sizehint!(fields, length(columns))
+    for (name, source) in columns
+        occursin('\0', name) && throw(ArgumentError(
+            "Parquet top-level field names cannot contain NUL"))
+        _reservearray!(budget, eltype(source), length(source))
+        values = _flatsnapshot(source)
+        _reservewritenormalization!(budget, values, limits)
+        push!(fields, _writefieldplan(_writecolumn(name, values, limits), budget))
+    end
+    return fields
+end
+
 function _writefieldsencoded(table, limits::Limits,
         budget::_LiveByteBudget, encoding, dictionary::Bool)
     Base.@nospecialize table
@@ -872,10 +921,14 @@ function _writefieldsencoded(table, limits::Limits,
     try
         columns, rows, inputcharge, validator = _writeinputcolumns(table,
             limits, budget)
-        preflight = semantic -> _preflightwriteencoding(semantic, encoding,
-            dictionary, budget)
-        fields = _nestedwritefields(columns, rows, limits, budget;
-            preflight=preflight, sourcevalidator=validator)
+        fields = if all(column -> _flatwritable(last(column)), columns)
+            _flatwritefields(columns, limits, budget)
+        else
+            preflight = semantic -> _preflightwriteencoding(semantic, encoding,
+                dictionary, budget)
+            _nestedwritefields(columns, rows, limits, budget;
+                preflight=preflight, sourcevalidator=validator)
+        end
         _release!(budget, inputcharge)
         return fields, rows
     catch

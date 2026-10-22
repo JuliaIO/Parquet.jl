@@ -1717,6 +1717,19 @@ function n5hterminaloffsetmutation()
     return (items=column,)
 end
 
+# Scalar columns are read once into a snapshot, so a source that changes as it is
+# read writes the values of that one read instead of failing.
+function n5hassertreadonce(table, name::Symbol, expected)
+    bytes = Parquet._encodefile(table; checksum=false, pageindex=false)
+    written = Parquet.Table(bytes)
+    try
+        @test isequal(collect(getproperty(written.columns, name)), expected)
+    finally
+        close(written)
+    end
+    return
+end
+
 function n5hassertprivatefailure(table; limits::Parquet.Limits=Parquet.Limits())
     budget = Parquet._LiveByteBudget(limits)
     Parquet._reserve!(budget, 64)
@@ -1809,8 +1822,7 @@ end
     @test n5hassertprivatefailure(n5hoffsetmutation()) isa ArgumentError
     @test n5hassertprivatefailure(n5hvaliditymutation()) isa ArgumentError
     @test n5hassertprivatefailure(n5hrankmutation()) isa ArgumentError
-    lengtherror = n5hassertprivatefailure(n5hlengthmutation())
-    @test occursin("vector length", sprint(showerror, lengtherror))
+    n5hassertreadonce(n5hlengthmutation(), :x, Int32[1])
     nameerror = n5hassertprivatefailure(n5hstructnamemutation())
     @test occursin("struct names", sprint(showerror, nameerror))
     childordererror = n5hassertprivatefailure(n5hstructordermutation())
@@ -1820,8 +1832,7 @@ end
     terminalerror = n5hassertprivatefailure(n5hterminaloffsetmutation())
     @test occursin("LIST offsets", sprint(showerror, terminalerror))
 
-    axeserror = n5hassertprivatefailure((x=N5HAxisVector(Int32[1], false),))
-    @test occursin("axes", sprint(showerror, axeserror))
+    n5hassertreadonce((x=N5HAxisVector(Int32[1], false),), :x, Int32[1])
 
     ordererror = n5hassertprivatefailure(
         (m=N5HAlternatingDict[N5HAlternatingDict(0)],))
@@ -1838,21 +1849,23 @@ end
     @test occursin("occurrence", sprint(showerror, maperror))
 
     payload = N5HSequenceVector(["x", "x", "longer"], 0)
-    payloaderror = n5hassertprivatefailure((x=payload,))
-    @test occursin("occurrence", sprint(showerror, payloaderror))
+    n5hassertreadonce((x=payload,), :x, ["x"])
+    @test payload.calls == 1
 
     decimals = N5HSequenceVector([
         Parquet.Decimal(9, 1), Parquet.Decimal(9, 1),
         Parquet.Decimal(99, 2)], 0)
-    decimalerror = n5hassertprivatefailure((x=decimals,))
-    @test occursin("occurrence", sprint(showerror, decimalerror))
+    n5hassertreadonce((x=decimals,), :x,
+        [Parquet.DataDecimals.Decimal{1,1,Int32}(reinterpret, 9)])
+    @test decimals.calls == 1
 
     timestamps = N5HSequenceVector([
         Parquet.Timestamp(Int64(1), :micros, false),
         Parquet.Timestamp(Int64(2), :micros, false),
         Parquet.Timestamp(Int64(3), :micros, true)], 0)
-    timestamperror = n5hassertprivatefailure((x=timestamps,))
-    @test occursin("occurrence", sprint(showerror, timestamperror))
+    n5hassertreadonce((x=timestamps,), :x,
+        [Parquet.Timestamp(Int64(1), :micros, false)])
+    @test timestamps.calls == 1
 
     lowpage = Parquet.Limits(max_page_bytes=0)
     precedence = n5hassertprivatefailure(n5hchildsubstitution();
@@ -1861,36 +1874,26 @@ end
 end
 
 @testset "N5-C live Tables column barriers" begin
+    # A scalar table's columns are fetched once, so later changes to the source
+    # cannot reach the file.
     source = Int32[1]
     replacement = Int32[2]
     table = N5HLiveTable([:x], AbstractVector[source], replacement, 0, 2)
-    err = n5herror() do
-        Parquet._encodefile(table; checksum=false, pageindex=false)
-    end
-    @test err isa ArgumentError
-    @test occursin("identity", sprint(showerror, err))
+    n5hassertreadonce(table, :x, Int32[1])
+    @test table.calls == 1
 
     order = N5HNameOrderTable([:a, :b],
         AbstractVector[Int32[1], Int32[2]], 0)
-    err = n5herror() do
-        Parquet._encodefile(order; checksum=false, pageindex=false)
-    end
-    @test err isa ArgumentError
-    @test occursin("name or order", sprint(showerror, err))
+    n5hassertreadonce(order, :a, Int32[1])
+    @test order.calls == 1
 
     rename = N5HRenameTable(:a, Int32[1], 0)
-    err = n5herror() do
-        Parquet._encodefile(rename; checksum=false, pageindex=false)
-    end
-    @test err isa ArgumentError
-    @test occursin("name or order", sprint(showerror, err))
+    n5hassertreadonce(rename, :a, Int32[1])
+    @test rename.calls == 1
 
     badnames = N5HBadNamesTable(0, Int32[1], Int32[2])
-    err = n5herror() do
-        Parquet._encodefile(badnames; checksum=false, pageindex=false)
-    end
-    @test err isa ArgumentError
-    @test !(err isa BoundsError)
+    n5hassertreadonce(badnames, :a, Int32[1])
+    @test badnames.calls == 1
 end
 
 @testset "N5-C provenance late mutation barrier" begin
@@ -1922,8 +1925,8 @@ end
     changing = N5HSequenceVector(Int32[1, 2, 3], 0)
     fields, rows = Parquet._writefields((x=changing,), Parquet.Limits())
     @test rows == 1
-    @test only(only(fields).leaves).values == Int32[3]
-    @test changing.calls == 3
+    @test only(only(fields).leaves).values == Int32[1]
+    @test changing.calls == 1
 
     zeroaxis = N5HZeroAxisVector(Int32[4, 5])
     bytes = Parquet._encodefile((x=zeroaxis,); checksum=false,
@@ -3132,10 +3135,25 @@ end
     end
 end
 
+@testset "N5-C provenance flat columns are read once" begin
+    # A flat schema-bearing rewrite reads each value once, so a column whose axes
+    # change while it is read still writes the values of that read.
+    for trigger in (1, 3)
+        table, values = n5hprovenancescalaraxis(trigger)
+        try
+            fields, rows = Parquet._writefields(table, Parquet.Limits())
+            @test rows == 2
+            @test only(only(fields).leaves).values == Int32[1, 2]
+            @test values.calls == 2
+        finally
+            close(table)
+        end
+    end
+end
+
 @testset "N5-C provenance within-pass package mutation" begin
     cases = (
         (n5hprovenancelistphase, (1, 3)),
-        (n5hprovenancescalaraxis, (1, 3)),
         (n5hprovenancestructphase, (1, 2)),
         (n5hprovenancestructsubstitution, (1, 2)),
         (n5hprovenancestructidentity, (1, 2)),

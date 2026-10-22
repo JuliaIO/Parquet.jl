@@ -1,4 +1,5 @@
 using Test
+using Dates
 
 const WPMD = Parquet.Metadata
 const WPTH = Parquet.Thrift
@@ -307,6 +308,44 @@ function wpcustomschemafile()
     end
     custom = wpreplace(metadata; schema=schema)
     return wprewritefooter(bytes, custom)
+end
+
+struct WPNestedPathTable
+    table::Parquet.Table
+end
+
+# Send a flat Parquet.Table through the nested provenance writer.
+function Parquet._writefieldsencoded(source::WPNestedPathTable, limits::Parquet.Limits,
+        budget::Parquet._LiveByteBudget, encoding, dictionary::Bool)
+    return Parquet._provenancewritefields(source.table, limits, budget, encoding,
+        dictionary; flat=false)
+end
+
+function Parquet._writekeyvaluemetadata(source::WPNestedPathTable,
+        limits::Parquet.Limits, budget::Parquet._LiveByteBudget)
+    return Parquet._writekeyvaluemetadata(source.table, limits, budget)
+end
+
+@testset "flat schema-bearing rewrite matches the nested provenance writer" begin
+    source = (id=Int32[1, 2, 3], name=Union{Missing,String}["a", missing, "c"],
+        day=[Date(2000), Date(1969), Date(1970)],
+        fixed=NTuple{2,UInt8}[(0x01, 0x02), (0x03, 0x04), (0x05, 0x06)],
+        amount=Parquet.LogicalColumn(Union{Missing,Parquet.Decimal}[
+            Parquet.Decimal(1, 2), missing, Parquet.Decimal(-7, 2)], :decimal;
+            precision=4, scale=2))
+    table = Parquet.Table(Parquet._encodefile(source; pageversion=:v2))
+    try
+        @test Parquet._provenanceflat(table, Parquet._nestedplan(table.schema))
+        for options in ((;), (dictionary=true, codec=:gzip, rowgroupsize=2),
+                (pageversion=:v2, statistics=false, encoding=(id=:delta_binary_packed,)))
+            fast = (io = IOBuffer(); Parquet.write(io, table; options...); take!(io))
+            nested = (io = IOBuffer(); Parquet.write(io, WPNestedPathTable(table);
+                options...); take!(io))
+            @test fast == nested
+        end
+    finally
+        close(table)
+    end
 end
 
 @testset "schema-bearing writer exact provenance" begin

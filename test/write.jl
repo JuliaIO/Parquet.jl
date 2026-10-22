@@ -1,5 +1,6 @@
 using Dates
 using SHA
+import Tables
 
 struct DeferredWriterName <: AbstractString
     converted::Base.RefValue{Bool}
@@ -88,6 +89,65 @@ function boundedfooter(value; limits=Parquet.Limits())
     Parquet._release!(budget, charge)
     @test Parquet._budgetused(budget) == 0
     return bytes
+end
+
+struct NestedPathTable{T}
+    table::T
+end
+
+Tables.istable(::Type{<:NestedPathTable}) = true
+Tables.columnaccess(::Type{<:NestedPathTable}) = true
+Tables.columns(source::NestedPathTable) = Tables.columns(source.table)
+
+# Send a scalar table through the nested shredder instead of the flat fast path.
+function Parquet._writefieldsencoded(source::NestedPathTable, limits::Parquet.Limits,
+        budget::Parquet._LiveByteBudget, encoding, dictionary::Bool)
+    columns, rows, inputcharge, _ = Parquet._writeinputcolumns(source.table, limits,
+        budget)
+    preflight = semantic -> Parquet._preflightwriteencoding(semantic, encoding,
+        dictionary, budget)
+    fields = Parquet._nestedwritefields(columns, rows, limits, budget;
+        preflight=preflight)
+    Parquet._release!(budget, inputcharge)
+    return fields, rows
+end
+
+@testset "flat writer fast path matches the nested writer" begin
+    E = Union{Missing,Int32}
+    table = (
+        i8=Int8[1, -2, 3], i16=Union{Missing,Int16}[missing, 2, -3],
+        i32=E[typemin(Int32), missing, 7], i64=Int64[typemax(Int64), 0, -1],
+        u8=UInt8[0, 255, 1], u16=UInt16[1, 2, 3], u32=UInt32[typemax(UInt32), 0, 9],
+        u64=Union{Missing,UInt64}[typemax(UInt64), missing, 1], b=Bool[true, false, true],
+        f16=Float16[1.5, -0.0, NaN], f32=Float32[Inf, 0.0, -2.5],
+        f64=Union{Missing,Float64}[missing, 1e300, -0.0],
+        s=["a", "", "longer than twelve bytes"],
+        ds=Union{Missing,Parquet.DataStrings.DataString}[missing,
+            Parquet.DataStrings.DataString("x"), Parquet.DataStrings.DataString("é")],
+        bin=Union{Missing,Vector{UInt8}}[UInt8[1, 2], missing, UInt8[]],
+        fixed=NTuple{3,UInt8}[(0x01, 0x02, 0x03), (0x00, 0x00, 0x00), (0xff, 0xfe, 0xfd)],
+        date=Union{Missing,Date}[Date(1969, 12, 31), missing, Date(2000, 2, 29)],
+        time=Dates.Time[Dates.Time(0), Dates.Time(23, 59, 59), Dates.Time(12, 30)],
+        datetime=DateTime[DateTime(1900), DateTime(1970), DateTime(2100, 1, 2)],
+        micros=Union{Missing,Parquet.Timestamp{:micros}}[missing,
+            Parquet.Timestamp(Int64(5), :micros, true), Parquet.Timestamp(Int64(-5), :micros, true)],
+        dec=Parquet.DataDecimals.Decimal{20,2,Int128}[
+            reinterpret(Parquet.DataDecimals.Decimal{20,2,Int128}, Int128(v)) for v in (1, -99, 10^15)],
+        pdec=Parquet.Decimal[Parquet.Decimal(12, 1), Parquet.Decimal(-3, 1), Parquet.Decimal(0, 1)],
+        uuid=Parquet.UUIDs.UUID[Parquet.UUIDs.UUID(UInt128(i)) for i in 1:3],
+        json=Parquet.JSONValue[Parquet.JSONValue(codeunits(v)) for v in ("1", "[]", "{}")],
+        interval=Parquet.Interval[Parquet.Interval(1, 2, 3), Parquet.Interval(0, 0, 0),
+            Parquet.Interval(4, 5, 6)],
+        enum=Parquet.LogicalColumn(["x", "y", "x"], :enum),
+        nulls=Vector{Missing}(missing, 3),
+    )
+    @test all(Parquet._flatwritable, values(table))
+    encode(source, options) = (io = IOBuffer(); Parquet.write(io, source; options...); take!(io))
+    for options in ((;), (pageversion=:v2, codec=:zstd, dictionary=true, pagesize=16,
+            rowgroupsize=1), (statistics=false, pageindex=false, codec=:snappy,
+            encoding=(i32=:delta_binary_packed, f64=:byte_stream_split, s=:delta_byte_array)))
+        @test encode(table, options) == encode(NestedPathTable(table), options)
+    end
 end
 
 @testset "exact bounded footer encoding" begin

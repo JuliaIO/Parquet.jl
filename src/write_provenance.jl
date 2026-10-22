@@ -1766,8 +1766,71 @@ function _provenancefinishfields(semantic::_NestedSchemaPlan,
     return fields
 end
 
+# One flat leaf of a stored schema: every row is one entry at repetition level 0.
+function _provenanceflatcolumn(values::AbstractVector, leaf::_NestedLeafPlan,
+        rows::Int, limits::Limits, budget::_LiveByteBudget)
+    length(values) == rows || throw(ArgumentError(
+        "physical leaf $(repr(join(leaf.source.path, "."))) has " *
+        "$(length(values)) values for $rows rows"))
+    element = leaf.source.element
+    expected = _provenanceleaflogicaltype(leaf)
+    required = _provenancerequired(leaf, false)
+    absent = UInt64(leaf.parent_definition)
+    present = UInt64(leaf.present_definition)
+    definition = Vector{UInt64}(undef, rows)
+    dense = _physicaleltype(element.type_)[]
+    sizehint!(dense, rows)
+    payload = Int64(0)
+    for (index, value) in enumerate(values)
+        if ismissing(value)
+            required && throw(ArgumentError(
+                "required physical leaf $(repr(join(leaf.source.path, "."))) is missing"))
+            definition[index] = absent
+            continue
+        end
+        value isa expected || throw(ArgumentError(
+            "physical leaf $(repr(join(leaf.source.path, "."))) contains " *
+            "$(typeof(value)); expected $expected"))
+        payload = _materializedsum(payload,
+            _nestedwriteleafpayload(element, value, limits))
+        definition[index] = present
+        push!(dense, _nestedwritenormalizephysical(element, value, limits))
+    end
+    count = _NestedWriteLeafCount(Int64(rows), Int64(length(dense)), payload)
+    _reserve!(budget, _nestedwritebuilderbytes(count, eltype(dense)))
+    builder = _NestedWriteLeafBuilder(zeros(UInt64, rows), definition, dense,
+        rows, length(dense), payload)
+    return _nestedwritecolumn(builder, leaf, rows, budget)
+end
+
+function _provenanceflat(table::Table, semantic::_NestedSchemaPlan)
+    return _isflattableplan(semantic) &&
+        length(Tables.columnnames(table)) == length(semantic.root.children)
+end
+
+# Flat stored schemas skip the nested shredder.
+function _provenanceflatfields(table::Table, semantic::_NestedSchemaPlan,
+        rows::Int, limits::Limits, budget::_LiveByteBudget)
+    children = semantic.root.children
+    names = Tables.columnnames(table)
+    sources = Base.values(table.columns)
+    _reservearray!(budget, WriteFieldPlan, length(children))
+    fields = WriteFieldPlan[]
+    sizehint!(fields, length(children))
+    for (index, child) in enumerate(children)
+        String(names[index]) == child.source.element.name || throw(ArgumentError(
+            "table column name or order no longer matches the stored Parquet " *
+            "schema at position $index"))
+        column = _provenanceflatcolumn(sources[index], child, rows, limits, budget)
+        _reserveobjects!(budget)
+        push!(fields, WriteFieldPlan(
+            _provenancefragment(child.source, limits, budget), WriteColumn[column]))
+    end
+    return fields
+end
+
 function _provenancewritefields(table::Table, limits::Limits,
-        budget::_LiveByteBudget, encoding, dictionary::Bool)
+        budget::_LiveByteBudget, encoding, dictionary::Bool; flat::Bool=true)
     start = _budgetused(budget)
     try
         rows = table.rows
@@ -1776,6 +1839,14 @@ function _provenancewritefields(table::Table, limits::Limits,
         elements, schema = _provenancefreshschema(table, limits, budget)
         semantic = _nestedplan(schema; limits=limits, budget=budget)
         _provenancerejectleafless(semantic.root, budget)
+        if flat && _provenanceflat(table, semantic)
+            choices, choicecharge = _preflightwriteencoding(semantic, encoding,
+                dictionary, budget)
+            _release!(budget, choicecharge)
+            fields = _provenanceflatfields(table, semantic, rows, limits, budget)
+            _reserveobjects!(budget)
+            return _ProvenanceWriteFields(fields, elements, schema), rows
+        end
         topology = _provenancetopology(table, limits, budget)
         bindings = _provenancebindings(table, semantic, limits, budget,
             topology)

@@ -239,19 +239,13 @@ function Base.getindex(values::WNChangingStrings, ::Int)
     return values.calls[] <= 2 ? values.small : values.large
 end
 
-function wnmutationattack(large::String)
+# Scalar columns are read once, so a source that changes between reads still
+# writes one consistent column, checked against the limits it was read under.
+function wnchangingsource(large::String)
     source = WNChangingStrings(Ref(0), "x", large)
     limits = Parquet.Limits(max_materialized_bytes=50_000)
-    budget = Parquet._LiveByteBudget(limits)
-    try
-        Parquet._writefields((value=source,), limits, budget)
-        error("expected nested writer mutation rejection")
-    catch err
-        err isa ArgumentError || rethrow()
-    end
-    @assert source.calls[] == 3
-    @assert Parquet._budgetused(budget) == 0
-    return
+    fields, rows = Parquet._writefields((value=source,), limits)
+    return source.calls[], rows, only(only(fields).leaves).values
 end
 
 function wninspect(bytes::Vector{UInt8})
@@ -1118,9 +1112,10 @@ end
     @test tracked.reads[] == 0
     @test Parquet._budgetused(payloadbudget) == 0
 
-    large = repeat("y", 100_000)
-    wnmutationattack(large)
-    @test @allocated(wnmutationattack(large)) < 50_000
+    calls, rows, values = wnchangingsource(repeat("y", 100_000))
+    @test calls == 1
+    @test rows == 1
+    @test values == ["x"]
 
     scalar = WNZeroVector(Int32[10,20])
     table = Parquet.Table(Parquet._encodefile((value=scalar,)))
