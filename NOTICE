@@ -1,0 +1,7 @@
+Parquet.jl includes the Apache Parquet format IDL at `thrift/parquet.thrift`.
+The IDL is licensed under the Apache License, Version 2.0.
+It is pinned from apache/parquet-format commit
+`a9f9c3a52bd1d6309038f4d2d3a308978b55c377` (format 2.13.0).
+
+Apache Parquet
+Copyright The Apache Software Foundation

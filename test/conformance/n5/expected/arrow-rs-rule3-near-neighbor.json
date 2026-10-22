@@ -1,0 +1,274 @@
+{
+  "evidence_version": 1,
+  "oracle": {
+    "name": "arrow-rs",
+    "version": "59.2.0",
+    "commit": "782e5a685501a9db6cc8e9a3b7cbff894940c47a",
+    "rust_toolchain": "1.96.1",
+    "rustc": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+    "cargo": "cargo 1.96.1 (356927216 2026-06-26)"
+  },
+  "action": "diagnose-rule3-near-neighbor",
+  "files": [
+    {
+      "case_id": "arrow-rs-list-rule3-unannotated-near-neighbor",
+      "file_name": "arrow-rs-list-rule3-unannotated-near-neighbor_v1.parquet",
+      "sha256": "40eb4521da12a9bd5db38cfe9e1f31dd91bd1095ec5b24b94f9a02318e40128f",
+      "file_bytes": 243,
+      "rows": 4,
+      "row_groups": 1,
+      "physical_schema": "message schema {\n  OPTIONAL group values (LIST) {\n    REPEATED group list {\n      REPEATED INT32 element;\n    }\n  }\n}\n",
+      "columns": [
+        {
+          "path": [
+            "values",
+            "list",
+            "element"
+          ],
+          "physical_type": "INT32",
+          "maximum_definition_level": 3,
+          "maximum_repetition_level": 2,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 4,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                2,
+                1,
+                1
+              ],
+              "definition": [
+                0,
+                1,
+                2,
+                3,
+                3,
+                2,
+                3
+              ],
+              "dense_values": [
+                1,
+                2,
+                3
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v1",
+                  "encoding": "PLAIN",
+                  "values": 7,
+                  "rows": 4
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "arrow": {
+        "status": "ok",
+        "schema": [
+          {
+            "name": "values",
+            "nullable": true,
+            "data_type": {
+              "list": {
+                "data_type": {
+                  "list": {
+                    "data_type": "Int32",
+                    "metadata": {},
+                    "name": "element",
+                    "nullable": false
+                  }
+                },
+                "metadata": {},
+                "name": "element",
+                "nullable": false
+              }
+            },
+            "metadata": {}
+          }
+        ],
+        "canonical_rows": [
+          [
+            {
+              "field": "values",
+              "value": null
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": []
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": [
+                []
+              ]
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": [
+                [
+                  1,
+                  2
+                ],
+                [],
+                [
+                  3
+                ]
+              ]
+            }
+          ]
+        ],
+        "json_rows": [
+          "{\"values\":null}",
+          "{\"values\":[]}",
+          "{\"values\":[[]]}",
+          "{\"values\":[[1,2],[],[3]]}"
+        ],
+        "ordered_map_rows": null,
+        "diagnostic": null
+      }
+    },
+    {
+      "case_id": "arrow-rs-list-rule3-unannotated-near-neighbor",
+      "file_name": "arrow-rs-list-rule3-unannotated-near-neighbor_v2.parquet",
+      "sha256": "4fe0319ea46248612489d845eb6fdbfa127077f06a9e7a2efc14fa67def66ce1",
+      "file_bytes": 238,
+      "rows": 4,
+      "row_groups": 1,
+      "physical_schema": "message schema {\n  OPTIONAL group values (LIST) {\n    REPEATED group list {\n      REPEATED INT32 element;\n    }\n  }\n}\n",
+      "columns": [
+        {
+          "path": [
+            "values",
+            "list",
+            "element"
+          ],
+          "physical_type": "INT32",
+          "maximum_definition_level": 3,
+          "maximum_repetition_level": 2,
+          "row_groups": [
+            {
+              "row_group": 0,
+              "rows": 4,
+              "compression": "UNCOMPRESSED",
+              "repetition": [
+                0,
+                0,
+                0,
+                0,
+                2,
+                1,
+                1
+              ],
+              "definition": [
+                0,
+                1,
+                2,
+                3,
+                3,
+                2,
+                3
+              ],
+              "dense_values": [
+                1,
+                2,
+                3
+              ],
+              "pages": [
+                {
+                  "kind": "data",
+                  "version": "v2",
+                  "encoding": "DELTA_BINARY_PACKED",
+                  "values": 7,
+                  "rows": 4
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "arrow": {
+        "status": "ok",
+        "schema": [
+          {
+            "name": "values",
+            "nullable": true,
+            "data_type": {
+              "list": {
+                "data_type": {
+                  "list": {
+                    "data_type": "Int32",
+                    "metadata": {},
+                    "name": "element",
+                    "nullable": false
+                  }
+                },
+                "metadata": {},
+                "name": "element",
+                "nullable": false
+              }
+            },
+            "metadata": {}
+          }
+        ],
+        "canonical_rows": [
+          [
+            {
+              "field": "values",
+              "value": null
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": []
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": [
+                []
+              ]
+            }
+          ],
+          [
+            {
+              "field": "values",
+              "value": [
+                [
+                  1,
+                  2
+                ],
+                [],
+                [
+                  3
+                ]
+              ]
+            }
+          ]
+        ],
+        "json_rows": [
+          "{\"values\":null}",
+          "{\"values\":[]}",
+          "{\"values\":[[]]}",
+          "{\"values\":[[1,2],[],[3]]}"
+        ],
+        "ordered_map_rows": null,
+        "diagnostic": null
+      }
+    }
+  ]
+}

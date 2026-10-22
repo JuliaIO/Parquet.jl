@@ -1,223 +1,188 @@
-# A logical type map can be provided during schema construction.
-# It contains mapping of a column to a logical type and the converter function to be applied.
-# Columns can be indentified either by their actual type or column name (the full path in the schema)
-const TLogicalTypeMap = Dict{Union{Int32,Vector{String}},Tuple{DataType,Function}}
+struct SchemaNode
+    element::Metadata.SchemaElement
+    path::Vector{String}
+    max_definition_level::Int16
+    max_repetition_level::Int16
+    column_index::Int32
+    children::Vector{SchemaNode}
+end
 
-# schema and helper methods
-mutable struct Schema
-    schema::Vector{SchemaElement}
-    map_logical_types::TLogicalTypeMap
-    name_lookup::Dict{Vector{String},SchemaElement}
-    type_lookup::Dict{Vector{String},Union{DataType,Union}}
-    nttype_lookup::Dict{Vector{String},Union{DataType,Union}}
+struct Schema
+    root::SchemaNode
+    leaves::Vector{SchemaNode}
+end
 
-    function Schema(elems::Vector{SchemaElement}, map_logical_types::TLogicalTypeMap=TLogicalTypeMap())
-        name_lookup = Dict{Vector{String},SchemaElement}()
-        name_stack = String[]
-        nchildren_stack = Int[]
+function _schemalevels(element::Metadata.SchemaElement, definition::Integer,
+    repetition::Integer)
+    kind = element.repetition_type
+    kind === nothing && throw(FormatError("schema element $(repr(element.name)) has no repetition type"))
+    if kind == Metadata.FieldRepetitionType.REQUIRED
+        return (definition, repetition)
+    elseif kind == Metadata.FieldRepetitionType.OPTIONAL
+        return (definition + 1, repetition)
+    elseif kind == Metadata.FieldRepetitionType.REPEATED
+        return (definition + 1, repetition + 1)
+    end
+    throw(FormatError("schema element $(repr(element.name)) has an unknown repetition type $(kind.value)"))
+end
 
-        for idx in 1:length(elems)
-            sch = elems[idx]
-            nested_name = [name_stack; sch.name]
-            name_lookup[nested_name] = sch
+function _schemachildcount(element::Metadata.SchemaElement)
+    count = element.num_children
+    count === nothing && throw(FormatError("group schema element $(repr(element.name)) has no child count"))
+    count >= 0 || throw(FormatError("group schema element $(repr(element.name)) has a negative child count"))
+    return Int(count)
+end
 
-            if !haskey(map_logical_types, nested_name)
-                if is_logical_string(sch)
-                    map_logical_types[nested_name] = (String, logical_string)
-                elseif is_logical_timestamp(sch)
-                    map_logical_types[nested_name] = (DateTime, logical_timestamp)
-                elseif is_logical_decimal(sch)
-                    map_logical_types[nested_name] = map_logical_decimal(sch.precision, sch.scale)
-                end
-            end
+function _validateschemashape(element::Metadata.SchemaElement, limits::Limits)
+    if element.type_ === nothing
+        return _schemachildcount(element)
+    end
+    children = something(element.num_children, Int32(0))
+    children == 0 || throw(FormatError("primitive schema element $(repr(element.name)) has children"))
+    if element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY
+        length = element.type_length
+        length !== nothing && length > 0 ||
+            throw(FormatError("fixed-length schema element $(repr(element.name)) has no positive length"))
+        _checklimit(:string_bytes, length, limits.max_string_bytes)
+    end
+    return 0
+end
 
-            if (idx > 1) && (num_children(sch) > 0)
-                push!(nchildren_stack, sch.num_children)
-                push!(name_stack, sch.name)
-            elseif !isempty(nchildren_stack)
-                if nchildren_stack[end] == 1
-                    pop!(nchildren_stack)
-                    pop!(name_stack)
-                else
-                    nchildren_stack[end] -= 1
-                end
-            end
+mutable struct _SchemaParseFrame
+    element::Metadata.SchemaElement
+    path::Vector{String}
+    definition::Int16
+    repetition::Int16
+    children::Vector{SchemaNode}
+    expected::Int
+    completed::Int
+    parent::Union{Nothing,_SchemaParseFrame}
+end
+
+function _schemapath(parent::Vector{String}, name::String,
+    budget::_LiveByteBudget)
+    count = length(parent) + 1
+    _reservearray!(budget, String, count)
+    path = Vector{String}(undef, count)
+    copyto!(path, 1, parent, 1, length(parent))
+    path[end] = name
+    return path
+end
+
+function _schemaparsestart(elements::Vector{Metadata.SchemaElement}, index::Int,
+        parentpath::Vector{String}, definition::Integer, repetition::Integer,
+        depth::Int,
+        leaves::Vector{SchemaNode}, limits::Limits, budget::_LiveByteBudget,
+        parent; root::Bool=false)
+    index <= length(elements) || throw(FormatError("flattened schema ends before all declared children"))
+    element = elements[index]
+    children = _validateschemashape(element, limits)
+    nextdefinition, nextrepetition = root ? (definition, repetition) :
+        _schemalevels(element, definition, repetition)
+    if element.type_ === nothing
+        children <= length(elements) - index || throw(FormatError(
+            "group schema element $(repr(element.name)) declares more direct " *
+            "children than remain in the flattened schema"))
+    end
+    _checklimit(:metadata_depth, depth, limits.max_metadata_depth)
+    nextdefinition <= typemax(Int16) || throw(FormatError("schema definition level exceeds Int16"))
+    nextrepetition <= typemax(Int16) || throw(FormatError("schema repetition level exceeds Int16"))
+    path = root ? parentpath : _schemapath(parentpath, element.name, budget)
+    if element.type_ !== nothing
+        ordinal = try
+            Base.checked_add(length(leaves), 1)
+        catch err
+            err isa OverflowError || rethrow()
+            throw(LimitError(:container_elements, typemax(Int64),
+                Int64(typemax(Int32))))
         end
-        new(elems, map_logical_types, name_lookup, Dict{Vector{String},Union{DataType,Union}}(), Dict{Vector{String},Union{DataType,Union}}())
+        ordinal <= typemax(Int32) || throw(LimitError(:container_elements,
+            ordinal, Int64(typemax(Int32))))
+        column = Int32(ordinal)
+        _reservearray!(budget, SchemaNode, 0)
+        _reserveobjects!(budget)
+        node = SchemaNode(element, path, Int16(nextdefinition), Int16(nextrepetition), column, SchemaNode[])
+        push!(leaves, node)
+        return (node, nothing, index + 1)
     end
+    _checklimit(:container_elements, children,
+        limits.max_container_elements)
+    _reservearray!(budget, SchemaNode, children)
+    nodes = SchemaNode[]
+    sizehint!(nodes, children)
+    _reserveobjects!(budget)
+    frame = _SchemaParseFrame(element, path, Int16(nextdefinition),
+        Int16(nextrepetition), nodes, children, 0, parent)
+    return (nothing, frame, index + 1)
 end
 
-leafname(schname::T) where {T <: AbstractVector{String}} = [schname[end]]
-
-parentname(schname::T) where {T <: AbstractVector{String}} = istoplevel(schname) ? schname : schname[1:(end-1)]
-
-istoplevel(schname::Vector) = !(length(schname) > 1)
-
-elem(sch::Schema, schname::T) where {T <: AbstractVector{String}} = sch.name_lookup[schname]
-function elemindex(sch::Schema, schname::T) where {T <: AbstractVector{String}}
-    schema_element = elem(sch, schname)
-    findfirst(x->x===schema_element, sch.schema)
-end
-
-isrepetitiontype(schelem::SchemaElement, repetition_type) = hasproperty(schelem, :repetition_type) && (schelem.repetition_type == repetition_type)
-
-isrequired(sch::Schema, schname::T) where {T <: AbstractVector{String}} = isrequired(elem(sch, schname))
-isrequired(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.REQUIRED)
-
-isoptional(sch::Schema, schname::T) where {T <: AbstractVector{String}} = isoptional(elem(sch, schname))
-isoptional(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.OPTIONAL)
-
-isrepeated(sch::Schema, schname::T) where {T <: AbstractVector{String}} = isrepeated(elem(sch, schname))
-isrepeated(schelem::SchemaElement) = isrepetitiontype(schelem, FieldRepetitionType.REPEATED)
-
-is_logical_string(sch::SchemaElement) = hasproperty(sch, :_type) && (sch._type === _Type.BYTE_ARRAY) && ((hasproperty(sch, :converted_type) && (sch.converted_type === ConvertedType.UTF8)) || (hasproperty(sch, :logicalType) && hasproperty(sch.logicalType, :STRING)))
-
-# converted_type is usually not set for INT96 types, but they are used exclusively used for timestamps only
-is_logical_timestamp(sch::SchemaElement) = hasproperty(sch, :_type) && (sch._type === _Type.INT96)
-
-function is_logical_decimal(sch::SchemaElement)
-    if hasproperty(sch, :_type)
-        if (sch._type === _Type.FIXED_LEN_BYTE_ARRAY) || (sch._type === _Type.INT64)
-            if (hasproperty(sch, :converted_type) && (sch.converted_type === ConvertedType.DECIMAL)) || (hasproperty(sch, :logicalType) && hasproperty(sch.logicalType, :DECIMAL))
-                return true
-            end
+function _parseschema(elements::Vector{Metadata.SchemaElement},
+        leaves::Vector{SchemaNode}, rootpath::Vector{String}, limits::Limits,
+        budget::_LiveByteBudget)
+    node, frame, nextindex = _schemaparsestart(elements, 1, rootpath, 0, 0, 1,
+        leaves, limits, budget, nothing; root=true)
+    node === nothing || throw(AssertionError("schema root parser returned a primitive"))
+    current = frame::_SchemaParseFrame
+    while true
+        if current.completed == current.expected
+            _reserveobjects!(budget)
+            completed = SchemaNode(current.element, current.path,
+                current.definition, current.repetition, Int32(0), current.children)
+            parent = current.parent
+            _release!(budget, _MATERIALIZED_OBJECT_BYTES)
+            parent === nothing && return (completed, nextindex)
+            current = parent::_SchemaParseFrame
+            push!(current.children, completed)
+            current.completed += 1
+            continue
+        end
+        child, childframe, nextindex = _schemaparsestart(elements, nextindex,
+            current.path, current.definition, current.repetition,
+            length(current.path) + 2, leaves, limits, budget, current)
+        if childframe === nothing
+            push!(current.children, child::SchemaNode)
+            current.completed += 1
+        else
+            current = childframe::_SchemaParseFrame
         end
     end
-    false
 end
 
-function path_in_schema(sch::Schema, schelem::SchemaElement)
-    for (n,v) in sch.name_lookup
-        (v === schelem) && return n
-    end
-    error("schema element not found in schema")
-end
-
-function logical_converter(sch::Schema, schname::T) where {T <: AbstractVector{String}}
-    elem = sch.name_lookup[schname]
-
-    if schname in keys(sch.map_logical_types)
-        _logical_type, converter = sch.map_logical_types[schname]
-        return converter
-    elseif hasproperty(elem, :_type) && (elem._type in keys(sch.map_logical_types))
-        _logical_type, converter = sch.map_logical_types[elem._type]
-        return converter
-    else
-        return identity
-    end
-end
-
-function logical_convert(sch::Schema, schname::T, val) where {T <: AbstractVector{String}}
-    elem = sch.name_lookup[schname]
-
-    if schname in keys(sch.map_logical_types)
-        logical_type, converter = sch.map_logical_types[schname]
-        converter(val)::logical_type
-    elseif hasproperty(elem, :_type) && (elem._type in keys(sch.map_logical_types))
-        logical_type, converter = sch.map_logical_types[elem._type]
-        converter(val)::logical_type
-    else
-        val
+function Schema(elements::Vector{Metadata.SchemaElement}; limits::Limits=Limits(),
+    budget::_LiveByteBudget=_LiveByteBudget(limits))
+    start = _budgetused(budget)
+    try
+        isempty(elements) && throw(FormatError("file metadata has an empty schema"))
+        elements[1].type_ === nothing || throw(FormatError("schema root must be a group"))
+        rootrepetition = elements[1].repetition_type
+        (rootrepetition === nothing ||
+            rootrepetition == Metadata.FieldRepetitionType.REQUIRED) ||
+            throw(FormatError("schema root can only use the legacy REQUIRED marker"))
+        rootchildren = _validateschemashape(elements[1], limits)
+        rootchildren <= length(elements) - 1 || throw(FormatError(
+            "group schema element $(repr(elements[1].name)) declares more direct " *
+            "children than remain in the flattened schema"))
+        iszero(rootchildren) && length(elements) > 1 && throw(FormatError(
+            "flattened schema has unclaimed elements"))
+        _checklimit(:container_elements, length(elements), limits.max_container_elements)
+        _reservearray!(budget, SchemaNode, length(elements))
+        leaves = SchemaNode[]
+        sizehint!(leaves, length(elements))
+        _reservearray!(budget, String, 0)
+        rootpath = String[]
+        root, nextindex = _parseschema(elements, leaves, rootpath, limits, budget)
+        nextindex == length(elements) + 1 || throw(FormatError(
+            "flattened schema has unclaimed elements"))
+        _reserveobjects!(budget)
+        return Schema(root, leaves)
+    catch
+        used = _budgetused(budget)
+        used > start && _release!(budget, used - start)
+        rethrow()
     end
 end
 
-elemtype(sch::Schema, schname::T) where {T <: AbstractVector{String}} = get!(sch.type_lookup, schname) do
-    elem = sch.name_lookup[schname]
-
-    if schname in keys(sch.map_logical_types)
-        logical_type, _converter = sch.map_logical_types[schname]
-        logical_type
-    elseif hasproperty(elem, :_type) && (elem._type in keys(sch.map_logical_types))
-        logical_type, _converter = sch.map_logical_types[elem._type]
-        logical_type
-    else
-        elemtype(elem)
-    end
-end
-function elemtype(schelem::SchemaElement)
-    jtype = Nothing
-
-    if hasproperty(schelem, :_type)
-        jtype = PLAIN_JTYPES[schelem._type+1]
-    else
-        jtype = Dict{Symbol,Any} # this is a nested type
-    end
-
-    if (hasproperty(schelem, :_type) && (schelem._type == _Type.BYTE_ARRAY || schelem._type == _Type.FIXED_LEN_BYTE_ARRAY)) ||
-       (hasproperty(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REPEATED))  # array type
-        jtype = Vector{jtype}
-    end
-
-    jtype
-end
-
-ntcolstype(sch::Schema, schname::T) where {T <: AbstractVector{String}} = get!(sch.nttype_lookup, schname) do
-    ntcolstype(sch, sch.name_lookup[schname])
-end
-function ntcolstype(sch::Schema, schelem::SchemaElement)
-    @assert num_children(schelem) > 0
-    idx = findfirst(x->x===schelem, sch.schema)
-    children_range = (idx+1):(idx+schelem.num_children)
-    names = [Symbol(x.name) for x in sch.schema[children_range]]
-    types = [(num_children(x) > 0) ? ntelemtype(sch, path_in_schema(sch, x)) : elemtype(sch, path_in_schema(sch, x)) for x in sch.schema[children_range]]
-    optionals = [isoptional(x) for x in sch.schema[children_range]]
-    types = [Vector{opt ? Union{t,Missing} : t} for (t,opt) in zip(types, optionals)]
-    NamedTuple{(names...,),Tuple{types...}}
-end
-
-ntelemtype(sch::Schema, schname::T) where {T <: AbstractVector{String}} = get!(sch.nttype_lookup, schname) do
-    ntelemtype(sch, sch.name_lookup[schname])
-end
-function ntelemtype(sch::Schema, schelem::SchemaElement)
-    @assert num_children(schelem) > 0
-    idx = findfirst(x->x===schelem, sch.schema)
-    children_range = (idx+1):(idx+schelem.num_children)
-    repeated = hasproperty(schelem, :repetition_type) && (schelem.repetition_type == FieldRepetitionType.REPEATED)
-    names = [Symbol(x.name) for x in sch.schema[children_range]]
-    types = [(num_children(x) > 0) ? ntelemtype(sch, path_in_schema(sch, x)) : elemtype(sch, path_in_schema(sch, x)) for x in sch.schema[children_range]]
-    optionals = [isoptional(x) for x in sch.schema[children_range]]
-    types = [opt ? Union{t,Missing} : t for (t,opt) in zip(types, optionals)]
-    T = NamedTuple{(names...,),Tuple{types...}}
-    repeated ? Vector{T} : T
-end
-
-bit_or_byte_length(sch::Schema, schname::Vector{String}) = bit_or_byte_length(elem(sch, schname))
-bit_or_byte_length(schelem::SchemaElement) = hasproperty(schelem, :type_length) ? schelem.type_length : 0
-
-num_children(schelem::SchemaElement) = hasproperty(schelem, :num_children) ? schelem.num_children : 0
-
-function max_repetition_level(sch::Schema, schname::T) where {T <: AbstractVector{String}}
-    lev = isrepeated(sch, schname) ? 1 : 0
-    istoplevel(schname) ? lev : (lev + max_repetition_level(sch, parentname(schname)))
-end 
-
-function max_definition_level(sch::Schema, schname::T) where {T <: AbstractVector{String}}
-    lev = isrequired(sch, schname) ? 0 : 1
-    istoplevel(schname) ? lev : (lev + max_definition_level(sch, parentname(schname)))
-end
-
-tables_schema(parfile) = tables_schema(schema(parfile))
-function tables_schema(sch::Schema)
-    cols = Parquet.ntcolstype(sch, sch.schema[1])
-    colnames = fieldnames(cols)
-    coltypes = eltype.(fieldtypes(cols))
-    Tables.Schema(colnames, coltypes)
-end
-
-logical_decimal_unscaled_type(precision::Int32) = (precision < 5) ? UInt16 :
-    (precision < 10) ? UInt32 :
-    (precision < 19) ? UInt64 : UInt128
-
-function map_logical_decimal(precision::Int32, scale::Int32; use_float::Bool=false)
-    T = logical_decimal_unscaled_type(precision)
-    if scale == 0
-        # integral values
-        return (signed(T), (bytes)->logical_decimal_integer(bytes, T))
-    elseif use_float
-        # use Float64
-        return (Float64, (bytes)->logical_decimal_float64(bytes, T, scale))
-    else
-        # use Decimal
-        return (Decimal, (bytes)->logical_decimal_scaled(bytes, T, scale))
-    end
+function Schema(metadata::Metadata.FileMetaData; limits::Limits=Limits(),
+    budget::_LiveByteBudget=_LiveByteBudget(limits))
+    return Schema(metadata.schema; limits=limits, budget=budget)
 end

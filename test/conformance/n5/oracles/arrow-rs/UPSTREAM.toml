@@ -1,0 +1,11 @@
+arrow_rs_tag = "59.2.0"
+arrow_rs_commit = "782e5a685501a9db6cc8e9a3b7cbff894940c47a"
+rust_toolchain = "1.96.1"
+rust_channel_manifest_sha256 = "87eb76c53073e72b766083bed5530820694253b832a762d8385bda5759f03975"
+
+[crates]
+arrow_array = "59.2.0"
+arrow_cast = "59.2.0"
+arrow_json = "59.2.0"
+arrow_schema = "59.2.0"
+parquet = "59.2.0"
