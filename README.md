@@ -70,8 +70,6 @@ bounded and do not build an object tree. Binary DECIMAL conversion has its own
 
 Support is complete only after valid read coverage, valid write coverage when applicable, malformed-input coverage, and confirmation by an independent Parquet implementation.
 
-See [the development architecture](docs/dev/architecture.md) and [the machine-readable feature ledger](test/conformance/features.toml).
-
 ## License
 
 Parquet.jl is available under the MIT license.

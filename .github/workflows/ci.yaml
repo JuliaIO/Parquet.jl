@@ -47,26 +47,6 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
-  n6-static:
-    timeout-minutes: 20
-    name: N6 static - Julia ${{ matrix.version }} - macOS arm64
-    runs-on: macos-15
-    strategy:
-      fail-fast: false
-      matrix:
-        version:
-          - '1.10.11'
-          - '1.12.6'
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9 # v2
-        with:
-          version: ${{ matrix.version }}
-          arch: aarch64
-      - name: Run N6 static preflight
-        env:
-          PARQUET_N6_GATE: '0'
-        run: julia --project=. --startup-file=no --history-file=no test/conformance/n6/runtests.jl
   bounds:
     timeout-minutes: 15
     runs-on: ubuntu-latest

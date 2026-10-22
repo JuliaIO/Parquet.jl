@@ -5,8 +5,7 @@ parquet-compatibility/
 julia-parquet-compatibility/
 .vscode/settings.json
 docs/build/
-# Resolved environments are never part of the branch. The N6 gate pins its own
-# manifest under test/conformance/n6/julia/.
+# Resolved environments are never part of the branch.
 /Manifest.toml
 /docs/Manifest.toml
 /test/parquet-testing/
