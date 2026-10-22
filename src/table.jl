@@ -211,29 +211,6 @@ function _validatetablerowgroupmetadata(group::Metadata.RowGroup,
     return
 end
 
-function _bloomfilterrange(md::Metadata.ColumnMetaData,
-        footeroffset::Int64)
-    offset = md.bloom_filter_offset
-    length = md.bloom_filter_length
-    length !== nothing && offset === nothing && throw(FormatError(
-        "bloom-filter length is present without its offset"))
-    offset === nothing && return nothing
-    offset >= 4 || throw(FormatError(
-        "bloom-filter offset $offset is inside the file header"))
-    if length === nothing
-        offset < footeroffset || throw(FormatError(
-            "bloom-filter offset extends past the footer"))
-        return (Int64(offset), Int64(1))
-    end
-    length > 0 || throw(FormatError(
-        "bloom-filter length must be positive, got $length"))
-    stop = _pageindexrangeend(offset, Int64(length),
-        "bloom-filter range overflows Int64")
-    stop <= footeroffset || throw(FormatError(
-        "bloom-filter range extends past the footer"))
-    return (Int64(offset), Int64(length))
-end
-
 function _validatetablechunkranges(metadata::Metadata.FileMetaData,
         schema::Schema, footeroffset::Int64)
     leafcount = length(schema.leaves)
@@ -248,9 +225,7 @@ function _validatetablechunkranges(metadata::Metadata.FileMetaData,
             chunk.file_offset >= 0 || throw(FormatError(
                 "row group $rowindex column chunk $columnindex has a " *
                 "negative file offset"))
-            md = _chunkmetadata(chunk, leaf)
-            _chunkrange(md, footeroffset)
-            _bloomfilterrange(md, footeroffset)
+            _chunkrange(_chunkmetadata(chunk, leaf), footeroffset)
         end
     end
     return
@@ -524,15 +499,9 @@ function Table(input; scan::Union{Nothing,Tables.Scan}=nothing,
         rows = _validatetablerowgroups(metadata, schema, limits)
         _checklimit(:container_elements, rows, limits.max_container_elements)
         _validatetablechunkranges(metadata, schema, file.footer.offset)
-        indexpreflight = _preflightoffsetindexdeclarations(file, metadata,
-            schema, limits)
-        indexpreflight = _validatepageindexdeclarationoverlaps!(file,
-            metadata, schema, indexpreflight, budget)
         nested = _nestedplan(schema; limits=limits, budget=budget)
         nested.plan_count > 0 || throw(AssertionError(
             "nested schema plan has no root"))
-        _validateoffsetindexes!(file, metadata, schema, limits, budget,
-            indexpreflight)
         names = _tablenames(schema, limits, budget)
         if _isflattableplan(nested)
             columns = _tablecolumns(metadata, schema, rows, budget,

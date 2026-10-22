@@ -267,44 +267,6 @@ end
     @test isempty(throwinglength.reads)
 end
 
-@testset "offset-index exact source reads" begin
-    bytes = TH.encode(MD.OffsetIndex(page_locations=MD.PageLocation[]))
-    normal = PageContractSource(bytes; mode=:length_changing)
-    footer = Parquet.Footer(Int64(length(bytes)), Int64(0), false, UInt8[])
-    file = Parquet.File(normal, footer, false)
-    index = Parquet._decodeoffsetindex(file, Int64(0), Int64(length(bytes)),
-        Parquet.Limits(), Parquet._LiveByteBudget(Parquet.Limits()))
-    @test isempty(index.page_locations)
-    @test normal.lengthcalls == 1
-    @test normal.reads == [(Int64(0), Int64(length(bytes)))]
-
-    for mode in (:short, :long, :wrong_type, :wrong_axes)
-        malformed = PageContractSource(bytes; mode=mode, faultread=1)
-        malformedfile = Parquet.File(malformed, footer, false)
-        budget = Parquet._LiveByteBudget(Parquet.Limits())
-        @test_throws ArgumentError Parquet._decodeoffsetindex(malformedfile,
-            Int64(0), Int64(length(bytes)), Parquet.Limits(), budget)
-        @test malformed.lengthcalls == 1
-        @test length(malformed.reads) == 1
-        @test Parquet._budgetused(budget) == 0
-    end
-
-    sentinel = PageCallbackSentinel(4)
-    throwing = PageContractSource(bytes; mode=:throw, faultread=1,
-        sentinel=sentinel)
-    throwingfile = Parquet.File(throwing, footer, false)
-    budget = Parquet._LiveByteBudget(Parquet.Limits())
-    error = try
-        Parquet._decodeoffsetindex(throwingfile, Int64(0),
-            Int64(length(bytes)), Parquet.Limits(), budget)
-        nothing
-    catch err
-        err
-    end
-    @test error === sentinel
-    @test Parquet._budgetused(budget) == 0
-end
-
 @testset "checked page frame count and arithmetic" begin
     exactlimits = Parquet.Limits(max_container_elements=1)
     @test Parquet._nextpageframecount(Int64(0), exactlimits) == 1

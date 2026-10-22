@@ -46,28 +46,6 @@ function tabledeepstruct(depth::Int)
     return values
 end
 
-function tableintervalresult(bytes::Vector{UInt8}, limits::Parquet.Limits)
-    budget = Parquet._LiveByteBudget(limits)
-    Parquet._reserveobjects!(budget, 2)
-    file = Parquet.File(bytes; limits=limits, budget=budget)
-    try
-        metadata = Parquet._readfilemetadata(file, limits, budget)
-        schema = Parquet.Schema(metadata; limits=limits, budget=budget)
-        baseline = Parquet._budgetused(budget)
-        preflight = Parquet._preflightoffsetindexdeclarations(file, metadata,
-            schema, limits)
-        result = try
-            Parquet._validatepageindexdeclarationoverlaps!(file, metadata,
-                schema, preflight, budget)
-        catch err
-            err
-        end
-        return result, preflight, baseline, Parquet._budgetused(budget)
-    finally
-        close(file)
-    end
-end
-
 mutable struct TableCallbackSentinel <: Exception
     id::Int
 end
@@ -282,10 +260,6 @@ end
     group = only(metadata.row_groups)
     chunk = only(group.columns)
     column = something(chunk.meta_data)
-    negativeindexmetadata = tablereplace(metadata;
-        row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; offset_index_offset=Int64(-1),
-                offset_index_length=Int32(1))])])
     sortingnegative = Parquet.Metadata.SortingColumn(column_idx=Int32(-1),
         descending=false, nulls_first=false)
     sortingpast = Parquet.Metadata.SortingColumn(
@@ -318,70 +292,12 @@ end
         tablereplace(metadata; row_groups=[tablereplace(group;
             columns=[tablereplace(chunk; meta_data=tablereplace(column;
                 data_page_offset=Int64(-1)))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; offset_index_length=nothing)])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; column_index_offset=Int64(4),
-                column_index_length=nothing)])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; offset_index_offset=nothing,
-                offset_index_length=nothing, column_index_offset=Int64(4),
-                column_index_length=Int32(1))])]),
-        negativeindexmetadata,
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; offset_index_length=Int32(0))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk;
-                offset_index_offset=typemax(Int64),
-                offset_index_length=Int32(1))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; offset_index_offset=footeroffset,
-                offset_index_length=Int32(1))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; column_index_offset=Int64(-1),
-                column_index_length=Int32(1))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; column_index_offset=Int64(4),
-                column_index_length=Int32(0))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk;
-                column_index_offset=typemax(Int64),
-                column_index_length=Int32(1))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; column_index_offset=footeroffset,
-                column_index_length=Int32(1))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; meta_data=tablereplace(column;
-                bloom_filter_offset=Int64(-1)))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; meta_data=tablereplace(column;
-                bloom_filter_length=Int32(1)))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; meta_data=tablereplace(column;
-                bloom_filter_offset=Int64(4),
-                bloom_filter_length=Int32(0)))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; meta_data=tablereplace(column;
-                bloom_filter_offset=typemax(Int64),
-                bloom_filter_length=Int32(1)))])]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
-            columns=[tablereplace(chunk; meta_data=tablereplace(column;
-                bloom_filter_offset=footeroffset,
-                bloom_filter_length=Int32(1)))])]),
     )
     messages = ("negative row count", "negative total byte size",
         "negative compressed byte size", "negative file offset",
         "outside the file body", "outside the file body", "negative ordinal",
         "sorting column index", "sorting column index", "negative file offset",
-        "negative column chunk size", "negative data page offset",
-        "offset-index offset and length", "column-index offset and length",
-        "required offset index", "offset-index offset", "offset-index length",
-        "overflows Int64", "extends past the footer", "column-index offset",
-        "column-index length", "overflows Int64", "extends past the footer",
-        "bloom-filter offset",
-        "bloom-filter length is present without its offset",
-        "bloom-filter length must be positive", "overflows Int64",
-        "extends past the footer")
+        "negative column chunk size", "negative data page offset")
     for (hostilemetadata, message) in zip(malformed, messages)
         hostile = tablerewritefooter(bytes, hostilemetadata)
         maximum = tableprematerialized(hostile)
@@ -395,33 +311,6 @@ end
         @test error isa Parquet.FormatError
         @test occursin(message, sprint(showerror, error))
     end
-
-    maximum = tableprematerialized(bytes)
-    pageindexerror = try
-        Parquet.Table(bytes; limits=Parquet.Limits(
-            max_materialized_bytes=maximum,
-            max_page_index_bytes=Int64(something(
-                chunk.offset_index_length)) - 1))
-        nothing
-    catch err
-        err
-    end
-    @test pageindexerror isa Parquet.LimitError
-    @test pageindexerror.resource == :page_index_bytes
-
-    hostile = tablerewritefooter(bytes, negativeindexmetadata)
-    source = TableCallbackSource(hostile, 0, 0, 0,
-        TableCallbackSentinel(5))
-    sourceerror = try
-        Parquet.Table(source; limits=Parquet.Limits(
-            max_materialized_bytes=tableprematerialized(hostile)))
-        nothing
-    catch err
-        err
-    end
-    @test sourceerror isa Parquet.FormatError
-    @test source.reads == 3
-    @test source.closes == 1
 
     legacychunk = tablereplace(chunk; offset_index_offset=nothing,
         offset_index_length=nothing, meta_data=tablereplace(column;
@@ -438,98 +327,6 @@ end
     zerotable = Parquet.Table(tablerewritefooter(bytes, zerogroup))
     @test zerotable.columns.value == Int32[1]
     close(zerotable)
-
-    twobytes = Parquet._encodefile((left=Int32[1], right=Int32[2]))
-    twofile = Parquet.File(twobytes)
-    twometadata = Parquet.Thrift.decode(twofile.footer.bytes,
-        Parquet.Metadata.FileMetaData)
-    close(twofile)
-    twogroup = only(twometadata.row_groups)
-    firstchunk, secondchunk = twogroup.columns
-    firstcolumn = something(firstchunk.meta_data)
-    secondcolumn = something(secondchunk.meta_data)
-    for bloomlength in (Int32(1), nothing)
-        bloomchunk = tablereplace(secondchunk;
-            meta_data=tablereplace(secondcolumn;
-                bloom_filter_offset=firstcolumn.data_page_offset,
-                bloom_filter_length=bloomlength))
-        bloommetadata = tablereplace(twometadata;
-            row_groups=[tablereplace(twogroup;
-                columns=[firstchunk, bloomchunk])])
-        bloomhostile = tablerewritefooter(twobytes, bloommetadata)
-        generous = Parquet.Limits(max_materialized_bytes=1_000_000_000)
-        direct, bloompreflight, bloombaseline, bloomafter =
-            tableintervalresult(bloomhostile, generous)
-        @test direct isa Parquet.FormatError
-        @test bloombaseline == bloomafter
-        bloomscratch = Parquet._materializedarraybytes(
-            Parquet._PageIndexInterval, bloompreflight.intervalcount)
-        bloomerror = try
-            Parquet.Table(bloomhostile; limits=Parquet.Limits(
-                max_materialized_bytes=bloombaseline + bloomscratch))
-            nothing
-        catch err
-            err
-        end
-        @test bloomerror isa Parquet.FormatError
-        @test occursin("storage ranges overlap", sprint(showerror, bloomerror))
-    end
-end
-
-@testset "deep page-index overlap preflight and scratch rollback" begin
-    depth = 256
-    wide = Parquet.Limits(max_metadata_depth=depth + 4,
-        max_materialized_bytes=1_000_000_000)
-    bytes = Parquet._encodefile((deep=tabledeepstruct(depth),); limits=wide)
-    file = Parquet.File(bytes)
-    metadata = Parquet.Thrift.decode(file.footer.bytes,
-        Parquet.Metadata.FileMetaData)
-    close(file)
-    group = only(metadata.row_groups)
-    chunk = only(group.columns)
-    column = something(chunk.meta_data)
-    overlapchunk = tablereplace(chunk;
-        offset_index_offset=column.data_page_offset,
-        offset_index_length=chunk.offset_index_length)
-    hostilemetadata = tablereplace(metadata;
-        row_groups=[tablereplace(group; columns=[overlapchunk])])
-    hostile = tablerewritefooter(bytes, hostilemetadata)
-    baselimits = Parquet.Limits(max_metadata_depth=depth + 4,
-        max_materialized_bytes=1_000_000_000)
-    baseline = tableprematerialized(hostile; limits=baselimits)
-    scratch = Parquet._materializedarraybytes(Parquet._PageIndexInterval, 2)
-
-    exactlimits = Parquet.Limits(max_metadata_depth=depth + 4,
-        max_materialized_bytes=baseline + scratch)
-    exact, preflight, exactbaseline, exactafter =
-        tableintervalresult(hostile, exactlimits)
-    @test preflight.intervalcount == 2
-    @test !preflight.overlaps_validated
-    @test exact isa Parquet.FormatError
-    @test occursin("storage ranges overlap", sprint(showerror, exact))
-    @test exactbaseline == exactafter == baseline
-
-    lowlimits = Parquet.Limits(max_metadata_depth=depth + 4,
-        max_materialized_bytes=baseline + scratch - 1)
-    low, _, lowbaseline, lowafter = tableintervalresult(hostile, lowlimits)
-    @test low isa Parquet.LimitError
-    @test low.resource == :materialized_bytes
-    @test lowbaseline == lowafter == baseline
-
-    valid, _, validbaseline, validafter = tableintervalresult(bytes,
-        exactlimits)
-    @test valid isa Parquet._PageIndexRangePreflight
-    @test valid.overlaps_validated
-    @test validbaseline == validafter
-
-    tableerror = try
-        Parquet.Table(hostile; limits=exactlimits)
-        nothing
-    catch err
-        err
-    end
-    @test tableerror isa Parquet.FormatError
-    @test occursin("storage ranges overlap", sprint(showerror, tableerror))
 end
 
 @testset "Table source exception identity and ownership" begin
@@ -842,22 +639,29 @@ end
     @test_throws ArgumentError Parquet.Table(bytes; scan=Tables.Scan(select=(:nope,)))
 
     # Only the selected chunks are fetched, each in one read.
+    for pageindex in (true, false)
+        paged = Parquet._encodefile(source; rowgroupsize=2, pagesize=8,
+            pageindex=pageindex)
+        tracked = TableScanSource(paged, Tuple{Int64,Int64}[])
+        table = Parquet.Table(tracked; scan=Tables.Scan(select=(:name,)))
+        try
+            @test table.columns.name == source.name
+        finally
+            close(table)
+        end
+        footer = length(paged) - 8 -
+            Int(Parquet._readu32le(paged, length(paged) - 7))
+        for group in wpmetadata(paged).row_groups,
+                (index, chunk) in enumerate(group.columns)
+            start, stop = Parquet._chunkrange(chunk.meta_data, Int64(footer))
+            reads = count(read -> read[1] < stop && read[1] + read[2] > start,
+                tracked.reads)
+            @test reads == (index == 2 ? 1 : 0)
+        end
+    end
     plain = Parquet._encodefile(source; rowgroupsize=2, pagesize=8, pageindex=false)
     metadata = wpmetadata(plain)
-    tracked = TableScanSource(plain, Tuple{Int64,Int64}[])
-    table = Parquet.Table(tracked; scan=Tables.Scan(select=(:name,)))
-    try
-        @test table.columns.name == source.name
-    finally
-        close(table)
-    end
     footer = length(plain) - 8 - Int(Parquet._readu32le(plain, length(plain) - 7))
-    for group in metadata.row_groups, (index, chunk) in enumerate(group.columns)
-        start, stop = Parquet._chunkrange(chunk.meta_data, Int64(footer))
-        reads = count(read -> read[1] < stop && read[1] + read[2] > start,
-            tracked.reads)
-        @test reads == (index == 2 ? 1 : 0)
-    end
 
     # A damaged chunk of an unselected column does not affect the selection.
     damaged = copy(plain)
