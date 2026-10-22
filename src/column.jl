@@ -399,7 +399,7 @@ end
 function _decodelevelv1(bytes::AbstractVector{UInt8}, count::Int,
     encoding::Metadata.Encoding.T, maxlevel::Int, offset::Int, name::String,
     limits::Limits)
-    maxlevel == 0 && return zeros(UInt64, count), offset
+    maxlevel == 0 && return nothing, offset
     if encoding == Metadata.Encoding.RLE
         levels, position = decode_hybrid(bytes, count, _levelbitwidth(maxlevel); offset=offset,
             length_prefix=true, limits=limits)
@@ -419,13 +419,20 @@ function _decodelevelsv1(bytes::AbstractVector{UInt8}, count::Int,
         Int(node.max_repetition_level), 1, "repetition", limits)
     definition, position = _decodelevelv1(bytes, count, header.definition_level_encoding,
         Int(node.max_definition_level), position, "definition", limits)
-    present = _validatelevels(definition, Int(node.max_definition_level), "definition")
+    present = definition === nothing ? count :
+        _validatelevels(definition, Int(node.max_definition_level), "definition")
     return repetition, definition, present, position
+end
+
+# Levels of a column whose maximum level is zero are not stored; they are built only
+# after the page's values decoded, so a page cannot claim more values than it holds.
+function _zerolevels(levels::Union{Nothing,Vector{UInt64}}, count::Int)
+    return levels === nothing ? zeros(UInt64, count) : levels
 end
 
 function _decodelevelsv2(bytes::AbstractVector{UInt8}, count::Int, maxlevel::Int,
     name::String, limits::Limits)
-    isempty(bytes) && maxlevel == 0 && return zeros(UInt64, count)
+    isempty(bytes) && maxlevel == 0 && return nothing
     levels, position = decode_hybrid(bytes, count, _levelbitwidth(maxlevel);
         offset=1, limits=limits)
     position == length(bytes) + 1 ||
@@ -456,7 +463,7 @@ function _decodedatapage(::Type{T}, frame::PageFrame, md::Metadata.ColumnMetaDat
     end
     position == length(bytes) + 1 ||
         throw(FormatError("data page has $(length(bytes) - position + 1) bytes after its values"))
-    return repetition, definition, values
+    return _zerolevels(repetition, count), _zerolevels(definition, count), values
 end
 
 function _v2values(frame::PageFrame, codec::Metadata.CompressionCodec.T,
@@ -506,14 +513,15 @@ function _decodedatapagev2(::Type{T}, frame::PageFrame, md::Metadata.ColumnMetaD
         Int(node.max_repetition_level), "repetition", limits)
     definition = _decodelevelsv2(definitionbytes, count,
         Int(node.max_definition_level), "definition", limits)
-    isempty(repetition) || iszero(first(repetition)) ||
+    repetition === nothing || isempty(repetition) || iszero(first(repetition)) ||
         throw(FormatError("data page V2 starts with repetition level $(first(repetition))"))
-    actualrows = Base.count(iszero, repetition)
+    actualrows = repetition === nothing ? count : Base.count(iszero, repetition)
     rows == actualrows ||
         throw(FormatError("data page V2 declares $rows rows but its repetition levels contain $actualrows"))
     # num_nulls is advisory: writers disagree on whether empty and null ancestors count
     # (Arrow C++ counts only leaf-level nulls), so the definition levels decide.
-    present = _validatelevels(definition, Int(node.max_definition_level), "definition")
+    present = definition === nothing ? count :
+        _validatelevels(definition, Int(node.max_definition_level), "definition")
     decoded = _decodeencodedvalues(T, header.encoding, bytes, present,
         _fixedwidth(node), 1, limits, budget)
     if decoded === nothing
@@ -524,7 +532,7 @@ function _decodedatapagev2(::Type{T}, frame::PageFrame, md::Metadata.ColumnMetaD
     end
     position == length(bytes) + 1 ||
         throw(FormatError("data page V2 has $(length(bytes) - position + 1) bytes after its values"))
-    return repetition, definition, values
+    return _zerolevels(repetition, count), _zerolevels(definition, count), values
 end
 
 function _appendleafpage!(repetition::Vector{UInt64}, definition::Vector{UInt64},
@@ -533,8 +541,8 @@ function _appendleafpage!(repetition::Vector{UInt64}, definition::Vector{UInt64}
     entries = length(pagerepetition)
     length(pagedefinition) == entries ||
         throw(FormatError("data page repetition and definition counts differ"))
-    copyto!(repetition, produced + 1, pagerepetition, 1, entries)
-    copyto!(definition, produced + 1, pagedefinition, 1, entries)
+    append!(repetition, pagerepetition)
+    append!(definition, pagedefinition)
     append!(values, pagevalues)
     return produced + entries
 end
@@ -565,10 +573,10 @@ function _readleafstream(::Type{T}, src::AbstractSource, md::Metadata.ColumnMeta
         count = Int(md.num_values)
         _reserve!(budget, _leaflevelbytes(count))
         _reserve!(budget, _leafdensebytes(T, count, md))
-        repetition = Vector{UInt64}(undef, count)
-        definition = Vector{UInt64}(undef, count)
-        values = T[]
-        sizehint!(values, count)
+        capacity = _claimcapacity(count, stop - start)
+        repetition = sizehint!(UInt64[], capacity)
+        definition = sizehint!(UInt64[], capacity)
+        values = sizehint!(T[], capacity)
         retainedbase = _materializedsum(_leaflevelbytes(count),
             _materializedarraybytes(T, count))
         childbytes = Int64(0)

@@ -8,6 +8,7 @@ CurrentModule = Parquet
 
 ```@docs
 Parquet.write
+Parquet.Limits
 ```
 
 ## Logical values

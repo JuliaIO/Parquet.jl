@@ -81,23 +81,31 @@ function decode_hybrid(bytes::AbstractVector{UInt8}, count::Integer, bitwidth::I
         _requirebytes(bytes, position, bodylength)
         endposition = position + bodylength
     end
-    output = Vector{UInt64}(undef, Int(count))
+    total = Int(count)
+    # `count` comes from a page header, so the output grows run by run as the encoded
+    # data reaches it instead of being allocated up front.
+    output = sizehint!(UInt64[], _claimcapacity(total, endposition - position))
     outputoffset = 1
-    while outputoffset <= length(output)
+    while outputoffset <= total
         position < endposition || throw(FormatError("hybrid stream ended before all values"))
         header, position = _readhybridvarint(bytes, position)
         rawlength = header >> 1
         rawlength > 0 || throw(FormatError("zero-length hybrid run"))
+        remainingvalues = total - outputoffset + 1
         if isodd(header)
             rawlength <= UInt64(typemax(Int32) ÷ 8) ||
                 throw(FormatError("bit-packed hybrid run exceeds Int32 values"))
             runlength = Int(rawlength)
+            _requirebytes(bytes, position, runlength * Int(bitwidth))
+            resize!(output, outputoffset - 1 + min(8 * runlength, remainingvalues))
             written, position = _decodebitpacked!(output, outputoffset, bytes, position,
                 runlength, Int(bitwidth))
         else
             rawlength <= UInt64(typemax(Int32)) ||
                 throw(FormatError("RLE hybrid run exceeds Int32 values"))
             runlength = Int(rawlength)
+            _requirebytes(bytes, position, cld(Int(bitwidth), 8))
+            resize!(output, outputoffset - 1 + min(runlength, remainingvalues))
             written, position = _decoderlerun!(output, outputoffset, bytes, position,
                 runlength, Int(bitwidth))
         end

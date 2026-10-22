@@ -324,7 +324,7 @@ function _reserveprimitivecolumn!(budget::_LiveByteBudget,
 end
 
 function _tablecolumns(metadata::Metadata.FileMetaData, schema::Schema,
-    rows::Int, budget::_LiveByteBudget)
+    rows::Int, budget::_LiveByteBudget, bytes::Int64)
     nodes = schema.root.children
     _reservearray!(budget, Any, length(nodes))
     columns = Any[]
@@ -332,7 +332,7 @@ function _tablecolumns(metadata::Metadata.FileMetaData, schema::Schema,
     for node in nodes
         _reserveprimitivecolumn!(budget, metadata, schema, node, rows)
         column = _tablecolumn(node)
-        sizehint!(column, rows)
+        sizehint!(column, _claimcapacity(rows, bytes))
         push!(columns, column)
     end
     return columns
@@ -406,7 +406,8 @@ function Table(input; limits::Limits=Limits())
             indexpreflight)
         names = _tablenames(schema, limits, budget)
         if _isflattableplan(nested)
-            columns = _tablecolumns(metadata, schema, rows, budget)
+            columns = _tablecolumns(metadata, schema, rows, budget,
+                _checkedsourcelength(file.source))
             _readrowgroups!(columns, file, metadata, schema, rows, limits,
                 budget)
         else

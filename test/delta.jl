@@ -262,7 +262,8 @@ end
     @test_throws L Parquet.decode_delta_binary_packed!(Vector{Int64}(undef, 2), deltaheaderbytes(128, 4, 2, Int64(0)); limits=Parquet.Limits(max_container_elements=100))
     huge = deltaheaderbytes(Int64(2)^30, Int64(2)^25, 2, Int64(0))
     @test_throws L Parquet.decode_delta_binary_packed!(Vector{Int64}(undef, 2), huge; limits=Parquet.Limits(max_container_elements=Int64(2)^20))
-    @test_throws L Parquet.decode_delta_binary_packed!(Vector{Int64}(undef, 2), huge)
+    # Under default limits the declared layout fails against the bytes that follow it.
+    @test_throws F Parquet.decode_delta_binary_packed!(Vector{Int64}(undef, 2), huge)
     @test_throws F Parquet.decode_delta_binary_packed!(Vector{Int64}(undef, 2), huge; limits=Parquet.Limits(max_container_elements=Int64(2)^31))
     @test_throws L Parquet.decode_delta_binary_packed!(Vector{Int64}(undef, 2), vcat(deltaheaderbytes(Int64(2)^30, 1, 2, Int64(0)), UInt8[0x00, 0x40]))
     @test_throws F Parquet.decode_delta_binary_packed!(Vector{Int64}(undef, 2), vcat(deltaheaderbytes(Int64(2)^30, 1, 2, Int64(0)), UInt8[0x00, 0x40]); limits=Parquet.Limits(max_page_bytes=Int64(2)^40, max_container_elements=Int64(2)^31))

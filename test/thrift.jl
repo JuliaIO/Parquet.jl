@@ -321,7 +321,8 @@ end
     @test_throws L TH.skiplist!(TH.Reader(UInt8[0x45, 0x00, 0x00, 0x00, 0x00]; limits=few))
     @test TH.readlist(TH.Reader(UInt8[0x35, 0x00, 0x00, 0x00]; limits=few), Int32) == Int32[0, 0, 0]
     @test_throws F TH.readlist(TH.Reader(UInt8[0xf5, 0x80, 0x80, 0x80, 0x01]), Int32)
-    @test_throws L TH.readlist(TH.Reader(UInt8[0xf5, 0xff, 0xff, 0xff, 0xff, 0x07]), Int32)
+    # A declared count larger than the remaining bytes fails before any allocation.
+    @test_throws F TH.readlist(TH.Reader(UInt8[0xf5, 0xff, 0xff, 0xff, 0xff, 0x07]), Int32)
     @test_throws F TH.readlist(TH.Reader(vcat(UInt8[0xf7, 0x80, 0x08], zeros(UInt8, 64))), Float64)
     @test_throws L TH.readmap(TH.Reader(UInt8[0x04, 0x55, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]; limits=few), Int32, Int32)
     @test_throws F TH.readmap(TH.Reader(UInt8[0x7f, 0x55, 0x00, 0x00]), Int32, Int32)

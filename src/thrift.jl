@@ -522,9 +522,11 @@ function readlist(r::Reader, ::Type{T}) where {T}
     matches(type, T) || (r.pos = start; return nothing)
     _enterdepth!(r)
     _readerarray!(r, T, count)
-    out = Vector{T}(undef, count)
+    # Elements decode to more memory than the byte each needs at minimum, so the
+    # vector grows with the decoded elements rather than with the declared count.
+    out = sizehint!(T[], min(count, 1024))
     for i in 1:count
-        out[i] = readelement(r, T)
+        push!(out, readelement(r, T))
     end
     leave!(r)
     return out
@@ -539,10 +541,10 @@ function readmap(r::Reader, ::Type{K}, ::Type{V}) where {K,V}
     end
     _enterdepth!(r)
     _readerarray!(r, Pair{K,V}, count)
-    out = Vector{Pair{K,V}}(undef, count)
+    out = sizehint!(Pair{K,V}[], min(count, 1024))
     for i in 1:count
         key = readelement(r, K)
-        out[i] = key => readelement(r, V)
+        push!(out, key => readelement(r, V))
     end
     leave!(r)
     return out

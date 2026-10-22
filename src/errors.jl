@@ -28,17 +28,35 @@ function Base.showerror(io::IO, err::LimitError)
     return
 end
 
+"""
+    Parquet.Limits(; kwargs...)
+
+Resource bounds for reading and writing. Each field caps one quantity; exceeding it
+throws a `LimitError`.
+
+- `max_footer_bytes` (64 MiB), `max_page_header_bytes` (16 MiB), `max_page_bytes`
+  (1 GiB), `max_page_index_bytes` (64 MiB): sizes of single metadata and page frames.
+- `max_statistics_value_bytes` (4096): one written minimum or maximum.
+- `max_string_bytes` (256 MiB), `max_decimal_bytes` (1 MiB): one value.
+- `max_schema_name_bytes` (1 MiB): new column names one operation may intern.
+- `max_metadata_depth` (128): schema and nested-value depth.
+- `max_materialized_bytes` and `max_container_elements` (unlimited): optional caps on the
+  bytes one operation allocates and on row and element counts.
+
+Counts and sizes read from a file are checked against the bytes that back them before
+memory is allocated for them, so corrupt metadata fails fast without these caps.
+"""
 Base.@kwdef struct Limits
     max_footer_bytes::Int64 = 64 * 1024 * 1024
     max_page_header_bytes::Int64 = 16 * 1024 * 1024
     max_page_bytes::Int64 = 1024 * 1024 * 1024
     max_page_index_bytes::Int64 = 64 * 1024 * 1024
     max_statistics_value_bytes::Int64 = 4096
-    max_materialized_bytes::Int64 = 2 * 1024 * 1024 * 1024
+    max_materialized_bytes::Int64 = typemax(Int64)
     max_schema_name_bytes::Int64 = 1024 * 1024
     max_string_bytes::Int64 = 256 * 1024 * 1024
     max_decimal_bytes::Int64 = 1024 * 1024
-    max_container_elements::Int64 = 100_000_000
+    max_container_elements::Int64 = typemax(Int64)
     max_metadata_depth::Int = 128
 end
 
@@ -327,6 +345,13 @@ function _internedschemanamebytes()
     finally
         unlock(registry.lock)
     end
+end
+
+# Elements to reserve up front for a count claimed by file metadata. A claim larger than
+# `bytes` of input could plausibly hold is not trusted: callers reserve this bound and
+# grow only as decoded data backs the claim, so corrupt counts fail before they allocate.
+function _claimcapacity(claim::Integer, bytes::Integer)
+    return Int(clamp(Int128(claim), 0, 4096 + 64 * Int128(max(bytes, 0))))
 end
 
 function _checklimit(resource::Symbol, requested::Integer, maximum::Integer)

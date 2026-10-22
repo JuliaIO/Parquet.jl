@@ -690,3 +690,74 @@ end
         @info "parquet-testing corpus not found; skipping Tables corpus facade" corpus
     end
 end
+
+# Rebuilds a one-chunk file around its first data page with the page header, chunk,
+# row group, and file all claiming `claim` values and rows.
+function tableclaimfile(bytes::Vector{UInt8}, claim::Integer)
+    metadata = wpmetadata(bytes)
+    group = only(metadata.row_groups)
+    chunk = only(group.columns)
+    md = chunk.meta_data
+    file = Parquet.File(bytes)
+    header, payload = try
+        start, stop = Parquet._chunkrange(md, file.footer.offset)
+        frame = Parquet.readpage(file.source, start, stop, Parquet.Limits())
+        frame.header, collect(frame.payload)
+    finally
+        close(file)
+    end
+    header = wpreplace(header; data_page_header=wpreplace(
+        header.data_page_header; num_values=Int32(claim)))
+    page = vcat(WPTH.encode(header), payload)
+    md = wpreplace(md; num_values=Int64(claim), data_page_offset=Int64(4),
+        dictionary_page_offset=nothing, total_compressed_size=Int64(length(page)),
+        total_uncompressed_size=Int64(length(page)))
+    group = wpreplace(group; num_rows=Int64(claim),
+        columns=[wpreplace(chunk; meta_data=md, file_offset=Int64(4))],
+        total_byte_size=Int64(length(page)),
+        total_compressed_size=Int64(length(page)), file_offset=Int64(4))
+    footer = WPTH.encode(wpreplace(metadata; num_rows=Int64(claim),
+        row_groups=[group]))
+    output = vcat(Parquet.PARQUET_MAGIC, page, footer)
+    Parquet._writelittle!(output, UInt32(length(footer)))
+    return append!(output, Parquet.PARQUET_MAGIC)
+end
+
+@testset "file-declared counts are checked against their bytes" begin
+    function claimresult(bytes)
+        read() = try
+            close(Parquet.Table(bytes))
+            nothing
+        catch err
+            err
+        end
+        read()
+        allocated = @allocated(error = read())
+        return error, allocated
+    end
+    claim = typemax(Int32)
+    for source in ((x=Int64[1, 2, 3],), (x=Union{Missing,Int64}[1, missing, 3],))
+        for pageversion in (:v1,)
+            bytes = Parquet._encodefile(source; pageversion=pageversion,
+                pageindex=false, statistics=false, checksum=false)
+            # The page, its chunk, and the file all claim 2^31 - 1 values.
+            error, allocated = claimresult(tableclaimfile(bytes, claim))
+            @test error isa Parquet.FormatError
+            @test allocated < 64 * 2^20
+
+            # Only the footer claims more rows and values than the pages hold.
+            metadata = wpmetadata(bytes)
+            group = only(metadata.row_groups)
+            chunk = only(group.columns)
+            for (rows, values) in ((3, 2^40), (2^40, 2^40))
+                changed = wpreplace(metadata; num_rows=Int64(rows),
+                    row_groups=[wpreplace(group; num_rows=Int64(rows),
+                        columns=[wpreplace(chunk; meta_data=wpreplace(
+                            chunk.meta_data; num_values=Int64(values)))])])
+                error, allocated = claimresult(wprewritefooter(bytes, changed))
+                @test error isa Parquet.FormatError
+                @test allocated < 64 * 2^20
+            end
+        end
+    end
+end

@@ -140,8 +140,14 @@ Use `Parquet.LogicalColumn` to select the exact annotation when it matters.
 ## Resource limits
 
 Pass a `Parquet.Limits` value to `Parquet.File`, `Parquet.Table`, or `Parquet.write`.
-Limits reject oversized metadata, pages, strings, decimals, statistics bounds, and
-materialized values before large allocations occur.
+Limits reject oversized metadata, pages, strings, decimals, and statistics bounds.
+Row counts and total memory are unlimited by default; set `max_container_elements` or
+`max_materialized_bytes` to cap them, for example when reading untrusted files.
+
+Counts and sizes a file declares are checked against the bytes that back them before
+memory is reserved for them, so corrupt metadata fails with a `FormatError` instead of
+a large allocation. Highly repetitive data, such as long runs of nulls or of one
+dictionary value, still decodes to its full size.
 
 `max_schema_name_bytes` bounds the new top-level column names a single operation may
 intern as Julia `Symbol`s. Interned names are process-permanent, so the registry also
@@ -164,10 +170,10 @@ the garbage collector finalizes it. On Windows the file may therefore stay locke
 `close`. If another process truncates a mapped file while it is open, reads of the
 removed region terminate the process, and no bounds check can prevent that.
 
-`max_materialized_bytes` covers the bytes this package allocates. A byte vector is
-borrowed and a mapped path is not copied, so neither is charged. An `IO` source is
-copied and is charged. A source type supplied by another package owns its own storage,
-so bytes it allocates are not charged here.
+When set, `max_materialized_bytes` covers the bytes this package allocates. A byte
+vector is borrowed and a mapped path is not copied, so neither is charged. An `IO`
+source is copied and is charged. A source type supplied by another package owns its
+own storage, so bytes it allocates are not charged here.
 
 ## Shared data values
 

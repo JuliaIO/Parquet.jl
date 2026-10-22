@@ -77,10 +77,8 @@ function _appendnestedrowgroup!(repetition::Vector{UInt64},
         length(stream) == count || throw(FormatError(
             "row group $rowindex leaf $leafindex produced $(length(stream)) " *
             "of $count declared entries"))
-        count == 0 || begin
-            copyto!(repetition, position, stream.repetition, 1, count)
-            copyto!(definition, position, stream.definition, 1, count)
-        end
+        append!(repetition, stream.repetition)
+        append!(definition, stream.definition)
         append!(values, stream.values)
         payload = _nestedstreampayloadcharge(T, retained, count)
         structural = _materializedsum(_leaflevelbytes(count),
@@ -100,10 +98,10 @@ function _readnestedstream(file::File, metadata::Metadata.FileMetaData,
     schema::Schema, leaf::_NestedLeafPlan, rows::Int, limits::Limits,
     budget::_LiveByteBudget, entries::Int)
     T = _physicaleltype(leaf.source.element.type_)
-    repetition = Vector{UInt64}(undef, entries)
-    definition = Vector{UInt64}(undef, entries)
-    values = T[]
-    sizehint!(values, entries)
+    capacity = _claimcapacity(entries, _checkedsourcelength(file.source))
+    repetition = sizehint!(UInt64[], capacity)
+    definition = sizehint!(UInt64[], capacity)
+    values = sizehint!(T[], capacity)
     position = 1
     payloadcharge = Int64(0)
     index = Int(leaf.source.column_index)
