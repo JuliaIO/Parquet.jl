@@ -869,3 +869,44 @@ end
     @test table.columns.name == source.name
     close(table)
 end
+
+@testset "parallel and sequential reads agree" begin
+    # Reads decode one task per column chunk when Julia has threads and no
+    # max_materialized_bytes cap needs exact shared accounting; a cap reads in order.
+    sequential = Parquet.Limits(max_materialized_bytes=typemax(Int64) - 1)
+    rows = 1_000
+    source = (id=collect(Int64, 1:rows), name=["n$(i % 17)" for i in 1:rows],
+        score=Union{Missing,Float64}[isodd(i) ? i / 2 : missing for i in 1:rows],
+        tags=[["t$(j)" for j in 1:(i % 3)] for i in 1:rows],
+        point=[(x=i, y=-i) for i in 1:rows])
+    flat = (id=source.id, name=source.name, score=source.score)
+    for table in (flat, source)
+        bytes = Parquet._encodefile(table; rowgroupsize=150, pagesize=512,
+            codec=:snappy)
+        parallel = Parquet.Table(bytes)
+        ordered = Parquet.Table(bytes; limits=sequential)
+        try
+            @test keys(parallel.columns) == keys(ordered.columns) == keys(table)
+            for name in keys(table)
+                @test isequal(collect(getproperty(parallel.columns, name)),
+                    collect(getproperty(ordered.columns, name)))
+            end
+            @test parallel.columns.id == source.id
+        finally
+            close(parallel)
+            close(ordered)
+        end
+    end
+    bytes = Parquet._encodefile(source; rowgroupsize=150, pagesize=512,
+        codec=:snappy)
+
+    # A failing chunk reports its own error type either way.
+    metadata = wpmetadata(bytes)
+    footer = length(bytes) - 8 - Int(Parquet._readu32le(bytes, length(bytes) - 7))
+    chunk = metadata.row_groups[3].columns[2]
+    start, stop = Parquet._chunkrange(chunk.meta_data, Int64(footer))
+    damaged = copy(bytes)
+    damaged[(start + 1):stop] .= 0x00
+    @test_throws Parquet.FormatError Parquet.Table(damaged)
+    @test_throws Parquet.FormatError Parquet.Table(damaged; limits=sequential)
+end

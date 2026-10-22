@@ -338,6 +338,36 @@ function _tablecolumns(metadata::Metadata.FileMetaData, schema::Schema,
     return columns
 end
 
+# Decoding runs one task per column when the source allows concurrent reads, Julia has
+# more than one thread, and no `max_materialized_bytes` cap needs exact shared
+# accounting; each task then charges a private, unlimited budget.
+function _parallelread(file::File, limits::Limits, count::Int)
+    return count > 1 && Threads.nthreads() > 1 && concurrentreads(file.source) &&
+        limits.max_materialized_bytes == typemax(Int64)
+end
+
+struct _ReadFailure
+    error::Any
+end
+
+# `map(f, indices)`, on one task per index when `parallel`. A task's error is rethrown
+# as itself rather than wrapped in a TaskFailedException.
+function _readmap(f, indices, parallel::Bool)
+    parallel || return map(f, indices)
+    tasks = map(indices) do index
+        errormonitor(Threads.@spawn try
+            f(index)
+        catch err
+            _ReadFailure(err)
+        end)
+    end
+    results = map(fetch, tasks)
+    for result in results
+        result isa _ReadFailure && throw(result.error)
+    end
+    return results
+end
+
 function _readrowgroups!(columns::Vector, file::File, metadata::Metadata.FileMetaData,
     schema::Schema, rows::Int, limits::Limits, budget::_LiveByteBudget)
     total = Int64(0)
@@ -355,23 +385,38 @@ function _readrowgroups!(columns::Vector, file::File, metadata::Metadata.FileMet
         total <= rows || throw(FormatError(
             "row groups contain more rows than the validated table count"))
         _checklimit(:container_elements, total, limits.max_container_elements)
-        for (fieldindex, node) in enumerate(schema.root.children)
-            before = _budgetused(budget)
-            values = _readtablefield(file, metadata, schema, rowindex, node,
-                group.num_rows, limits, budget)
-            baseline = _tablefieldpayloadbaseline(metadata, schema, rowindex,
-                node)
-            retained = max(Int64(0), _tablefieldpayload(values) - baseline)
-            append!(columns[fieldindex], values)
-            transient = _budgetused(budget) - before
-            retained <= transient || throw(AssertionError(
-                "final variable-width values exceed their materialization charge"))
-            transient == retained || _release!(budget, transient - retained)
-        end
     end
     total == rows || throw(FormatError(
         "row groups contain $total rows but $rows were validated"))
+    fields = schema.root.children
+    chunks = vec([(fieldindex, rowindex) for rowindex in eachindex(metadata.row_groups),
+        fieldindex in eachindex(fields)])
+    parallel = _parallelread(file, limits, length(chunks))
+    pieces = _readmap(chunks, parallel) do (fieldindex, rowindex)
+        return _readtablechunk(file, metadata, schema, rowindex, fields[fieldindex],
+            limits, parallel ? _LiveByteBudget(limits) : budget)
+    end
+    for ((fieldindex, _), values) in zip(chunks, pieces)
+        append!(columns[fieldindex], values)
+    end
     return
+end
+
+# One field's values from one row group; the charge for them stays on `budget`.
+function _readtablechunk(file::File, metadata::Metadata.FileMetaData,
+        schema::Schema, rowindex::Int, node::SchemaNode, limits::Limits,
+        budget::_LiveByteBudget)
+    before = _budgetused(budget)
+    group = metadata.row_groups[rowindex]
+    values = _readtablefield(file, metadata, schema, rowindex, node,
+        group.num_rows, limits, budget)
+    baseline = _tablefieldpayloadbaseline(metadata, schema, rowindex, node)
+    retained = max(Int64(0), _tablefieldpayload(values) - baseline)
+    transient = _budgetused(budget) - before
+    retained <= transient || throw(AssertionError(
+        "final variable-width values exceed their materialization charge"))
+    transient == retained || _release!(budget, transient - retained)
+    return values
 end
 
 # Copy of a Thrift struct with some fields replaced.

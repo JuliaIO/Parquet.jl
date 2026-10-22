@@ -170,11 +170,16 @@ function _readnestedroot(file::File, metadata::Metadata.FileMetaData,
             plan, limits)
         _reserve!(budget, structuralcharge)
         structuralreserved = true
-        for (index, leaf) in enumerate(plan.leaves)
-            stream, payload = _readnestedstream(file, metadata, schema,
-                leaf, rows, limits, budget, entrycounts[index])
+        parallel = _parallelread(file, limits, length(plan.leaves))
+        results = _readmap(eachindex(plan.leaves), parallel) do index
+            return _readnestedstream(file, metadata, schema, plan.leaves[index],
+                rows, limits, parallel ? _LiveByteBudget(limits) : budget,
+                entrycounts[index])
+        end
+        for (index, (stream, payload)) in enumerate(results)
             push!(streams, stream)
-            payloadcharges[index] = payload
+            # A private budget holds a parallel read's payload charge.
+            payloadcharges[index] = parallel ? Int64(0) : payload
         end
         root = _assemblenested(plan, streams, rows;
             limits=limits, budget=budget)
