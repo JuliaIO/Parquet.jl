@@ -267,7 +267,9 @@ end
     @test ncodeunits(typerepr.value) < 32 * 1024
     @test count("MapVector", typerepr.value) == 1
     @test deepresult.bytes < 96 * 1024 * 1024
-    @test deepresult.time < 5.0
+    # Compiling 128 new map types dominates this time; the bound catches runaway type
+    # growth, not speed (about 1 s on an M-series Mac, over 5 s on macOS x64 CI).
+    @test deepresult.time < 30.0
     @test typerepr.bytes < 4 * 1024 * 1024
     @test typerepr.time < 2.0
 
