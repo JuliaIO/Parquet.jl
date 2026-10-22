@@ -656,6 +656,10 @@ end
 function _nestedwriteleaf(plan::_NestedLeafPlan, value_type::Type,
         limits::Limits)
     element = plan.source.element
+    element.type_ == Metadata.Type.INT96 && throw(UnsupportedFeatureError(
+        "writing INT96 is not supported; write the table's columns (for example " *
+        "Tables.columntable(table)) to store $(repr(element.name)) as an INT64 " *
+        "nanosecond TIMESTAMP"))
     kind = _logicalkind(element)
     T = kind in (:string, :enum) && value_type <: AbstractString &&
         isconcretetype(value_type) ? value_type : _physicaleltype(element.type_)

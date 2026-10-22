@@ -82,7 +82,12 @@ out. Reading one of them reports an unsupported feature rather than an invalid f
 
 - LZO compression, in either direction. Every available implementation is GPL-2 and
   this package is MIT.
-- INT96 columns, in either direction. The type is deprecated in the format.
+- Writing INT96. The type is deprecated in the format. INT96 columns, which Spark,
+  Hive, and Impala still write by default, are read as `Parquet.Timestamp{:nanos}`
+  values that are not adjusted to UTC, as pyarrow reads them. A value outside that
+  range (years 1677 to 2262) is a `FormatError`. Rewriting a `Parquet.Table` that has
+  an INT96 column reports an unsupported feature; write its columns instead to store
+  them as INT64 nanosecond timestamps.
 - Writing the deprecated LZ4 codec or the deprecated BIT_PACKED encoding. Both are
   still read, because files in the wild use them. New files use `:lz4_raw` and RLE.
 

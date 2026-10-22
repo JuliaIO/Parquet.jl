@@ -278,6 +278,31 @@ function _toparquetdatetime(value::Dates.DateTime)
     return ticks
 end
 
+# INT96 (Impala, Hive, Spark) stores 8 little-endian bytes of nanoseconds within the
+# day, then 4 bytes of Julian day number. Like pyarrow, read it as a nanosecond
+# timestamp that is not adjusted to UTC.
+function _fromint96(value, element::Metadata.SchemaElement)
+    value isa AbstractVector{UInt8} && length(value) == 12 || throw(FormatError(
+        "INT96 column $(repr(element.name)) contains a value that is not 12 bytes"))
+    nanoseconds = Int64(0)
+    for index in 8:-1:1
+        nanoseconds = (nanoseconds << 8) | Int64(value[index])
+    end
+    day = UInt32(0)
+    for index in 12:-1:9
+        day = (day << 8) | UInt32(value[index])
+    end
+    ticks = try
+        Base.checked_add(Base.checked_mul(Int64(day) - 2_440_588,
+            Int64(86_400_000_000_000)), nanoseconds)
+    catch err
+        err isa OverflowError || rethrow()
+        throw(FormatError("INT96 timestamp in $(repr(element.name)) (Julian day " *
+            "$day) is outside the range of Parquet.Timestamp{:nanos}"))
+    end
+    return Timestamp(ticks, :nanos, false)
+end
+
 function _fromparquettimestamp(kind::_TimestampLogicalKind, value,
     element::Metadata.SchemaElement)
     value isa Int64 ||

@@ -10,6 +10,7 @@ function _requirelogicalphysical(element::Metadata.SchemaElement,
 end
 
 function _logicalkind(element::Metadata.SchemaElement)
+    element.type_ == Metadata.Type.INT96 && return :int96
     logical = element.logicalType
     if logical !== nothing
         if logical.STRING !== nothing
@@ -53,6 +54,7 @@ function _logicaleltype(element::Metadata.SchemaElement, physical::Type)
     kind === nothing && return physical
     kind === :string && return DataStrings.DataString
     kind === :date && return Dates.Date
+    kind === :int96 && return Timestamp{:nanos}
     kind isa Union{_TimeLogicalKind,_TimestampLogicalKind,_IntegerLogicalKind} &&
         return _temporaljuliatype(kind)
     logical = _binarylogicaleltype(kind, physical)
@@ -124,6 +126,8 @@ function _logicalvalue(kind, element::Metadata.SchemaElement, value, limits::Lim
         return _fromparquetdate(value)
     elseif kind === :decimal
         return _decimallogicalvalue(kind, element, value, limits)
+    elseif kind === :int96
+        return _fromint96(value, element)
     end
     converted = _binarylogicalvalue(kind, element, value, limits)
     converted === nothing && throw(FormatError(

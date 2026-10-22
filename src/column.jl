@@ -9,8 +9,7 @@ function _physicaleltype(type::Metadata.Type.T)
     type == Metadata.Type.DOUBLE && return Float64
     type == Metadata.Type.BYTE_ARRAY && return Vector{UInt8}
     type == Metadata.Type.FIXED_LEN_BYTE_ARRAY && return Vector{UInt8}
-    type == Metadata.Type.INT96 && throw(UnsupportedFeatureError(
-        "INT96 columns are not supported; the type is deprecated in Parquet"))
+    type == Metadata.Type.INT96 && return Vector{UInt8}
     throw(FormatError("unknown physical type $type"))
 end
 
@@ -236,6 +235,7 @@ function _validatechunkpageoffsets(md::Metadata.ColumnMetaData,
 end
 
 function _fixedwidth(node::SchemaNode)
+    node.element.type_ == Metadata.Type.INT96 && return 12
     node.element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY || return nothing
     return Int(node.element.type_length)
 end

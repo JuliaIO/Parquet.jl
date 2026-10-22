@@ -1,5 +1,6 @@
 using Test
 using UUIDs
+import Tables
 
 @testset "Apache logical-type corpus" begin
     corpus = get(ENV, "PARQUET_TESTING_DIR", joinpath(@__DIR__, "parquet-testing"))
@@ -65,5 +66,63 @@ using UUIDs
             collect(codeunits("unknown string $index")) for index in 1:3
         ]
         close(unknown)
+    end
+end
+
+@testset "INT96 timestamps" begin
+    # 8 little-endian bytes of nanoseconds within the day, then 4 of Julian day number.
+    int96(day, nanoseconds) = vcat(reinterpret(UInt8, [htol(Int64(nanoseconds))]),
+        reinterpret(UInt8, [htol(UInt32(day))]))
+    element = Parquet.Metadata.SchemaElement(name="ts", type_=Parquet.Metadata.Type.INT96)
+    epoch = 2_440_588
+    for (day, nanoseconds, ticks) in ((epoch, 0, 0), (epoch, 123, 123),
+            (epoch - 1, 86_400_000_000_000 - 1, -1),
+            (epoch + 19_000, 1_000, 19_000 * 86_400_000_000_000 + 1_000))
+        value = Parquet._logicalvalue(element, int96(day, nanoseconds))
+        @test value isa Parquet.Timestamp{:nanos}
+        @test value.ticks == ticks && !value.is_adjusted_to_utc
+    end
+    @test_throws Parquet.FormatError Parquet._logicalvalue(element,
+        int96(5_373_484, 0))
+    @test_throws Parquet.FormatError Parquet._logicalvalue(element, UInt8[1, 2, 3])
+
+    corpus = get(ENV, "PARQUET_TESTING_DIR", joinpath(@__DIR__, "parquet-testing"))
+    data = joinpath(corpus, "data")
+    if isfile(joinpath(data, "int96_timestamp_order.parquet"))
+        # Expected ticks are pyarrow 25's nanosecond timestamps for the same files.
+        for (name, column, expected) in (
+                ("int96_timestamp_order.parquet", :ts,
+                    [86399999999999, 86400000000000, -50803199999999877, 1000]),
+                ("alltypes_plain.parquet", :timestamp_col,
+                    [1235865600000000000, 1235865660000000000, 1238544000000000000,
+                        1238544060000000000, 1233446400000000000, 1233446460000000000,
+                        1230768000000000000, 1230768060000000000]),
+                ("alltypes_dictionary.parquet", :timestamp_col,
+                    [1230768000000000000, 1230768060000000000]))
+            table = Parquet.Table(joinpath(data, name))
+            try
+                values = getproperty(table.columns, column)
+                @test all(value -> value isa Parquet.Timestamp{:nanos} &&
+                    !value.is_adjusted_to_utc, values)
+                @test [value.ticks for value in values] == expected
+                @test_throws Parquet.UnsupportedFeatureError Parquet.write(
+                    IOBuffer(), table)
+                io = IOBuffer()
+                Parquet.write(io, Tables.columntable(table))
+                rewritten = Parquet.Table(take!(io))
+                try
+                    @test isequal(getproperty(rewritten.columns, column), values)
+                finally
+                    close(rewritten)
+                end
+            finally
+                close(table)
+            end
+        end
+        # Spark wrote years 9999 and 290000, beyond the nanosecond range.
+        @test_throws Parquet.FormatError Parquet.Table(
+            joinpath(data, "int96_from_spark.parquet"))
+    else
+        @info "parquet-testing corpus not found; skipping INT96 fixtures" corpus
     end
 end

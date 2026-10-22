@@ -19,9 +19,9 @@ maps, including null containers, empty containers, and null elements. The reader
 handles the legacy list and map layouts covered by the pinned Apache corpus. The
 writer emits row-group statistics and offset indexes by default; the reader checks
 page-index declarations and offset-index contents. Scan pushdown, datasets, bloom
-filters, encryption, Variant, and geospatial modules remain target work. LZO and INT96
-are not supported and are not planned: every LZO implementation is GPL-2, and INT96 is
-deprecated in the format.
+filters, encryption, Variant, and geospatial modules remain target work. LZO is not
+supported and is not planned, because every LZO implementation is GPL-2. INT96
+timestamps are read but not written, because the type is deprecated in the format.
 `NTuple{N,UInt8}` writer columns map to FIXED_LEN_BYTE_ARRAY, and `Parquet.Table`
 preserves their runtime width across later writes.
 
