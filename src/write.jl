@@ -885,15 +885,16 @@ end
 # The flat writer reads a column several times (limits, statistics, pages), so a
 # source that is not a plain Vector is read once into one; every pass then sees the
 # same values.
-function _flatsnapshot(values::Vector)
+function _flatsnapshot(values::Vector, ::_LiveByteBudget)
     return values
 end
 
-function _flatsnapshot(values::FixedByteArrayVector)
+function _flatsnapshot(values::FixedByteArrayVector, ::_LiveByteBudget)
     return values
 end
 
-function _flatsnapshot(values::AbstractVector)
+function _flatsnapshot(values::AbstractVector, budget::_LiveByteBudget)
+    _reservearray!(budget, eltype(values), length(values))
     return collect(values)
 end
 
@@ -906,8 +907,7 @@ function _flatwritefields(columns::Vector{Pair{String,AbstractVector}},
     for (name, source) in columns
         occursin('\0', name) && throw(ArgumentError(
             "Parquet top-level field names cannot contain NUL"))
-        _reservearray!(budget, eltype(source), length(source))
-        values = _flatsnapshot(source)
+        values = _flatsnapshot(source, budget)
         _reservewritenormalization!(budget, values, limits)
         push!(fields, _writefieldplan(_writecolumn(name, values, limits), budget))
     end

@@ -150,6 +150,16 @@ end
     end
 end
 
+@testset "flat writer snapshots only non-Vector columns" begin
+    budget = Parquet._LiveByteBudget(Parquet.Limits())
+    values = Int32[1, 2]
+    @test Parquet._flatsnapshot(values, budget) === values
+    @test Parquet._budgetused(budget) == 0
+    @test Parquet._flatsnapshot(Int32(1):Int32(3), budget) == Int32[1, 2, 3]
+    @test Parquet._budgetused(budget) ==
+        Parquet._materializedarraybytes(Int32, 3)
+end
+
 @testset "exact bounded footer encoding" begin
     metadata = minimalfootermetadata()
     dynamic = TH.encode(metadata)
