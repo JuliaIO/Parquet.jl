@@ -64,6 +64,23 @@ DataAPI.colmetadata(table::WRMetaTable, column::Symbol, key::AbstractString;
         Parquet.write(w, (id=[1],))
         Parquet.write(w, (id=[1.5],))
     end
+    # Widening is exact: an Int64 that a Float64 cannot hold, or a Float64 that a
+    # Float32 cannot, is an error rather than a rounded value.
+    @test_throws "convert(Float64, 9007199254740993)" Parquet.Writer(IOBuffer()) do w
+        Parquet.write(w, (x=[1.5],))
+        Parquet.write(w, (x=[2^53 + 1],))
+    end
+    @test_throws "convert(Float32, 0.1)" Parquet.Writer(IOBuffer()) do w
+        Parquet.write(w, (x=Float32[1],))
+        Parquet.write(w, (x=[0.1],))
+    end
+    widened = take!(Parquet.Writer(IOBuffer()) do w
+        Parquet.write(w, (x=[1.5], y=Float32[1], z=[1]))
+        Parquet.write(w, (x=Int32[2, 3], y=[0.5, NaN], z=Int8[3, 4]))
+    end)
+    @test isequal(wrcolumn(widened, :x), [1.5, 2.0, 3.0])
+    @test isequal(wrcolumn(widened, :y), Float32[1, 0.5, NaN])
+    @test wrcolumn(widened, :z) == [1, 3, 4]
     @test_throws "but the file's column 1 is" Parquet.Writer(IOBuffer()) do w
         Parquet.write(w, (id=[1],))
         Parquet.write(w, (other=[1],))
@@ -281,4 +298,18 @@ end
     @test types["my_map_no_v"] == 0x0c
     @test types["my_map"] == 0x11
     @test isequal(collect(Parquet.Table(bytes).my_map_no_v), collect(source.my_map_no_v))
+end
+
+@testset "0.8 read_parquet and write_parquet forward with a deprecation" begin
+    mktempdir() do directory
+        path = joinpath(directory, "old.parquet")
+        @test (@test_deprecated write_parquet(path, (a=[1, 2],);
+            compression_codec="ZSTD")) == path
+        table = @test_deprecated read_parquet(path)
+        @test table.a == [1, 2]
+        file = Parquet.File(path)
+        @test only(only(Parquet.metadata(file).row_groups).columns
+            ).meta_data.codec == WRMD.CompressionCodec.ZSTD
+        close(file)
+    end
 end

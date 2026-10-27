@@ -49,6 +49,15 @@ include("writer.jl")
 include("write_partitioned.jl")
 include("precompile.jl")
 
+# Parquet.jl 0.8 names, kept until 2.0.
+Base.@deprecate read_parquet(path; kwargs...) Table(path; kwargs...)
+function write_parquet(sink, table; compression_codec="SNAPPY")
+    Base.depwarn("`write_parquet(sink, table; compression_codec)` is deprecated, use " *
+        "`Parquet.write(sink, table; compress)` instead.", :write_parquet)
+    return write(sink, table; compress=Symbol(lowercase(String(compression_codec))))
+end
+export write_parquet
+
 if VERSION >= v"1.11"
     Core.eval(@__MODULE__, Expr(:public, :AbstractSource, :BSONValue, :Dataset, :Decimal, :File,
         :FormatError, :JSONValue, :LimitError, :Limits, :LogicalColumn, :Table,

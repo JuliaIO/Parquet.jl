@@ -237,8 +237,13 @@ function (convert::_SchemaConvert{K,P})(value) where {K,P}
     return _schemaphysical(P, physical)
 end
 
-_schemaphysical(::Type{P}, value) where {P<:Union{Bool,Int32,Int64,Float32,Float64}} =
-    convert(P, value)
+# Numbers widen into a leaf only exactly: Int64 into DOUBLE or Float64 into FLOAT would
+# round silently.
+function _schemaphysical(::Type{P}, value) where {P<:Union{Bool,Int32,Int64,Float32,Float64}}
+    converted = convert(P, value)
+    value isa Real && !isequal(converted, value) && throw(InexactError(:convert, P, value))
+    return converted
+end
 _schemaphysical(::Type{_BytesBuffer}, value) = value
 
 function _schemaphysicaltype(physical::Metadata.Type.T)
