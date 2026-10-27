@@ -173,8 +173,8 @@ function _globfiles(pattern::String)
     Sys.iswindows() && (pattern = replace(pattern, '\\' => '/'))
     parts = split(pattern, '/'; keepempty=true)
     literal = something(findfirst(_isglob, parts), length(parts) + 1) - 1
-    root = literal == 0 ? "." : join(parts[1:literal], '/')
-    isempty(root) && (root = "/")
+    prefix = join(parts[1:literal], '/')
+    root = literal == 0 ? "." : isempty(prefix) ? "/" : prefix
     regex = _globregex(join(parts[(literal + 1):end], '/'))
     files = String[]
     isdir(root) && _walkfiles!(files, root)

@@ -717,9 +717,8 @@ _rowcount(ranges::Vector{UnitRange{Int}}) = sum(length, ranges; init=0)
 # and page statistics prune pages of the filter columns. Groups are pruned on up to
 # `ntasks` tasks.
 function _filterparts(file::File, groups, filter, budget::_ByteBudget)
-    ctx = _prunecontext(file, filter, budget)
     indices = collect(Int, groups)
-    ctx = _prefetchindexes(ctx, indices)
+    ctx = _prefetchindexes(_prunecontext(file, filter, budget), indices)
     parts = _readmap(indices, _readtasks(file, file.plan.ntasks, length(indices))) do index, _
         return _filterpart(ctx, index)
     end
@@ -787,8 +786,7 @@ function _planfetch(file::File, metadata::Metadata.FileMetaData, items, limits::
         range === nothing || push!(indexranges, range)
     end
     indexfile = _plannedfile(file, indexranges)
-    pages = _readmap(eachindex(chunks), _readtasks(file, file.plan.ntasks, length(chunks))) do index, _
-        chunk, rows, (start, stop) = chunks[index]
+    pages = _readmap(chunks, _readtasks(file, file.plan.ntasks, length(chunks))) do (chunk, rows, (start, stop)), _
         return _chunkpages(indexfile, chunk, rows, start, stop, limits, budget)
     end
     ranges = Tuple{Int64,Int64}[]
@@ -1560,26 +1558,27 @@ function _filterselected!(decoded::Dict{Tuple{Int,Int},_DecodedPart},
         batchfile, located = _planfetch(file, plan.metadata,
             [(fields[fieldindex], parts[index], parts[index].rows)
                 for (fieldindex, index) in tasks], plan.limits, budget)
+        # The tasks' variables are their closures' arguments: a closure that assigned a
+        # variable of this function would share it among all tasks.
+        work = collect(zip(tasks, located))
         if length(filterfields) == 1
-            fieldindex = only(filterfields)
-            results = _readmap(eachindex(tasks), _readtasks(file, plan.ntasks, length(tasks))) do task, buffers
-                index = tasks[task][2]
+            results = _readmap(work, _readtasks(file, plan.ntasks, length(work))) do ((fieldindex, index), pages), buffers
                 filter = _PageFilter(plan.bound.filter, names[fieldindex], fields[fieldindex],
                     parts[index].rows, fieldindex in outfields)
                 return _decodepart(batchfile, plan.metadata, parts[index], parts[index].rows,
                     fields[fieldindex], plan.limits, budget, buffers, plan.options, filter;
-                    pages=located[task])
+                    pages=pages)
             end
+            fieldindex = only(filterfields)
             for (index, result) in zip(batch, results)
                 selected[index] = result.rows
                 decoded[(fieldindex, index)] = result
             end
         else
-            results = _readmap(eachindex(tasks), _readtasks(file, plan.ntasks, length(tasks))) do task, buffers
-                fieldindex, index = tasks[task]
+            results = _readmap(work, _readtasks(file, plan.ntasks, length(work))) do ((fieldindex, index), pages), buffers
                 return _decodepart(batchfile, plan.metadata, parts[index], parts[index].rows,
                     fields[fieldindex], plan.limits, budget, buffers, plan.options;
-                    pages=located[task])
+                    pages=pages)
             end
             for (task, result) in zip(tasks, results)
                 decoded[task] = result

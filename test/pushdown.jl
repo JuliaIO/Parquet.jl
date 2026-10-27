@@ -351,6 +351,17 @@ end
     end
 end
 
+@testset "pushdown: read tasks share no variables of the function that starts them" begin
+    # A closure that assigns a variable of its enclosing function shares one boxed variable
+    # among all the tasks that run it; a two-column filter then decoded the wrong columns
+    # on Julia 1.10 CI. Every function here runs closures on several tasks (`_readmap`).
+    for f in (Parquet._filterparts, Parquet._planfetch, Parquet._filterselected!,
+            Parquet._readselectedflat, Parquet._readflattable, Parquet._dataset,
+            Parquet._readdataset), m in methods(f)
+        @test !occursin("Core.Box", string(Base.uncompressed_ir(m)))
+    end
+end
+
 @testset "pushdown: Parquet.File skips row groups its filter rules out" begin
     bytes = pdbytes((a=collect(1:1_000),); rowgroupsize=100)
     file = Parquet.File(bytes; filter=Parquet.col(:a) > 750)
