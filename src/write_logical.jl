@@ -155,63 +155,6 @@ function _logicalwriteelement(name, physical::Metadata.Type.T, optional::Bool;
     )
 end
 
-function _binarywriteelement(name, value_type::Type, optional::Bool)
-    if value_type == UUIDs.UUID
-        return _logicalwriteelement(name, Metadata.Type.FIXED_LEN_BYTE_ARRAY, optional;
-            width=Int32(16), logical=Metadata.LogicalType(UUID=Metadata.UUIDType()))
-    elseif value_type == Float16
-        return _logicalwriteelement(name, Metadata.Type.FIXED_LEN_BYTE_ARRAY, optional;
-            width=Int32(2), logical=Metadata.LogicalType(FLOAT16=Metadata.Float16Type()))
-    elseif value_type == JSONValue
-        return _logicalwriteelement(name, Metadata.Type.BYTE_ARRAY, optional;
-            logical=Metadata.LogicalType(JSON=Metadata.JsonType()),
-            converted=Metadata.ConvertedType.JSON)
-    elseif value_type == BSONValue
-        return _logicalwriteelement(name, Metadata.Type.BYTE_ARRAY, optional;
-            logical=Metadata.LogicalType(BSON=Metadata.BsonType()),
-            converted=Metadata.ConvertedType.BSON)
-    elseif value_type <: Union{Interval,Durations.Duration}
-        return _logicalwriteelement(name, Metadata.Type.FIXED_LEN_BYTE_ARRAY, optional;
-            width=Int32(12), converted=Metadata.ConvertedType.INTERVAL)
-    end
-    return nothing
-end
-
-function _integerconverted(::Type{Int8})
-    return Metadata.ConvertedType.INT_8
-end
-
-function _integerconverted(::Type{Int16})
-    return Metadata.ConvertedType.INT_16
-end
-
-function _integerconverted(::Type{UInt8})
-    return Metadata.ConvertedType.UINT_8
-end
-
-function _integerconverted(::Type{UInt16})
-    return Metadata.ConvertedType.UINT_16
-end
-
-function _integerconverted(::Type{UInt32})
-    return Metadata.ConvertedType.UINT_32
-end
-
-function _integerconverted(::Type{UInt64})
-    return Metadata.ConvertedType.UINT_64
-end
-
-function _integerwriteelement(name, value_type::Type, optional::Bool)
-    value_type in (Int8, Int16, UInt8, UInt16, UInt32, UInt64) || return nothing
-    width = Int8(8 * sizeof(value_type))
-    signed = value_type <: Signed
-    physical = sizeof(value_type) <= 4 ? Metadata.Type.INT32 : Metadata.Type.INT64
-    logical = Metadata.LogicalType(
-        INTEGER=Metadata.IntType(bitWidth=width, isSigned=signed))
-    return _logicalwriteelement(name, physical, optional; logical=logical,
-        converted=_integerconverted(value_type))
-end
-
 function _timestampwriteadjustment(values::AbstractVector)
     adjusted = nothing
     for value in values
@@ -250,32 +193,15 @@ end
 
 function _temporalwriteelement(name, values::AbstractVector, value_type::Type,
     optional::Bool)
-    integer = _integerwriteelement(name, value_type, optional)
-    integer === nothing || return integer
-    if value_type == Dates.Time
-        unit = Metadata.TimeUnit(NANOS=Metadata.NanoSeconds())
-        logical = Metadata.LogicalType(
-            TIME=Metadata.TimeType(isAdjustedToUTC=false, unit=unit))
-        return _logicalwriteelement(name, Metadata.Type.INT64, optional;
-            logical=logical)
-    elseif value_type == Dates.DateTime
-        unit = Metadata.TimeUnit(MILLIS=Metadata.MilliSeconds())
-        logical = Metadata.LogicalType(
-            TIMESTAMP=Metadata.TimestampType(isAdjustedToUTC=false, unit=unit))
-        return _logicalwriteelement(name, Metadata.Type.INT64, optional;
-            logical=logical,
-            converted=Metadata.ConvertedType.TIMESTAMP_MILLIS)
-    elseif value_type <: Timestamp
-        adjusted = _timestampwriteadjustment(values)
-        unit = _timestampwriteunit(value_type)
-        logical = Metadata.LogicalType(
-            TIMESTAMP=Metadata.TimestampType(isAdjustedToUTC=adjusted, unit=unit))
-        return _logicalwriteelement(name, Metadata.Type.INT64, optional;
-            logical=logical,
-            converted=_canonicalconverted(
-                _TimestampLogicalKind(_timestampwriteunitcode(value_type), adjusted)))
-    end
-    return nothing
+    value_type <: Timestamp || return nothing
+    adjusted = _timestampwriteadjustment(values)
+    unit = _timestampwriteunit(value_type)
+    logical = Metadata.LogicalType(
+        TIMESTAMP=Metadata.TimestampType(isAdjustedToUTC=adjusted, unit=unit))
+    return _logicalwriteelement(name, Metadata.Type.INT64, optional;
+        logical=logical,
+        converted=_canonicalconverted(
+            _TimestampLogicalKind(_timestampwriteunitcode(value_type), adjusted)))
 end
 
 function _decimalwriteparameters(values::AbstractVector)
@@ -341,16 +267,14 @@ function _decimalwriteelement(name, values::AbstractVector, optional::Bool,
         scale=scale, precision=precision)
 end
 
+# Columns whose annotation depends on their values: Parquet.Timestamp (UTC flag),
+# Parquet.Decimal and DataDecimals.DecimalValue (precision and scale).
 function _logicalwritecolumn(name, values::AbstractVector, value_type::Type,
     limits::Limits)
     optional = Missing <: eltype(values)
     element = _temporalwriteelement(name, values, value_type, optional)
-    element = if element !== nothing
-        element
-    elseif value_type <: Union{Decimal,DataDecimals.AbstractDecimal}
-        _decimalwriteelement(name, values, optional, limits)
-    else
-        _binarywriteelement(name, value_type, optional)
+    if element === nothing && value_type <: Union{Decimal,DataDecimals.AbstractDecimal}
+        element = _decimalwriteelement(name, values, optional, limits)
     end
     element === nothing && return nothing
     return _writescalarlogicalcolumn(name, values, element, limits)

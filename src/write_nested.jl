@@ -94,15 +94,12 @@ end
 
 function _nestedwriteisscalar(value_type::Type)
     value_type === Missing && return true
-    value_type in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32,
-        UInt64, Float16, Float32, Float64, Dates.Date, Dates.Time,
-        Dates.DateTime, Decimal, UUIDs.UUID, JSONValue, BSONValue, Interval) &&
+    # Abstract scalar types are scalars here, so the concrete-type check names them.
+    value_type <: Union{AbstractString,AbstractVector{UInt8},DataDecimals.AbstractDecimal,
+        Durations.Timestamp,Durations.ZonedTimestamp,Dates.Period,Timestamp} &&
         return true
-    value_type <: Union{DataDecimals.AbstractDecimal,Durations.Duration} && return true
-    value_type <: Timestamp && return true
-    value_type <: AbstractString && return true
-    value_type <: AbstractVector{UInt8} && return true
-    return _nestedwriteisfixedtuple(value_type)
+    _writemap(value_type) === nothing || return true
+    return _writevaluescanned(value_type)
 end
 
 function _nestedwriteleafshape(name::String, value_type::Type, optional::Bool;
@@ -232,7 +229,7 @@ function _nestedwriteshape(name::String, declared::Type, source,
         return _nestedwritelistshape(name, value_type, optional,
             eltype(value_type), nothing, limits, depth, path)
     end
-    throw(ArgumentError("Parquet cannot write field $(repr(path)) of type $value_type"))
+    throw(_writeunsupported(value_type, path))
 end
 
 # Value access shared by the aggregate scan and the shredder. Package views are read
@@ -286,7 +283,7 @@ end
 
 function _nestedwriteneedsscan(shape::_NestedWriteLeafShape)
     shape.explicit === nothing || return false
-    return shape.value_type <: Union{Timestamp,Decimal,DataDecimals.AbstractDecimal}
+    return _writevaluescanned(shape.value_type)
 end
 
 function _nestedwriteneedsscan(shape::_NestedWriteStructShape)
@@ -371,14 +368,6 @@ function _nestedwritescan!(shape::_NestedWriteMapShape, value)
     return
 end
 
-function _nestedwriteintegerlogical(name::String, value_type::Type,
-        optional::Bool)
-    element = _integerwriteelement(name, value_type, optional)
-    element === nothing && throw(ArgumentError(
-        "unsupported Parquet integer type $value_type"))
-    return element
-end
-
 function _nestedwritetimestampelement(shape::_NestedWriteLeafShape)
     value_type = shape.value_type
     adjusted = something(shape.aggregate.adjusted,
@@ -425,37 +414,12 @@ function _nestedwriteleafelement(shape::_NestedWriteLeafShape,
     shape.fixed_width === nothing || return _logicalwriteelement(shape.name,
         Metadata.Type.FIXED_LEN_BYTE_ARRAY, shape.optional;
         width=shape.fixed_width)
-    value_type == Dates.Date && return _logicalwriteelement(shape.name,
-        Metadata.Type.INT32, shape.optional;
-        logical=Metadata.LogicalType(DATE=Metadata.DateType()),
-        converted=Metadata.ConvertedType.DATE)
-    value_type in (Int8, Int16, UInt8, UInt16, UInt32, UInt64) &&
-        return _nestedwriteintegerlogical(shape.name, value_type, shape.optional)
-    if value_type == Dates.Time
-        unit = Metadata.TimeUnit(NANOS=Metadata.NanoSeconds())
-        logical = Metadata.LogicalType(TIME=Metadata.TimeType(
-            isAdjustedToUTC=false, unit=unit))
-        return _logicalwriteelement(shape.name, Metadata.Type.INT64,
-            shape.optional; logical=logical)
-    elseif value_type == Dates.DateTime
-        unit = Metadata.TimeUnit(MILLIS=Metadata.MilliSeconds())
-        logical = Metadata.LogicalType(TIMESTAMP=Metadata.TimestampType(
-            isAdjustedToUTC=false, unit=unit))
-        return _logicalwriteelement(shape.name, Metadata.Type.INT64,
-            shape.optional; logical=logical,
-            converted=Metadata.ConvertedType.TIMESTAMP_MILLIS)
-    elseif value_type <: Timestamp
-        return _nestedwritetimestampelement(shape)
-    elseif value_type <: Union{Decimal,DataDecimals.AbstractDecimal}
+    map = _writemap(value_type)
+    map === nothing || return _writeelement(map, shape.name, shape.optional)
+    value_type <: Timestamp && return _nestedwritetimestampelement(shape)
+    value_type <: Union{Decimal,DataDecimals.AbstractDecimal} &&
         return _nestedwritedecimalelement(shape, limits)
-    end
-    binary = _binarywriteelement(shape.name, value_type, shape.optional)
-    binary === nothing || return binary
-    physical = _writetype(value_type)
-    width = _writetypelength(value_type)
-    logical, converted = _stringlogical(value_type)
-    return _logicalwriteelement(shape.name, physical, shape.optional;
-        width=width, logical=logical, converted=converted)
+    throw(_writeunsupported(value_type, shape.name))
 end
 
 function _nestedwriterepetition(shape::_NestedWriteShape)
@@ -635,13 +599,26 @@ end
 # One leaf's level streams and dense values, in schema leaf order. `K` is the leaf's
 # logical kind and `V` the type its present values must have. STRING and ENUM values
 # are kept as strings; other BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY values are copied.
-struct _NestedWriteLeaf{T,K,V}
+struct _NestedWriteLeaf{T,K,V,M}
     repetition::Vector{UInt64}
     definition::Vector{UInt64}
     values::Vector{T}
     element::Metadata.SchemaElement
     kind::K
     limits::Limits
+    map::M
+end
+
+# A leaf whose element is exactly what `_writemap(V)` writes converts with that map;
+# others (schema-bearing rewrites) convert by their stored annotation.
+function _nestedwriteleafmap(element::Metadata.SchemaElement, value_type::Type)
+    isconcretetype(value_type) || return nothing
+    map = _writemap(value_type)
+    map === nothing && return nothing
+    map.physical == element.type_ && map.type_length == element.type_length &&
+        map.logical == element.logicalType && map.converted == element.converted_type &&
+        map.scale == element.scale && map.precision == element.precision || return nothing
+    return map
 end
 
 function _nestedwriteleaf(plan::_NestedLeafPlan, value_type::Type,
@@ -652,10 +629,33 @@ function _nestedwriteleaf(plan::_NestedLeafPlan, value_type::Type,
         "Tables.columntable(table)) to store $(repr(element.name)) as an INT64 " *
         "nanosecond TIMESTAMP"))
     kind = _logicalkind(element)
-    T = kind in (:string, :enum) && value_type <: AbstractString &&
+    map = _nestedwriteleafmap(element, value_type)
+    T = map !== nothing ? _writephysicaltype(map) :
+        kind in (:string, :enum) && value_type <: AbstractString &&
         isconcretetype(value_type) ? value_type : _physicaleltype(element.type_)
-    return _NestedWriteLeaf{T,typeof(kind),value_type}(UInt64[], UInt64[], T[],
-        element, kind, limits)
+    return _NestedWriteLeaf{T,typeof(kind),value_type,typeof(map)}(UInt64[], UInt64[],
+        T[], element, kind, limits, map)
+end
+
+function _nestedwritephysical(leaf::_NestedWriteLeaf{T,K,V,<:_WriteMap}, value) where {T,K,V}
+    physical = try
+        leaf.map.convert(value)
+    catch err
+        err isa Union{ArgumentError,InexactError,OverflowError} || rethrow()
+        throw(_writevalueerror(leaf.element.name, err))
+    end
+    physical isa AbstractString && _nestedwritevalidutf8(leaf, physical)
+    # Byte vectors are copied so later changes to the source do not reach the file.
+    physical isa Vector{UInt8} && return copy(physical)
+    return physical
+end
+
+function _nestedwritevalidutf8(leaf::_NestedWriteLeaf, value::AbstractString)
+    bytes = codeunits(value)
+    _checklimit(:string_bytes, length(bytes), leaf.limits.max_string_bytes)
+    isvalid(String, bytes) || throw(ArgumentError(
+        "STRING field $(repr(leaf.element.name)) contains invalid UTF-8"))
+    return
 end
 
 function _nestedwritephysical(leaf::_NestedWriteLeaf{T}, value) where {T}

@@ -314,6 +314,14 @@ end
 
 function _toparquettimestamp(kind::_TimestampLogicalKind, value,
     element::Metadata.SchemaElement)
+    if value isa Union{Durations.Timestamp,Durations.ZonedTimestamp}
+        zoned = value isa Durations.ZonedTimestamp
+        zoned == kind.is_adjusted_to_utc || throw(ArgumentError(
+            "TIMESTAMP column $(repr(element.name)) is " *
+            (kind.is_adjusted_to_utc ? "" : "not ") * "adjusted to UTC; it holds " *
+            (kind.is_adjusted_to_utc ? "ZonedTimestamp" : "Timestamp") * " values"))
+        return _timestampticks(value, kind.unit, element)
+    end
     if kind.unit == _TEMPORAL_MILLIS && !kind.is_adjusted_to_utc
         value isa Dates.DateTime ||
             throw(ArgumentError("millisecond TIMESTAMP column $(repr(element.name)) " *
@@ -328,6 +336,26 @@ function _toparquettimestamp(kind::_TimestampLogicalKind, value,
     value.is_adjusted_to_utc == kind.is_adjusted_to_utc ||
         throw(ArgumentError("TIMESTAMP column $(repr(element.name)) has the wrong UTC adjustment"))
     return value.ticks
+end
+
+_timestampscale(::Durations.Timestamp{P}) where {P} = Int64(Dates.tons(oneunit(P)))
+_timestampscale(value::Durations.ZonedTimestamp) = _timestampscale(value.utc)
+
+# The count of `unit` ticks for a Durations timestamp, converted exactly.
+function _timestampticks(value, unit::UInt8, element::Metadata.SchemaElement)
+    count = Int64(Dates.value(value))
+    _, target = _timeparameters(unit)
+    scale = _timestampscale(value)
+    if scale >= target
+        ticks, overflow = Base.mul_with_overflow(count, div(scale, target))
+        overflow && throw(ArgumentError("TIMESTAMP column $(repr(element.name)) value " *
+            "$value overflows a $(_temporalunitname(unit)) count"))
+        return ticks
+    end
+    ticks, remainder = divrem(count, div(target, scale))
+    iszero(remainder) || throw(ArgumentError("TIMESTAMP column " *
+        "$(repr(element.name)) loses precision at $(_temporalunitname(unit)) resolution"))
+    return ticks
 end
 
 function _checkednarrow(::Type{T}, value::Integer, element::Metadata.SchemaElement,

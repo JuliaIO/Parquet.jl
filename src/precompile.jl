@@ -16,8 +16,14 @@ using PrecompileTools: @compile_workload, @setup_workload
         f64=cycle(Float64[1.5, -2, 3]), str=cycle(["a", "bb", "a longer string value"]),
         date=cycle(Dates.Date(2026, 1, 1) .+ Dates.Day.(0:2)),
         datetime=cycle(Dates.DateTime(2026, 1, 1) .+ Dates.Second.(0:2)),
-        micros=cycle([Timestamp(Int64(i), :micros, false) for i in 0:2]),
-        utc=cycle([Timestamp(Int64(i), :micros, true) for i in 0:2]),
+        ns=cycle([Durations.Timestamp{Dates.Nanosecond}(Dates.UTInstant(
+            Dates.Nanosecond(i))) for i in 0:2]),
+        us=cycle([Durations.Timestamp{Dates.Microsecond}(Dates.UTInstant(
+            Dates.Microsecond(i))) for i in 0:2]),
+        utc=cycle([Durations.ZonedTimestamp{Dates.Microsecond,:UTC}(
+            Durations.Timestamp{Dates.Microsecond}(Dates.UTInstant(Dates.Microsecond(i))),
+            Dates.UTC) for i in 0:2]),
+        duration=cycle([Durations.Duration(i, 0, 1_000_000i) for i in 0:2]),
         time=cycle(Dates.Time(1) .+ Dates.Minute.(0:2)),
         dec=cycle(reinterpret(DataDecimals.Decimal{15,2,Int64}, Int64[100, -250, 7])),
         wide=cycle(reinterpret(DataDecimals.Decimal{38,4,Int128}, Int128[1, -2, 3])),
@@ -49,10 +55,10 @@ using PrecompileTools: @compile_workload, @setup_workload
             read = Table(path)
             Tables.columns(read)
             Tables.schema(read)
-            close(read)
             # A rewrite of a read table takes the schema-bearing writer.
-            read = Table(path; scan=Tables.Scan(select=(first(keys(table)),)))
             write(IOBuffer(), read; option...)
+            close(read)
+            read = Table(path; scan=Tables.Scan(select=(first(keys(table)),)))
             close(read)
         end
         bytes = take!(write(IOBuffer(), scalars; dictionary=true, codec=:snappy))

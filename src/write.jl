@@ -98,174 +98,15 @@ function WriteColumn(name::String, values, physical::Metadata.Type.T,
         String[name], nothing, nothing, Int16(0), definition, length(values), schema)
 end
 
-function _writetype(::Type{Bool})
-    return Metadata.Type.BOOLEAN
-end
-
-function _writetype(::Type{Int32})
-    return Metadata.Type.INT32
-end
-
-function _writetype(::Type{Int64})
-    return Metadata.Type.INT64
-end
-
-function _writetype(::Type{Float32})
-    return Metadata.Type.FLOAT
-end
-
-function _writetype(::Type{Float64})
-    return Metadata.Type.DOUBLE
-end
-
-function _writetype(::Type{T}) where {T<:AbstractString}
-    return Metadata.Type.BYTE_ARRAY
-end
-
-function _writetype(::Type{T}) where {T<:AbstractVector{UInt8}}
-    return Metadata.Type.BYTE_ARRAY
-end
-
-function _writetype(::Type{NTuple{N,UInt8}}) where {N}
-    return Metadata.Type.FIXED_LEN_BYTE_ARRAY
-end
-
-function _writetype(::Type{T}) where {T}
-    throw(ArgumentError("unsupported PLAIN writer element type $T"))
-end
-
-function _writetypelength(::Type{T}) where {T}
-    return nothing
-end
-
-function _writetypelength(::Type{NTuple{N,UInt8}}) where {N}
-    N > 0 || throw(ArgumentError("fixed byte-array width must be positive"))
-    N <= typemax(Int32) || throw(ArgumentError("fixed byte-array width exceeds Int32"))
-    return Int32(N)
-end
-
-function _stringlogical(::Type{T}) where {T}
-    T <: AbstractString || return nothing, nothing
-    logical = Metadata.LogicalType(STRING=Metadata.StringType())
-    return logical, Metadata.ConvertedType.UTF8
-end
-
-function _addlistentries(total::Int, count::Int, limits::Limits)
-    requested = try
-        Base.checked_add(total, count)
-    catch err
-        err isa OverflowError || rethrow()
-        throw(LimitError(:container_elements, typemax(Int64),
-            limits.max_container_elements))
-    end
-    _checklimit(:container_elements, requested, limits.max_container_elements)
-    return requested
-end
-
-function _listdateentrycount(values::AbstractVector, limits::Limits)
-    entries = 0
-    for row in values
-        if ismissing(row)
-            entries = _addlistentries(entries, 1, limits)
-            continue
-        end
-        row isa AbstractVector || throw(ArgumentError(
-            "Parquet LIST rows must be vectors or missing"))
-        entries = _addlistentries(entries, max(1, length(row)), limits)
-        for value in row
-            ismissing(value) || value isa Dates.Date || throw(ArgumentError(
-                "Parquet DATE list elements must be Date values or missing"))
-        end
-    end
-    return entries
-end
-
-function _listdatecolumn(name, values::AbstractVector, container_type::Type,
-    limits::Limits)
-    element_type = Base.nonmissingtype(eltype(container_type))
-    element_type == Dates.Date || throw(ArgumentError(
-        "unsupported nested Parquet writer element type $element_type"))
-    entries = _listdateentrycount(values, limits)
-    repetition = UInt64[]
-    definition = UInt64[]
-    dense = Int32[]
-    sizehint!(repetition, entries)
-    sizehint!(definition, entries)
-    for row in values
-        if ismissing(row)
-            push!(repetition, 0)
-            push!(definition, 0)
-            continue
-        end
-        row isa AbstractVector || throw(ArgumentError("Parquet LIST rows must be vectors or missing"))
-        if isempty(row)
-            push!(repetition, 0)
-            push!(definition, 1)
-            continue
-        end
-        for (index, value) in enumerate(row)
-            push!(repetition, isone(index) ? 0 : 1)
-            if ismissing(value)
-                push!(definition, 2)
-            elseif value isa Dates.Date
-                push!(definition, 3)
-                push!(dense, _toparquetdate(value))
-            else
-                throw(ArgumentError("Parquet DATE list elements must be Date values or missing"))
-            end
-        end
-    end
-    length(repetition) == entries || throw(ArgumentError(
-        "Parquet LIST input changed while it was encoded"))
-    logical = Metadata.LogicalType(DATE=Metadata.DateType())
-    converted = Metadata.ConvertedType.DATE
-    outer = Metadata.SchemaElement(
-        repetition_type=Metadata.FieldRepetitionType.OPTIONAL,
-        name=String(name),
-        num_children=Int32(1),
-        converted_type=Metadata.ConvertedType.LIST,
-        logicalType=Metadata.LogicalType(LIST=Metadata.ListType()),
-    )
-    repeated = Metadata.SchemaElement(
-        repetition_type=Metadata.FieldRepetitionType.REPEATED,
-        name="list",
-        num_children=Int32(1),
-    )
-    element = _writeleafschema("element", Metadata.Type.INT32, nothing, true,
-        logical, converted)
-    path = String[String(name), "list", "element"]
-    schema = Metadata.SchemaElement[outer, repeated, element]
-    return WriteColumn(String(name), dense, Metadata.Type.INT32, nothing, true,
-        logical, converted, path, repetition, definition, Int16(1), Int16(3),
-        length(values), schema)
-end
-
-function _datecolumn(name, values::AbstractVector, limits::Limits)
-    logical = Metadata.LogicalType(DATE=Metadata.DateType())
-    converted = Metadata.ConvertedType.DATE
-    optional = Missing <: eltype(values)
-    element = _writeleafschema(String(name), Metadata.Type.INT32, nothing, optional,
-        logical, converted)
-    physical = _physicalvalues(element, values; limits=limits)
-    return WriteColumn(String(name), physical, Metadata.Type.INT32, nothing, optional,
-        logical, converted)
-end
-
 function _writecolumn(name, values::AbstractVector, limits::Limits)
     type = eltype(values)
-    optional = Missing <: type
     type == Missing && return _unknowncolumn(name, values, limits)
     value_type = Base.nonmissingtype(type)
-    if value_type <: AbstractVector && !(value_type <: AbstractVector{UInt8})
-        return _listdatecolumn(name, values, value_type, limits)
-    end
-    value_type == Dates.Date && return _datecolumn(name, values, limits)
+    map = _writemap(value_type)
+    map === nothing || return _mappedcolumn(String(name), values, map)
     logical = _logicalwritecolumn(name, values, value_type, limits)
     logical === nothing || return logical
-    physical = _writetype(value_type)
-    type_length = _writetypelength(value_type)
-    logical, converted = _stringlogical(value_type)
-    return WriteColumn(String(name), values, physical, type_length, optional, logical, converted)
+    throw(_writeunsupported(value_type, String(name)))
 end
 
 function _writecolumn(name, values::FixedByteArrayVector, ::Limits)
@@ -280,6 +121,38 @@ end
 
 function _writecolumn(name, values::FixedByteArrayVector)
     return _writecolumn(name, values, Limits())
+end
+
+function _mappedcolumn(name::String, values::AbstractVector, map::_WriteMap)
+    optional = Missing <: eltype(values)
+    element = _writeelement(map, name, optional)
+    physical = _mappedvalues(name, values, map)
+    return WriteColumn(name, physical, element.type_, element.type_length, optional,
+        element.logicalType, element.converted_type, String[name], nothing, nothing,
+        Int16(0), Int16(optional), length(values), Metadata.SchemaElement[element])
+end
+
+function _mappedvalues(name::String, values::AbstractVector,
+        map::_WriteMap{typeof(identity)})
+    return values
+end
+
+function _mappedvalues(name::String, values::AbstractVector, map::_WriteMap{F,P}) where {F,P}
+    output = Vector{Missing <: eltype(values) ? Union{Missing,P} : P}(undef, length(values))
+    try
+        for (index, value) in enumerate(values)
+            output[index] = ismissing(value) ? missing : map.convert(value)
+        end
+    catch err
+        err isa Union{ArgumentError,InexactError,OverflowError} || rethrow()
+        throw(_writevalueerror(name, err))
+    end
+    return output
+end
+
+function _writevalueerror(path::AbstractString, err)
+    message = err isa ArgumentError ? err.msg : sprint(showerror, err)
+    return ArgumentError("cannot write a value of field $(repr(String(path))): $message")
 end
 
 function _writecolumnname(name::Symbol)
@@ -364,7 +237,8 @@ function _preflightwriterowtypes(names::Vector{String}, types,
     for (name, T) in zip(names, types)
         T isa Type || throw(ArgumentError(
             "row-oriented Tables schemas must contain Julia types"))
-        _nestedwriteshape(name, T, nothing, limits)
+        # Abstract and Union column types are narrowed from the collected values.
+        _writedeclared(T) && _nestedwriteshape(name, T, nothing, limits)
     end
     return
 end
@@ -478,8 +352,8 @@ function _writeinputrowcolumns(table, limits::Limits)
     output = Pair{String,AbstractVector}[]
     sizehint!(output, length(columns))
     for index in eachindex(columns, normalized)
-        push!(output, Pair{String,AbstractVector}(
-            normalized[index], columns[index]))
+        push!(output, Pair{String,AbstractVector}(normalized[index],
+            _writeinputcolumn(normalized[index], columns[index])))
     end
     return output, rowcount
 end
@@ -506,9 +380,82 @@ function _writeinputcolumns(table, limits::Limits)
         end
         length(values) == rows || throw(ArgumentError(
             "Parquet columns have different lengths"))
-        push!(output, Pair{String,AbstractVector}(name, values))
+        push!(output, Pair{String,AbstractVector}(name, _writeinputcolumn(name, values)))
     end
     return output, something(rows, 0)
+end
+
+# A column whose element type is abstract, a Union of several types, or a wrapper such
+# as CategoricalValue is narrowed from its values to one concrete element type.
+function _writeinputcolumn(name::String, values::AbstractVector)
+    _writedeclared(eltype(values)) && return values
+    return _narrowwritecolumn(name, values)
+end
+
+function _writedeclared(T::Type)
+    T === Missing && return true
+    S = Base.nonmissingtype(T)
+    S !== Union{} && isconcretetype(S) || return false
+    _writemap(S) === nothing || return true
+    _writevaluescanned(S) && return true
+    # Containers are checked field by field when their schema is inferred.
+    return S <: Union{AbstractVector,NamedTuple,AbstractDict,Tuple,ListValue,
+        StructValue,MapValue}
+end
+
+function _narrowwritecolumn(name::String, values::AbstractVector)
+    T = Union{}
+    nulls = false
+    for value in values
+        if ismissing(value)
+            nulls = true
+        else
+            T = _writepromote(T, typeof(DataAPI.unwrap(value)), name)
+        end
+    end
+    T === Union{} && return Vector{Missing}(missing, length(values))
+    output = Vector{nulls ? Union{Missing,T} : T}(undef, length(values))
+    for (index, value) in enumerate(values)
+        output[index] = ismissing(value) ? missing :
+            _writenarrowed(T, DataAPI.unwrap(value), name)
+    end
+    return output
+end
+
+# The one element type that holds values of types A and B exactly.
+function _writepromote(A::Type, B::Type, name::String)
+    A === Union{} && return B
+    A === B && return A
+    Nothing in (A, B) && throw(ArgumentError("column $(repr(name)) contains " *
+        "nothing; use missing for null values"))
+    A === Missing && return Union{Missing,B}
+    B === Missing && return Union{Missing,A}
+    if Missing <: A || Missing <: B
+        return Union{Missing,_writepromote(Base.nonmissingtype(A),
+            Base.nonmissingtype(B), name)}
+    end
+    A <: AbstractString && B <: AbstractString && return String
+    if A <: NamedTuple && B <: NamedTuple && fieldnames(A) == fieldnames(B)
+        types = map((a, b) -> _writepromote(a, b, name), fieldtypes(A), fieldtypes(B))
+        return NamedTuple{fieldnames(A),Tuple{types...}}
+    end
+    if A <: Vector && B <: Vector
+        return Vector{_writepromote(eltype(A), eltype(B), name)}
+    end
+    promoted = promote_type(A, B)
+    numeric = A <: Real && B <: Real && !(A <: Bool) && !(B <: Bool)
+    (numeric || promoted <: Durations.Timestamp) && isconcretetype(promoted) &&
+        return promoted
+    throw(ArgumentError("column $(repr(name)) mixes values of types $A and $B; " *
+        "convert it to one element type"))
+end
+
+function _writenarrowed(::Type{T}, value, name::String) where {T}
+    converted = convert(T, value)
+    T <: Union{Real,Durations.Timestamp} && !isequal(converted, value) &&
+        throw(ArgumentError("column $(repr(name)) value $value does not convert to " *
+            "$T exactly"))
+    return converted
 end
 
 # Resolves the encoding policy against the schema leaves before any value is read.
@@ -537,11 +484,8 @@ function _flatwritetype(::Type{T}) where {T}
     T === Missing && return true
     S = Base.nonmissingtype(T)
     (S === Union{} || !isconcretetype(S)) && return false
-    S <: Union{Bool,Int8,Int16,Int32,Int64,UInt8,UInt16,UInt32,UInt64,Float16,
-        Float32,Float64,AbstractString,Dates.Date,Dates.Time,Dates.DateTime,
-        Timestamp,Decimal,DataDecimals.AbstractDecimal,UUIDs.UUID,JSONValue,
-        BSONValue,Interval,Durations.Duration,Vector{UInt8}} && return true
-    return S <: NTuple{N,UInt8} where {N}
+    _writemap(S) === nothing || return true
+    return _writevaluescanned(S)
 end
 
 function _flatwritable(values::AbstractVector)

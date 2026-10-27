@@ -950,13 +950,19 @@ end
     ]
     @test_throws ArgumentError Parquet._encodefile((value=nullablekeys,))
 
-    @test_throws ArgumentError Parquet._encodefile((value=Any[Int32[1]],))
-    abstractlists = AbstractVector{Int32}[Int32[1]]
-    @test_throws ArgumentError Parquet._encodefile((value=abstractlists,))
+    # Abstractly typed list columns are narrowed from their values.
+    for lists in (Any[Int32[1]], AbstractVector{Int32}[Int32[1]], Vector[Int32[1]])
+        table = Parquet.Table(Parquet._encodefile((value=lists,)))
+        try
+            @test collect(only(table.columns.value)) == Int32[1]
+            @test table.metadata.schema[end].type_ == WNMD.Type.INT32
+        finally
+            close(table)
+        end
+    end
     heterogeneous = Union{Vector{Int32},Vector{String}}[Int32[1], String["x"]]
-    @test_throws ArgumentError Parquet._encodefile((value=heterogeneous,))
-    unparameterized = Vector[Int32[1]]
-    @test_throws ArgumentError Parquet._encodefile((value=unparameterized,))
+    @test_throws "mixes values of types Int32 and String" Parquet._encodefile(
+        (value=heterogeneous,))
 
     @test_throws ArgumentError Parquet._encodefile(
         (items=Vector{Int32}[Int32[1]],);

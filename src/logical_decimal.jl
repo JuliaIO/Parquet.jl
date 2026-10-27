@@ -216,6 +216,10 @@ function _fromparquetdecimal(element::Metadata.SchemaElement, value, limits::Lim
 end
 
 function _toparquetdecimal(element::Metadata.SchemaElement, value, limits::Limits)
+    if value isa DataDecimals.Decimal
+        fast = _toparquetdecimal(element, value)
+        fast === nothing || return fast
+    end
     value isa DataDecimals.AbstractDecimal && (value = Decimal(BigInt(DataDecimals.unscaled(value)), DataDecimals.scale(value)))
     value isa Decimal || throw(ArgumentError(
         "DECIMAL column $(repr(element.name)) contains a non-Decimal value"))
@@ -261,4 +265,27 @@ function _decimalhost(element::Metadata.SchemaElement)
     p <= 76 || return Decimal
     T = p <= 9 ? Int32 : p <= 18 ? Int64 : p <= 38 ? Int128 : DataDecimals.Int256
     return DataDecimals.Decimal{Int(p),Int(s),T}
+end
+
+# A DataDecimals.Decimal of the element's scale converts from its storage integer
+# without a BigInt; other values take the general path above.
+function _toparquetdecimal(element::Metadata.SchemaElement,
+        value::DataDecimals.Decimal{P,S,T}) where {P,S,T}
+    precision, scale = something(_decimalparameters(element))
+    S == scale || return nothing
+    unscaled = DataDecimals.unscaled(value)
+    bound = precision >= P ? _decimalbound(T, Val(P)) : T(10)^precision
+    -bound < unscaled < bound || throw(ArgumentError("DECIMAL column " *
+        "$(repr(element.name)) contains a value with more than $(min(P, precision)) digits"))
+    physical = element.type_
+    physical == Metadata.Type.INT32 && return Int32(unscaled)
+    physical == Metadata.Type.INT64 && return Int64(unscaled)
+    physical == Metadata.Type.FIXED_LEN_BYTE_ARRAY || return nothing
+    width = Int(element.type_length)
+    width <= sizeof(T) || return nothing
+    bytes = Vector{UInt8}(undef, width)
+    for index in 1:width
+        bytes[index] = (unscaled >> (8 * (width - index))) % UInt8
+    end
+    return bytes
 end

@@ -128,8 +128,13 @@ function _validatelogicalcolumnvaluetype(spec::_TimestampLogicalColumnSpec,
     value_type::Type)
     expected = _logicalcolumncanonicaltype(spec)
     value_type == expected && return
+    # Durations values convert exactly to the column's unit when they are written.
+    value_type <: (spec.adjusted ? Durations.ZonedTimestamp : Durations.Timestamp) &&
+        return
     throw(ArgumentError("$(_temporalunitname(spec.unit)) TIMESTAMP logical columns " *
-        "require $expected values or missing"))
+        "with adjusted=$(spec.adjusted) require " *
+        "$(spec.adjusted ? "Durations.ZonedTimestamp" : "Durations.Timestamp") or " *
+        "$expected values, or missing"))
 end
 
 function _validatelogicalcolumnvaluetype(::_DecimalLogicalColumnSpec,

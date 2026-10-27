@@ -48,6 +48,31 @@ An encoding symbol or string applies to all columns. A `Pair`, `NamedTuple`, or
 dictionary supplies exact column-name overrides. Unlisted columns use PLAIN, or use
 adaptive dictionary encoding when `dictionary=true`.
 
+Each column's element type decides its Parquet type:
+
+| Julia element type | Parquet column |
+|:--|:--|
+| `Bool`, `Int8`-`Int64`, `UInt8`-`UInt64`, `Float32`, `Float64`, `Float16` | BOOLEAN, INT32/INT64 with an INT annotation for the narrower and unsigned types, FLOAT, DOUBLE, FLOAT16 |
+| `AbstractString`, `Symbol`, `Char` | STRING |
+| `Vector{UInt8}`, `DataStrings.DataBytes` | BYTE_ARRAY |
+| `NTuple{N,UInt8}`, `UUID` | FIXED_LEN_BYTE_ARRAY(N), UUID |
+| `Date`, `Time`, `DateTime` | DATE, TIME(NANOS), TIMESTAMP(MILLIS) |
+| `Durations.Timestamp{P}` | TIMESTAMP in unit `P`, not adjusted to UTC; `Second` values are stored as milliseconds |
+| `Durations.ZonedTimestamp{P,Z}` | TIMESTAMP in unit `P`, adjusted to UTC |
+| `Nanosecond`, `Microsecond`, `Millisecond`, `Second` | INT64 count of that unit |
+| `Minute`, `Hour`, `Day`, `Week` | INT64 count of seconds |
+| `Month`, `Year`, `Durations.Duration` | INTERVAL |
+| `DataDecimals.Decimal{P,S}` | DECIMAL(P,S) on INT32 (P <= 9), INT64 (P <= 18), or FIXED_LEN_BYTE_ARRAY |
+| `CategoricalValue` and other wrapped values | the type of the wrapped values |
+| `Vector`, `NamedTuple`, `AbstractDict` | LIST, group, MAP |
+| `Missing` only | a null column |
+
+A column whose element type is abstract or a `Union` of several types is written as
+the one type its values share. Numbers of different types are promoted when every
+value converts exactly, and strings of different types are written as STRING. Other
+mixes, `nothing` values, and `Int128` or `BigInt` columns are errors that name the
+column.
+
 The writer reads each value of a scalar column once: a column that is not a `Vector`
 is first collected into one, so lazy or computed vectors are evaluated a single time.
 Changes made to a source while it is being written are not detected.
