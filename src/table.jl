@@ -483,6 +483,7 @@ function _openfile(input, cached::Union{Nothing,Tuple{Footer,Metadata.FileMetaDa
             metadata.num_rows >= 0 || throw(FormatError("file metadata has a negative row count"))
             metadata.num_rows <= typemax(Int) || throw(FormatError("file row count overflows Int"))
             _checklimit(:container_elements, metadata.num_rows, limits.max_container_elements)
+            metadata = _parquet816(src, metadata, footer.offset, limits)
         else
             footer, metadata = cached
             _checkedsourcelength(src) == footer.offset + footer.length + 8 || throw(
@@ -501,6 +502,49 @@ function _openfile(input, cached::Union{Nothing,Tuple{Footer,Metadata.FileMetaDa
     catch
         owned && close!(src)
         rethrow()
+    end
+end
+
+# parquet-mr before 1.2.9 left the dictionary page header out of a column chunk's size
+# (PARQUET-816, IMPALA-694). A chunk of such a file with a dictionary page gets the size
+# its pages take, found by walking their headers up to 100 bytes past the declared end, as
+# Arrow C++ reads it.
+function _parquet816(src::AbstractSource, metadata::Metadata.FileMetaData,
+        footeroffset::Int64, limits::Limits)
+    producer = _statisticsarrowproducer(metadata.created_by)
+    (producer.application === :parquet_mr &&
+        _statisticsversionbelow(producer.version, UInt64(1), UInt64(2), UInt64(9))) ||
+        return metadata
+    groups = map(metadata.row_groups) do group
+        columns = map(group.columns) do chunk
+            md = chunk.meta_data
+            size = md === nothing ? nothing : _parquet816size(src, md, footeroffset, limits)
+            size === nothing && return chunk
+            return _withfields(chunk; meta_data=_withfields(md; total_compressed_size=size))
+        end
+        return _withfields(group; columns=columns)
+    end
+    return _withfields(metadata; row_groups=groups)
+end
+
+function _parquet816size(src::AbstractSource, md::Metadata.ColumnMetaData,
+        footeroffset::Int64, limits::Limits)
+    return try
+        start = _chunkstart(md)
+        stop = min(start + md.total_compressed_size + 100, footeroffset)
+        position, values, dictionary = start, Int64(0), false
+        while position < stop && values < md.num_values
+            header, headerlength = readpageheader(src, position, stop, limits)
+            kind = validatepageheader(header)
+            position = _pageframeend(position, headerlength, header.compressed_page_size)
+            dictionary |= kind === :dictionary
+            kind === :data_v1 && (values += header.data_page_header.num_values)
+            kind === :data_v2 && (values += header.data_page_header_v2.num_values)
+        end
+        dictionary && values == md.num_values && position <= stop ? position - start : nothing
+    catch err
+        err isa Union{FormatError,LimitError} || rethrow()
+        nothing
     end
 end
 

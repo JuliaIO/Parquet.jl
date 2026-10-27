@@ -210,8 +210,11 @@ end
         @test Parquet._temporallogicalvalue(element, lastvalue) == expectedlast
         @test_throws Parquet.FormatError Parquet._temporallogicalvalue(
             element, typeof(firstvalue)(-1))
-        @test_throws Parquet.FormatError Parquet._temporallogicalvalue(
+        # 24:00:00 is valid Parquet (DuckDB writes it) that Dates.Time cannot hold
+        @test_throws Parquet.UnsupportedFeatureError Parquet._temporallogicalvalue(
             element, typeof(firstvalue)(lastvalue + 1))
+        @test_throws Parquet.FormatError Parquet._temporallogicalvalue(
+            element, typeof(firstvalue)(lastvalue + 2))
     end
 
     millis = temporaltesttime(:millis)

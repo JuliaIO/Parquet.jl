@@ -255,6 +255,13 @@ out. Reading one of them reports an unsupported feature rather than an invalid f
   columns instead to store them as INT64 timestamps.
 - Writing the deprecated LZ4 codec or the deprecated BIT_PACKED encoding. Both are
   still read, because files in the wild use them. New files use `:lz4_raw` and RLE.
+- Decoding VARIANT, GEOMETRY, and GEOGRAPHY values. They read as their storage: a
+  VARIANT as its `metadata` and `value` byte columns (and any shredded `typed_value`),
+  GEOMETRY and GEOGRAPHY as their WKB bytes.
+- `_metadata` and `_common_metadata` summary files. A dataset skips them, as it skips
+  every name that starts with `_` or `.`.
+- TIME values of 24:00:00, which `Dates.Time` cannot hold. Reading one throws
+  `Parquet.UnsupportedFeatureError` naming the column; `drop` it to read the rest.
 
 ## Statistics
 

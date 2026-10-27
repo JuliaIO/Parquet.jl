@@ -121,9 +121,13 @@ function _deltasigned(::Type{Int64}, value::Int64, what::String)
     return value
 end
 
+# INT32 streams add values and deltas modulo 2^32. DuckDB writes those of UINT32 columns
+# as unsigned values, so a first value or minimum delta up to 2^32 - 1 in magnitude reads
+# as its low 32 bits.
 function _deltasigned(::Type{Int32}, value::Int64, what::String)
-    typemin(Int32) <= value <= typemax(Int32) || throw(FormatError("delta $what $value exceeds Int32"))
-    return Int32(value)
+    -Int64(typemax(UInt32)) <= value <= typemax(UInt32) ||
+        throw(FormatError("delta $what $value exceeds 32 bits"))
+    return value % Int32
 end
 
 function _deltamask(width::Int)

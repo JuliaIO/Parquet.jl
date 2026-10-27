@@ -189,6 +189,9 @@ function _fromparquettime(kind::_TimeLogicalKind, value, element::Metadata.Schem
         throw(FormatError("TIME column $(repr(element.name)) contains a non-$expected value"))
     ticks = Int64(value)
     limit, scale = _timeparameters(kind.unit)
+    ticks == limit && throw(UnsupportedFeatureError("TIME column $(repr(element.name)) " *
+        "holds 24:00:00, which Dates.Time cannot represent; read the other columns with " *
+        "drop=[:$(element.name)]"))
     0 <= ticks < limit ||
         throw(FormatError("TIME column $(repr(element.name)) is outside one day"))
     return Dates.Time(Dates.Nanosecond(ticks * scale))

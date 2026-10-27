@@ -203,14 +203,18 @@ end
         encoded = Parquet.encode_delta_binary_packed(values)
         @test encoded[headerlength + 1] == mindelta && encoded[(headerlength + 2):end] == UInt8[0x00, 0x00, 0x00, 0x00]
     end
-    # INT32 streams must stay within the physical width: 33-bit miniblocks and out-of-range header values are rejected
+    # INT32 streams must stay within 32 bits: 33-bit miniblocks and header values of 2^32 or more
+    # in magnitude are rejected, while smaller header values (DuckDB writes UINT32 columns' first
+    # values and minimum deltas unsigned) add modulo 2^32
     wide = referencedelta(Int64, Int64[0, typemax(Int32), typemin(Int32)])
     @test Parquet.decode_delta_binary_packed(Int64, wide, 3)[1] == Int64[0, typemax(Int32), typemin(Int32)]
     @test_throws Parquet.FormatError Parquet.decode_delta_binary_packed(Int32, wide, 3)
-    @test_throws Parquet.FormatError Parquet.decode_delta_binary_packed(Int32, referencedelta(Int64, Int64[Int64(2)^31]), 1)
-    @test_throws Parquet.FormatError Parquet.decode_delta_binary_packed(Int32, referencedelta(Int64, Int64[-Int64(2)^31 - 1]), 1)
-    @test_throws Parquet.FormatError Parquet.decode_delta_binary_packed(Int32, referencedelta(Int64, Int64[0, -Int64(2)^31 - 5]), 2)
-    @test_throws Parquet.FormatError Parquet.decode_delta_binary_packed(Int32, referencedelta(Int64, Int64[0, Int64(2)^31]), 2)
+    for values in (Int64[Int64(2)^31], Int64[-Int64(2)^31 - 1], Int64[0, -Int64(2)^31 - 5], Int64[0, Int64(2)^31])
+        @test Parquet.decode_delta_binary_packed(Int32, referencedelta(Int64, values), length(values))[1] == values .% Int32
+    end
+    for values in (Int64[Int64(2)^32], Int64[-Int64(2)^32], Int64[0, Int64(2)^32], Int64[0, -Int64(2)^32])
+        @test_throws Parquet.FormatError Parquet.decode_delta_binary_packed(Int32, referencedelta(Int64, values), length(values))
+    end
     @test Parquet.decode_delta_binary_packed(Int32, referencedelta(Int64, Int64[0, typemin(Int32)]), 2)[1] == Int32[0, typemin(Int32)]
     @test Parquet.decode_delta_binary_packed(Int32, referencedelta(Int32, Int32[0, typemin(Int32)]), 2)[1] == Int32[0, typemin(Int32)]
 end
