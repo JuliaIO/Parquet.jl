@@ -1410,6 +1410,24 @@ function _writekeyvaluemetadata(table, ::Limits)
     return nothing
 end
 
+# Key-value entries that describe the source file's schema. A rewrite of a selected or
+# renamed table would carry them stale (Polars then reads the wrong columns), so they
+# are never copied from the input.
+const _SOURCE_SCHEMA_KEYS = ("ARROW:schema", "pandas",
+    "org.apache.spark.sql.parquet.row.metadata")
+
+function _rewritekeyvaluemetadata(entries::Vector{Metadata.KeyValue}, limits::Limits)
+    kept = Metadata.KeyValue[item for item in entries
+        if !(item.key in _SOURCE_SCHEMA_KEYS)]
+    _checklimit(:container_elements, length(kept), limits.max_container_elements)
+    for item in kept
+        _checklimit(:string_bytes, ncodeunits(item.key), limits.max_string_bytes)
+        item.value === nothing || _checklimit(:string_bytes,
+            ncodeunits(item.value), limits.max_string_bytes)
+    end
+    return isempty(kept) ? nothing : kept
+end
+
 function _encodefile(table; checksum::Bool=true, dictionary::Bool=false,
     codec=:uncompressed, compressionlevel::Union{Nothing,Integer}=nothing,
     pageversion=:v1, encoding=nothing, rowgroupsize=1_048_576,

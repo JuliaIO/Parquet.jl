@@ -1,5 +1,6 @@
 using Test
 using Dates
+import Tables
 
 const WPMD = Parquet.Metadata
 const WPTH = Parquet.Thrift
@@ -255,15 +256,17 @@ end
     @test wpschemaequal(wpmetadata(take!(io)).schema, expected)
 end
 
-@testset "schema-bearing writer preserves file key-value metadata" begin
-    bytes = Parquet._encodefile((value=Int32[1],))
+@testset "schema-bearing writer keeps key-value metadata except source schemas" begin
+    bytes = Parquet._encodefile((value=Int32[1], other=Int64[2]))
     original = wpmetadata(bytes)
-    keyvalue = WPMD.KeyValue(key="ARROW:schema", value="opaque-schema",
+    kept = WPMD.KeyValue(key="source", value="etl-job-7",
         unknown_fields=[wprawi32(90, 900)])
+    stale = [WPMD.KeyValue(key=key, value="opaque-schema") for key in
+        ("ARROW:schema", "pandas", "org.apache.spark.sql.parquet.row.metadata")]
     bytes = wprewritefooter(bytes, wpreplace(original;
-        key_value_metadata=[keyvalue]))
+        key_value_metadata=[stale[1], kept, stale[2], stale[3]]))
     table = Parquet.Table(bytes)
-    expected = only(table.metadata.key_value_metadata)
+    expected = table.metadata.key_value_metadata[2]
     output = try
         error = try
             Parquet._encodefile(table;
@@ -279,11 +282,29 @@ end
         close(table)
     end
     rewritten = wpmetadata(output)
-    @test rewritten.key_value_metadata !== nothing
     actual = only(rewritten.key_value_metadata)
     @test actual.key == expected.key
     @test actual.value == expected.value
     @test wpexact(actual.unknown_fields, expected.unknown_fields)
+    # A scan that renames and drops columns must not carry the source's schema.
+    renamed = Parquet.Table(bytes; scan=Tables.Scan(select=(:other => :renamed,)))
+    output = try
+        Parquet._encodefile(renamed)
+    finally
+        close(renamed)
+    end
+    rewritten = wpmetadata(output)
+    @test [element.name for element in rewritten.schema] == ["schema", "renamed"]
+    @test [item.key for item in rewritten.key_value_metadata] == ["source"]
+    single = Parquet._encodefile((value=Int32[1],))
+    onlystale = wprewritefooter(single,
+        wpreplace(wpmetadata(single); key_value_metadata=stale))
+    table = Parquet.Table(onlystale)
+    try
+        @test wpmetadata(Parquet._encodefile(table)).key_value_metadata === nothing
+    finally
+        close(table)
+    end
 end
 
 @testset "schema-bearing writer selectors" begin

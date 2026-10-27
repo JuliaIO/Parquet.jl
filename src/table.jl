@@ -17,15 +17,7 @@ end
 function _writekeyvaluemetadata(table::Table, limits::Limits)
     metadata = table.metadata.key_value_metadata
     metadata === nothing && return nothing
-    _checklimit(:container_elements, length(metadata),
-        limits.max_container_elements)
-    for item in metadata
-        _checklimit(:string_bytes, ncodeunits(item.key),
-            limits.max_string_bytes)
-        item.value === nothing || _checklimit(:string_bytes,
-            ncodeunits(item.value), limits.max_string_bytes)
-    end
-    return copy(metadata)
+    return _rewritekeyvaluemetadata(metadata, limits)
 end
 
 function _readfilemetadata(file::File, limits::Limits,

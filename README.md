@@ -14,7 +14,8 @@ Hadoop and raw-block LZ4 input. The Stage 4 scalar layer reads STRING, ENUM, UUI
 BSON, DATE, TIME, TIMESTAMP, INTEGER, DECIMAL, FLOAT16, INTERVAL, and UNKNOWN values. It
 writes these annotations from unambiguous Julia values or tagged package values, and a
 `Parquet.Table` rewrite preserves the source scalar schema and file key-value
-metadata. The nested implementation reads and writes recursive structs, lists, and
+metadata, except the entries that describe the source's schema (`ARROW:schema`,
+`pandas`, Spark's row metadata), which a selection or rename would make stale. The nested implementation reads and writes recursive structs, lists, and
 maps, including null containers, empty containers, and null elements. The reader also
 handles the legacy list and map layouts covered by the pinned Apache corpus. The
 writer emits row-group statistics and offset indexes by default; the reader does not
