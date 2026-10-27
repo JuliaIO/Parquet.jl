@@ -338,8 +338,9 @@ end
 ## Ordered parallel work
 
 # Runs `work(i)` for i in 1:count on up to `ntasks` tasks and hands the results to
-# `consume(i, result)` in order on the calling task. At most `ntasks` finished results
-# wait for `consume` at a time.
+# `consume(i, result)` in order on the calling task. A task starts job `i` only once job
+# `i - 4ntasks` is consumed, so few results wait for `consume` while one slow job does
+# not stall the other tasks (a window of `ntasks` leaves about half of them idle).
 mutable struct _OrderedRun
     @atomic claimed::Int
     consumed::Int
@@ -356,7 +357,7 @@ function _runordered(work, consume, count::Int, ntasks::Int)
         return
     end
     run = _OrderedRun(0, 0, nothing, Vector{Any}(nothing, count), Threads.Condition())
-    window = ntasks
+    window = 4 * ntasks
     function worker()
         while true
             index = @atomic run.claimed += 1

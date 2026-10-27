@@ -5,6 +5,10 @@
 const _PAGE_ROW_LIMIT = 20_000
 # ... and a chunk stops dictionary encoding once its dictionary exceeds this many bytes.
 const _DICTIONARY_LIMIT = 1024 * 1024
+# A chunk's dictionary probe stops early when the first _PROBE_PREFIX values of its first
+# page hold more than _PROBE_DISTINCT (95%) distinct values.
+const _PROBE_PREFIX = 4096
+const _PROBE_DISTINCT = 3891
 # Byte-array ColumnIndex bounds longer than this are truncated (parquet-mr's default).
 const _INDEX_BOUND_BYTES = 64
 
@@ -58,23 +62,31 @@ function _encodehybrid!(output::Vector{UInt8}, values::AbstractVector{<:Unsigned
     return output
 end
 
-# Packs values[start:stop], padded with zeros to `total` values, least significant bit first.
+# Packs values[start:stop], padded with zeros to `total` values (a multiple of eight),
+# least significant bit first. Values are below 2^bitwidth with bitwidth <= 32, so the
+# accumulator flushes 32 bits at a time.
 function _bitpack!(output::Vector{UInt8}, values::AbstractVector{<:Unsigned}, start::Int,
         stop::Int, total::Int, bitwidth::Int)
     position = length(output)
-    resize!(output, position + (total * bitwidth) >> 3)
+    finish = position + (total * bitwidth) >> 3
+    resize!(output, finish)
     accumulator = UInt64(0)
     bits = 0
-    @inbounds for index in start:(start + total - 1)
-        value = index <= stop ? UInt64(values[index]) : UInt64(0)
-        accumulator |= value << bits
+    @inbounds for index in start:stop
+        accumulator |= UInt64(values[index]) << bits
         bits += bitwidth
-        while bits >= 8
-            position += 1
-            output[position] = accumulator % UInt8
-            accumulator >>= 8
-            bits -= 8
+        if bits >= 32
+            _storeuint32!(output, position + 1, accumulator % UInt32)
+            position += 4
+            accumulator >>= 32
+            bits -= 32
         end
+    end
+    # The last partial word, then the zero padding.
+    @inbounds while position < finish
+        position += 1
+        output[position] = accumulator % UInt8
+        accumulator >>= 8
     end
     return output
 end
@@ -87,6 +99,20 @@ function _encodelevels!(output::Vector{UInt8}, levels::AbstractVector{UInt16},
     resize!(output, start + 4)
     _encodehybrid!(output, levels, bitwidth)
     _storeuint32!(output, start + 1, UInt32(length(output) - start - 4))
+    return output
+end
+
+# A level stream of `count` (at least eight) equal levels: one RLE run, as
+# _encodelevels! writes it.
+function _encodelevelrun!(output::Vector{UInt8}, count::Int, level::UInt16,
+        bitwidth::Int, prefixed::Bool)
+    start = length(output)
+    prefixed && resize!(output, start + 4)
+    _writehybridvarint!(output, UInt64(count) << 1)
+    for shift in 0:(cld(bitwidth, 8) - 1)
+        push!(output, (level >> (8 * shift)) % UInt8)
+    end
+    prefixed && _storeuint32!(output, start + 1, UInt32(length(output) - start - 4))
     return output
 end
 
@@ -417,23 +443,20 @@ end
 _newdictionary(::Vector{P}) where {P} = _NumberDictionary{P}()
 _newdictionary(buffer::_BytesBuffer) = _BytesDictionary(buffer)
 
-# Dictionary indices of a page's values, in `indices`.
+# Dictionary indices of values[first:last], in indices[first:last].
 function _dictionaryencode!(indices::Vector{UInt32}, dictionary::_NumberDictionary{P},
-        values::Vector{P}) where {P}
-    resize!(indices, length(values))
-    @inbounds for index in eachindex(values)
+        values::Vector{P}, first::Int, last::Int) where {P}
+    @inbounds for index in first:last
         indices[index] = _dictionaryindex!(dictionary, values[index])
     end
     return indices
 end
 
 function _dictionaryencode!(indices::Vector{UInt32}, dictionary::_BytesDictionary,
-        values::_BytesBuffer)
-    count = length(values.starts)
-    resize!(indices, count)
+        values::_BytesBuffer, first::Int, last::Int)
     data = values.data
     GC.@preserve data begin
-        @inbounds for index in 1:count
+        @inbounds for index in first:last
             indices[index] = _dictionaryindex!(dictionary,
                 pointer(data, values.starts[index]), Int(values.lengths[index]))
         end
@@ -538,15 +561,16 @@ end
 
 # IEEE 754 total order as unsigned integers: negative values reverse, positive values
 # move above them.
+# Branch-free, so the bounds loops vectorize: the arithmetic shift spreads the sign bit.
 @inline function _totalkey(bits::U) where {U<:Unsigned}
     sign = one(U) << (8 * sizeof(U) - 1)
-    return iszero(bits & sign) ? bits | sign : ~bits
+    return bits ⊻ (reinterpret(U, reinterpret(signed(U), bits) >> (8 * sizeof(U) - 1)) | sign)
 end
 
-@inline _isnanbits(bits::UInt16) = (bits & 0x7c00) == 0x7c00 && !iszero(bits & 0x03ff)
-@inline _isnanbits(bits::UInt32) = (bits & 0x7f800000) == 0x7f800000 && !iszero(bits & 0x007fffff)
-@inline _isnanbits(bits::UInt64) = (bits & 0x7ff0000000000000) == 0x7ff0000000000000 &&
-    !iszero(bits & 0x000fffffffffffff)
+# A NaN's magnitude bits exceed infinity's.
+@inline _isnanbits(bits::UInt16) = bits & 0x7fff > 0x7c00
+@inline _isnanbits(bits::UInt32) = bits & 0x7fffffff > 0x7f800000
+@inline _isnanbits(bits::UInt64) = bits & 0x7fffffffffffffff > 0x7ff0000000000000
 
 # The comparable key of a fixed-width value: signed integers as themselves, unsigned
 # annotations by their bits, floats by IEEE 754 total order.
@@ -609,8 +633,8 @@ function _numberbounds(values::Vector{P}, ::_FloatKey) where {P<:Union{Float32,F
         key = _totalkey(bits)
         nan = _isnanbits(bits)
         nans += nan
-        lo = min(lo, nan ? typemax(U) : key)
-        hi = max(hi, nan ? zero(U) : key)
+        lo = min(lo, ifelse(nan, typemax(U), key))
+        hi = max(hi, ifelse(nan, zero(U), key))
     end
     if nans == length(values)
         lo = typemax(U)
@@ -898,7 +922,23 @@ function _encodepagevalues!(chunk::_ChunkWriter)
         return body, Metadata.Encoding.PLAIN
     end
     dictionary = chunk.dictionary
-    _dictionaryencode!(chunk.indices, dictionary, values)
+    count = _buffercount(values)
+    indices = resize!(chunk.indices, count)
+    first = 1
+    if state == _DICT_PROBING && count > _PROBE_PREFIX
+        # A probe page whose first _PROBE_PREFIX values are nearly all distinct would not
+        # be smaller with a dictionary, so the rest of the page is not hashed. Repeated
+        # values, sorted runs, and short cycles all show up within the prefix.
+        _dictionaryencode!(indices, dictionary, values, 1, _PROBE_PREFIX)
+        if _dictionarycount(dictionary) > _PROBE_DISTINCT
+            chunk.state = _DICT_OFF
+            _resetdictionary!(dictionary)
+            _plainpayload!(body, values)
+            return body, Metadata.Encoding.PLAIN
+        end
+        first = _PROBE_PREFIX + 1
+    end
+    _dictionaryencode!(indices, dictionary, values, first, count)
     bitwidth = _indexbitwidth(_dictionarycount(dictionary))
     push!(body, UInt8(bitwidth))
     _encodehybrid!(body, chunk.indices, bitwidth)
@@ -983,8 +1023,13 @@ function _flushpage!(chunk::_ChunkWriter, rows::Int, firstrow::Int)
     leaf.maxrep > 0 && _encodelevels!(page, chunk.repetitions, _levelwidth(leaf.maxrep),
         !options.v2)
     replength = length(page)
-    leaf.maxdef > 0 && _encodelevels!(page, chunk.definitions, _levelwidth(leaf.maxdef),
-        !options.v2)
+    if leaf.maxdef > 0
+        width = _levelwidth(leaf.maxdef)
+        # A flat page without nulls has one run of the maximum level.
+        leaf.maxrep == 0 && nulls == 0 && entries >= 8 ?
+            _encodelevelrun!(page, entries, UInt16(leaf.maxdef), width, !options.v2) :
+            _encodelevels!(page, chunk.definitions, width, !options.v2)
+    end
     levellength = length(page)
     limits = options.limits
     if options.v2
@@ -1256,6 +1301,44 @@ function _gatherflat!(chunk::_ChunkWriter, rows::_FlatRows, row::Int, stop::Int)
     end
     return row
 end
+
+# Fixed-width pages fill preallocated buffers: the page's byte limit caps its values up
+# front, so the loop has no per-value growth checks.
+function _gatherflat!(chunk::_ChunkWriter{Vector{P}}, rows::_FlatRows, row::Int,
+        stop::Int) where {P}
+    values = chunk.values
+    definitions = chunk.definitions
+    capacity = _pagecapacity(values, chunk.options.pagesize)
+    column = rows.column
+    convert = rows.convert
+    optional = rows.optional
+    resize!(values, min(stop - row + 1, capacity))
+    optional && resize!(definitions, stop - row + 1)
+    count = 0
+    entry = 0
+    @inbounds while row <= stop
+        value = column[row]
+        entry += 1
+        row += 1
+        if ismissing(value)
+            optional || _requiredmissing(rows.name)
+            definitions[entry] = 0x0000
+        else
+            optional && (definitions[entry] = 0x0001)
+            count += 1
+            values[count] = convert(value)
+            count == capacity && break
+        end
+    end
+    resize!(values, count)
+    optional && resize!(definitions, entry)
+    return row
+end
+
+# The values a page holds before reaching `limit` bytes, as the byte check in the
+# generic gather counts them.
+_pagecapacity(::Vector{Bool}, limit::Int) = limit > typemax(Int) >> 3 ? typemax(Int) : 8 * limit
+_pagecapacity(::Vector{P}, limit::Int) where {P} = cld(limit, sizeof(P))
 
 @noinline function _requiredmissing(name::String)
     throw(ArgumentError("column $(repr(name)) has missing values but its Parquet " *

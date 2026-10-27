@@ -205,3 +205,35 @@ end
         close(file)
     end
 end
+
+@testset "hybrid streams round trip at every bit width" begin
+    for bitwidth in 1:32, count in (1, 7, 8, 9, 100, 1001)
+        limit = bitwidth == 32 ? typemax(UInt32) : UInt32(1) << bitwidth - 1
+        # Random values with some runs long enough for RLE.
+        values = UInt32[]
+        while length(values) < count
+            value = rand(UInt32(0):limit)
+            append!(values, fill(value, rand((1, 1, 1, 3, 12))))
+        end
+        resize!(values, count)
+        bytes = Parquet._encodehybrid!(UInt8[], values, bitwidth)
+        decoded, position = Parquet.decode_hybrid(bytes, count, bitwidth)
+        @test decoded == values
+        @test position == length(bytes) + 1
+    end
+    # An all-present page's definition levels are one RLE run.
+    run = Parquet._encodelevelrun!(UInt8[], 20, UInt16(1), 1, true)
+    @test run == Parquet._encodelevels!(UInt8[], fill(UInt16(1), 20), 1, true)
+end
+
+@testset "dictionary probe keeps repeated values and skips distinct ones" begin
+    rows = 20_000
+    encodings(values) = only(wrmetadata(take!(Parquet.write(IOBuffer(), (v=values,))
+        )).row_groups).columns[1].meta_data.encodings
+    distinct = collect(1:rows) .* 7919
+    @test !(WRMD.Encoding.RLE_DICTIONARY in encodings(distinct))
+    @test WRMD.Encoding.RLE_DICTIONARY in encodings([distinct[mod1(i, 2500)] for i in 1:rows])
+    @test WRMD.Encoding.RLE_DICTIONARY in encodings([distinct[cld(i, 4)] for i in 1:rows])
+    @test !(WRMD.Encoding.RLE_DICTIONARY in encodings(["s$i" for i in distinct]))
+    @test WRMD.Encoding.RLE_DICTIONARY in encodings(["s$(i % 3000)" for i in 1:rows])
+end
