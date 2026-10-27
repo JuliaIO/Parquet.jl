@@ -1029,6 +1029,8 @@ rows `column`.
 function _encodenested(semantic::_NestedSchemaPlan, node::_NestedWriteNode,
         column::AbstractVector, rows::UnitRange{Int}, specs::Vector{_LeafSpec},
         options::_ChunkOptions)
+    # Only the shredding loop specializes on the column type.
+    Base.@nospecialize column
     if length(specs) > _FUSED_LEAVES
         leaves = _nestedwriterows(semantic, node, view(column, rows), options.limits)
         return _EncodedChunk[_encodechunk(spec, _LeveledRows(leaf.repetition,

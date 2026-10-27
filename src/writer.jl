@@ -372,6 +372,7 @@ end
 
 function _encodefield(schema::_WriteSchema, field::_NestedField, binding::_NestedBinding,
         range::UnitRange{Int}, options::_WriteOptions)
+    Base.@nospecialize binding
     offset = firstindex(binding.column) - 1
     return _encodenested(schema.semantic, binding.node, binding.column,
         (offset + first(range)):(offset + last(range)),
