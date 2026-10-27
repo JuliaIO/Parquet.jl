@@ -320,6 +320,37 @@ end
     @test limited < sum(last, source.calls) ÷ 2
 end
 
+@testset "pushdown: a source not in memory fetches the pages a read decodes" begin
+    n = 60_000
+    table = (a=collect(1:n), b=["b$i" for i in 1:n], c=[isodd(i) ? "x" : "y" for i in 1:n])
+    for pageindex in (true, false)
+        bytes = pdbytes(table; dictionary=false, encoding=(c=:dictionary,), pagesize=4_096,
+            pageindex=pageindex)
+        opened = HandleTrackingSource(bytes)
+        close(Parquet.File(opened))
+        footer = sum(last, opened.calls)
+        whole = HandleTrackingSource(bytes)
+        Parquet.Table(whole)
+        for scan in (Tables.Scan(filter=Parquet.col(:a) > n - 100),
+                Tables.Scan(filter=(Parquet.col(:a) > n - 100) &
+                    Parquet.colcmp(==, Parquet.col(:c), "x")),
+                Tables.Scan(limit=10, offset=30_000),
+                Tables.Scan(select=(:b,), filter=Parquet.col(:a) < 50))
+            source = HandleTrackingSource(bytes)
+            got = Parquet.Table(source; scan=scan)
+            expected = Parquet.Table(bytes; scan=scan)
+            @test Tables.columnnames(got) == Tables.columnnames(expected)
+            for name in Tables.columnnames(expected)
+                @test isequal(collect(Tables.getcolumn(got, name)),
+                    collect(Tables.getcolumn(expected, name)))
+            end
+            # With page indexes, only the pages that hold the rows are fetched.
+            pageindex && @test sum(last, source.calls) - footer <
+                (sum(last, whole.calls) - footer) ÷ 4
+        end
+    end
+end
+
 @testset "pushdown: Parquet.File skips row groups its filter rules out" begin
     bytes = pdbytes((a=collect(1:1_000),); rowgroupsize=100)
     file = Parquet.File(bytes; filter=Parquet.col(:a) > 750)

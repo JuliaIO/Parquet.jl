@@ -369,8 +369,9 @@ prevent that.
 A `Parquet.AbstractSource` implements `Parquet.sourcelength` and `Parquet.readrange`,
 and `Parquet.concurrentreads` when ranges may be read on several tasks at once. A read
 takes the footer from one read of the source's last 64 KiB, then reads the column
-chunks it decodes, merging chunks less than 64 KiB apart into one range. Parquet never
-closes a source it was given.
+chunks it decodes, merging chunks less than 64 KiB apart into one range. A filtered or
+windowed read of a file with a page index reads only the pages it decodes, with the page
+indexes it needs fetched together first. Parquet never closes a source it was given.
 
 ```julia
 using CloudStore, Parquet

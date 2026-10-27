@@ -587,15 +587,24 @@ struct _ChunkPages
     locations::Vector{Metadata.PageLocation}
 end
 
-# The bytes of an index structure the column chunk points to, or `nothing` when the
-# pointer is absent or does not lie in the file body.
-function _indexbytes(file::File, offset::Union{Nothing,Int64}, length::Union{Nothing,Int32},
+# The byte range (start, stop) of an index structure a column chunk points to, or
+# `nothing` when the pointer is absent, too long, or does not lie in the file body.
+function _indexrange(file::File, offset::Union{Nothing,Int64}, length::Union{Nothing,Int32},
         limits::Limits)
     (offset === nothing || length === nothing) && return nothing
     (offset >= 4 && length > 0 && length <= limits.max_page_index_bytes &&
         offset <= file.footer.offset - length) || return nothing
+    return (offset, offset + Int64(length))
+end
+
+# The bytes of an index structure the column chunk points to, or `nothing`
+# (`_indexrange`).
+function _indexbytes(file::File, offset::Union{Nothing,Int64}, length::Union{Nothing,Int32},
+        limits::Limits)
+    range = _indexrange(file, offset, length, limits)
+    range === nothing && return nothing
     total = _checkedsourcelength(file.source)
-    return _contiguous(_readrangeexact(file.source, total, offset, Int64(length)))
+    return _contiguous(_readrangeexact(file.source, total, range[1], range[2] - range[1]))
 end
 
 function _decodeindex(bytes, ::Type{T}, limits::Limits, budget::_ByteBudget) where {T}
@@ -710,10 +719,98 @@ _rowcount(ranges::Vector{UnitRange{Int}}) = sum(length, ranges; init=0)
 function _filterparts(file::File, groups, filter, budget::_ByteBudget)
     ctx = _prunecontext(file, filter, budget)
     indices = collect(Int, groups)
+    ctx = _prefetchindexes(ctx, indices)
     parts = _readmap(indices, _readtasks(file, file.plan.ntasks, length(indices))) do index, _
         return _filterpart(ctx, index)
     end
     return _GroupRows[part for part in parts if part !== nothing]
+end
+
+# `file` reading through a `_CoalescedSource` that fetches `ranges` (byte offsets, start
+# and stop), each merged run with one request on first use, when its source is not in
+# memory.
+function _plannedfile(file::File, ranges::Vector{Tuple{Int64,Int64}})
+    (file.source isa MemorySource || isempty(ranges)) && return file
+    return File(_CoalescedSource(file.source, ranges), file.footer, file.metadata, file.plan,
+        false, false)
+end
+
+# For a source not in memory, the context with the page indexes of the filter columns of
+# the row groups statistics leave, fetched together.
+function _prefetchindexes(ctx::_PruneContext, indices::Vector{Int})
+    file, limits = ctx.file, ctx.plan.limits
+    file.source isa MemorySource && return ctx
+    fields = unique!(Int[leaf.field for leaf in ctx.leaves
+        if leaf.field > 0 && ctx.fields[leaf.field] !== nothing])
+    ranges = Tuple{Int64,Int64}[]
+    for index in indices
+        _has(_can(ctx.pred, _groupcans(ctx, index)), _CAN_TRUE) || continue
+        columns = ctx.plan.metadata.row_groups[index].columns
+        for field in fields
+            position = Int(ctx.fields[field].node.column_index)
+            1 <= position <= length(columns) || continue
+            chunk = columns[position]
+            for range in (
+                    _indexrange(file, chunk.column_index_offset, chunk.column_index_length,
+                        limits),
+                    _indexrange(file, chunk.offset_index_offset, chunk.offset_index_length,
+                        limits))
+                range === nothing || push!(ranges, range)
+            end
+        end
+    end
+    isempty(ranges) && return ctx
+    return _PruneContext(_plannedfile(file, ranges), ctx.plan, ctx.pred, ctx.leaves,
+        ctx.fields, ctx.budget)
+end
+
+# The file to decode the rows `wanted` of each `(node, part, wanted)` item from, and each
+# item's page locations (`_chunkpages`). For a source not in memory, the file reads
+# through one fetch plan: a chunk with an OffsetIndex needs its dictionary page and the
+# pages holding wanted rows, one without needs all of it, and the offset indexes are
+# fetched together first. A source in memory is returned as is, with the page locations
+# `missing` (`_decodepart` finds them).
+function _planfetch(file::File, metadata::Metadata.FileMetaData, items, limits::Limits,
+        budget::_ByteBudget)
+    located = Union{Missing,Nothing,_ChunkPages}[missing for _ in items]
+    file.source isa MemorySource && return file, located
+    chunks = map(items) do (node, part, _)
+        group = metadata.row_groups[part.group]
+        chunk = group.columns[Int(node.column_index)]
+        return chunk, Int(group.num_rows),
+            _chunkrange(_chunkmetadata(chunk, node), file.footer.offset)
+    end
+    indexranges = Tuple{Int64,Int64}[]
+    for (chunk, _, _) in chunks
+        range = _indexrange(file, chunk.offset_index_offset, chunk.offset_index_length,
+            limits)
+        range === nothing || push!(indexranges, range)
+    end
+    indexfile = _plannedfile(file, indexranges)
+    pages = _readmap(eachindex(chunks), _readtasks(file, file.plan.ntasks, length(chunks))) do index, _
+        chunk, rows, (start, stop) = chunks[index]
+        return _chunkpages(indexfile, chunk, rows, start, stop, limits, budget)
+    end
+    ranges = Tuple{Int64,Int64}[]
+    for (index, ((_, _, wanted), (_, rows, (start, stop)))) in enumerate(zip(items, chunks))
+        located[index] = chunkpages = pages[index]
+        if chunkpages === nothing
+            push!(ranges, (start, stop))
+            continue
+        end
+        locations = chunkpages.locations
+        first(locations).offset > start && push!(ranges, (start, first(locations).offset))
+        next = 1
+        for (page, location) in enumerate(locations)
+            stoprow = page == length(locations) ? rows : chunkpages.starts[page + 1]
+            while next <= length(wanted) && last(wanted[next]) < chunkpages.starts[page]
+                next += 1
+            end
+            next <= length(wanted) && first(wanted[next]) < stoprow &&
+                push!(ranges, (location.offset, location.offset + location.compressed_page_size))
+        end
+    end
+    return _plannedfile(file, ranges), located
 end
 
 function _filterpart(ctx::_PruneContext, index::Int)
@@ -841,11 +938,12 @@ end
 # sorted, disjoint row ranges of its row group) into `sink`, in order; other data pages
 # are skipped without decompressing. Without `gather`, the pages' values accumulate in
 # the sink; returns the row ranges of the pages decoded and how many of a STRING
-# converter's buffers hold the dictionary page. With a `_PageGather`,
-# each page's wanted rows move to the gather's destination as soon as the page is decoded,
-# and the sink only ever holds one page. With the chunk's OffsetIndex (`pages`), the walk
-# jumps from one wanted page to the next, and each decoded page must be where the index
-# says.
+# converter's buffers hold the dictionary page. With a `_PageGather` or `_PageFilter`,
+# each page's wanted rows go to it as soon as the page is decoded, and the sink only ever
+# holds one page. With the chunk's OffsetIndex (`pages`), the walk goes from the
+# dictionary page to each wanted page directly, reads each page only within the bytes the
+# index gives it (so a remote read touches only the planned ranges), and each page read
+# must start and end where the index says.
 function _readselectedchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractSource,
         md::Metadata.ColumnMetaData, node::SchemaNode, start::Int64, stop::Int64,
         limits::Limits, budget::_ByteBudget, buffers::_PageBuffers,
@@ -859,11 +957,27 @@ function _readselectedchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractS
     kept = 0
     lastrow = last(wanted[end])
     position, row, page, frames, next = start, 0, 0, Int64(0), 1
+    if pages !== nothing && start == first(pages.locations).offset
+        # No dictionary page: straight to the first page that holds a wanted row.
+        page = _pagestoskip(pages, wanted[next], 0, total)
+        row, position = pages.starts[page + 1], pages.locations[page + 1].offset
+    end
     while position < stop && row <= lastrow
-        header, headerlength = readpageheader(src, position, stop, limits)
+        limit = stop
+        if pages !== nothing
+            if page < length(pages.starts) && position == pages.locations[page + 1].offset
+                location = pages.locations[page + 1]
+                limit = min(stop, location.offset + location.compressed_page_size)
+            elseif page == 0
+                limit = min(stop, first(pages.locations).offset)
+            end
+        end
+        header, headerlength = readpageheader(src, position, limit, limits)
         kind = validatepageheader(header)
         frameend = _pageframeend(position, headerlength, header.compressed_page_size)
-        frameend <= stop || throw(FormatError("page frame extends past the column chunk"))
+        frameend <= limit || throw(FormatError(limit < stop ?
+            "the offset index of column $(join(node.path, '.')) does not match its pages" :
+            "page frame extends past the column chunk"))
         frames = _nextpageframecount(frames, limits)
         if kind === :data_v1 || kind === :data_v2
             count = Int(kind === :data_v1 ? header.data_page_header.num_values :
@@ -873,6 +987,7 @@ function _readselectedchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractS
             page += 1
             pages === nothing || (page <= length(pages.starts) &&
                 pages.starts[page] == row && pages.locations[page].offset == position &&
+                frameend == limit &&
                 (page == length(pages.starts) ? total : pages.starts[page + 1]) - row ==
                     count) ||
                 throw(FormatError("the offset index of column $(join(node.path, '.')) " *
@@ -881,7 +996,7 @@ function _readselectedchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractS
                 next += 1
             end
             if next <= length(wanted) && first(wanted[next]) < row + count
-                frame = readpage(src, position, stop, limits)
+                frame = readpage(src, position, limit, limits)
                 _charge!(budget, _pagecharge(P, frame, Int64(count)))
                 if kind === :data_v1
                     _datapagev1!(sink, P, convert, frame, md, node, dictionary,
@@ -898,17 +1013,11 @@ function _readselectedchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractS
             end
             row += count
             if pages !== nothing && page < length(pages.starts)
-                # Jump past pages that hold no wanted row.
                 while next <= length(wanted) && last(wanted[next]) < row
                     next += 1
                 end
                 next > length(wanted) && break
-                target = page
-                while target < length(pages.starts) &&
-                        (target + 1 == length(pages.starts) ? total : pages.starts[target + 2]) <=
-                        first(wanted[next])
-                    target += 1
-                end
+                target = _pagestoskip(pages, wanted[next], page, total)
                 if target > page
                     page = target
                     row = pages.starts[target + 1]
@@ -918,18 +1027,35 @@ function _readselectedchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractS
         elseif kind === :dictionary
             (page == 0 && !hasdictionary) || throw(FormatError(
                 "dictionary page follows a data page in the column chunk"))
-            frame = readpage(src, position, stop, limits)
+            frame = readpage(src, position, limit, limits)
             entries = _validatedpageentrycount(frame, limits)
             _charge!(budget, _pagecharge(P, frame, entries))
             _dictionarypage!(dictionary, P, convert, frame, md, node, buffers, limits)
             hasdictionary = true
             kept = convert isa _StringPayloads ? length(convert.buffers) : 0
+            if pages !== nothing
+                # Straight to the first page that holds a wanted row.
+                page = _pagestoskip(pages, wanted[next], 0, total)
+                row = pages.starts[page + 1]
+                frameend = pages.locations[page + 1].offset
+            end
         end
         position = frameend
     end
     gather === nothing && _rowcount(decoded) != sink.filled && throw(AssertionError(
         "selected pages decoded $(sink.filled) values for $(_rowcount(decoded)) rows"))
     return decoded, kept
+end
+
+# How many pages, counting from page `page` (0-based), end at or before the first row of
+# `range`: those to skip to reach the page holding it.
+function _pagestoskip(pages::_ChunkPages, range::UnitRange{Int}, page::Int, total::Int)
+    count = length(pages.starts)
+    while page < count &&
+            (page + 1 == count ? total : pages.starts[page + 2]) <= first(range)
+        page += 1
+    end
+    return page
 end
 
 # The destination of a column's wanted rows, `dest[(offset + 1):]` onward, filled page by
@@ -1095,11 +1221,12 @@ end
 
 # Decodes the pages of a flat column chunk of part `part` that hold rows of `wanted`.
 # With a `_PageGather`, the wanted rows go straight to its destination and the result is
-# `nothing`; with a `_PageFilter`, the result holds the rows and values it kept.
+# `nothing`; with a `_PageFilter`, the result holds the rows and values it kept. `pages`
+# is the chunk's page locations when `_planfetch` found them for `file`.
 function _decodepart(file::File, metadata::Metadata.FileMetaData, part::_GroupRows,
         wanted::Vector{UnitRange{Int}}, node::SchemaNode, limits::Limits,
         budget::_ByteBudget, buffers::_PageBuffers, options::_ReadOptions,
-        gather::Union{Nothing,_PageGather,_PageFilter}=nothing)
+        gather::Union{Nothing,_PageGather,_PageFilter}=nothing; pages=missing)
     group = metadata.row_groups[part.group]
     chunk = group.columns[Int(node.column_index)]
     md = _chunkmetadata(chunk, node)
@@ -1114,9 +1241,12 @@ function _decodepart(file::File, metadata::Metadata.FileMetaData, part::_GroupRo
     values = gather === nothing ?
         sizehint!(O[], _claimcapacity(_rowcount(wanted), stop - start)) :
         empty!(get!(() -> O[], buffers.dense, Tuple{O})::Vector{O})
-    pages = _chunkpages(file, chunk, Int(group.num_rows), start, stop, limits, budget)
+    pages === missing &&
+        (pages = _chunkpages(file, chunk, Int(group.num_rows), start, stop, limits, budget))
+    # A planned source holds the pages the offset index leads to; without an index the
+    # chunk is read whole.
     src = file.source
-    src isa MemorySource || (src = _ChunkSource(src, start, stop))
+    src isa MemorySource || pages !== nothing || (src = _ChunkSource(src, start, stop))
     sink = _FlatSink{O,Base.nonmissingtype(O),node.max_definition_level == 0}(values, 0,
         _scratch(buffers.dense, Base.nonmissingtype(O)), UInt16(node.max_definition_level))
     rows, dictionary = _readselectedchunk!(sink, _physicaleltype(md.type_),
@@ -1327,12 +1457,20 @@ function _readselectedflat(file::File, plan::_ReadPlan, parts::Vector{_GroupRows
             push!(tasks, (fieldindex, 0))
         end
     end
+    # The pages the output columns decode (the filter phase decoded the filter columns).
+    decodes = [(fieldindex, index) for fieldindex in outfields for index in eachindex(parts)
+        if counts[index] > 0 && !haskey(decoded, (fieldindex, index))]
+    file, located = _planfetch(file, metadata,
+        [(fields[fieldindex], parts[index], selected[index]) for (fieldindex, index) in decodes],
+        limits, budget)
+    locatedof = Dict(zip(decodes, located))
     _readmap(tasks, _readtasks(file, plan.ntasks, length(tasks))) do (fieldindex, task), buffers
         for index in (task == 0 ? eachindex(parts) : (task:task))
             counts[index] > 0 || continue
             _readselectedpart!(columns[fieldindex], pages[fieldindex], decoded, file,
                 metadata, parts, selected, starts, counts, fieldindex, index,
-                fields[fieldindex], limits, budget, buffers, options)
+                fields[fieldindex], limits, budget, buffers, options,
+                get(locatedof, (fieldindex, index), missing))
         end
         return nothing
     end
@@ -1360,18 +1498,19 @@ function _partsbacked(metadata::Metadata.FileMetaData, parts::Vector{_GroupRows}
 end
 
 # Fills the rows of part `index` of an output column: from the filter phase's decoded
-# values when the column was filtered on, else by decoding the pages that hold them.
+# values when the column was filtered on, else by decoding the pages that hold them
+# (`located` is the chunk's page locations from `_planfetch`, or `missing`).
 function _readselectedpart!(column::Vector, pages::Vector{Vector{Vector{UInt8}}},
         decoded::Dict{Tuple{Int,Int},_DecodedPart}, file::File,
         metadata::Metadata.FileMetaData, parts::Vector{_GroupRows},
         selected::Vector{Vector{UnitRange{Int}}}, starts::Vector{Int}, counts::Vector{Int},
         fieldindex::Int, index::Int, node::SchemaNode, limits::Limits, budget::_ByteBudget,
-        buffers::_PageBuffers, options::_ReadOptions)
+        buffers::_PageBuffers, options::_ReadOptions, located)
     piece = get(decoded, (fieldindex, index), nothing)
     if piece === nothing
         gather = _PageGather(column, starts[index], selected[index])
         _decodepart(file, metadata, parts[index], selected[index], node, limits, budget,
-            buffers, options, gather)
+            buffers, options, gather; pages=located)
         gather.offset == starts[index] + counts[index] || throw(FormatError(
             "column $(join(node.path, '.')) has fewer rows than its row group"))
         pages[index] = gather.buffers
@@ -1405,23 +1544,30 @@ function _filterselected!(decoded::Dict{Tuple{Int,Int},_DecodedPart},
     while first <= length(parts)
         last = min(length(parts), first + size - 1)
         batch = first:last
+        tasks = [(fieldindex, index) for index in batch for fieldindex in filterfields]
+        batchfile, located = _planfetch(file, plan.metadata,
+            [(fields[fieldindex], parts[index], parts[index].rows)
+                for (fieldindex, index) in tasks], plan.limits, budget)
         if length(filterfields) == 1
             fieldindex = only(filterfields)
-            results = _readmap(batch, _readtasks(file, plan.ntasks, length(batch))) do index, buffers
+            results = _readmap(eachindex(tasks), _readtasks(file, plan.ntasks, length(tasks))) do task, buffers
+                index = tasks[task][2]
                 filter = _PageFilter(plan.bound.filter, names[fieldindex], fields[fieldindex],
                     parts[index].rows, fieldindex in outfields)
-                return _decodepart(file, plan.metadata, parts[index], parts[index].rows,
-                    fields[fieldindex], plan.limits, budget, buffers, plan.options, filter)
+                return _decodepart(batchfile, plan.metadata, parts[index], parts[index].rows,
+                    fields[fieldindex], plan.limits, budget, buffers, plan.options, filter;
+                    pages=located[task])
             end
             for (index, result) in zip(batch, results)
                 selected[index] = result.rows
                 decoded[(fieldindex, index)] = result
             end
         else
-            tasks = [(fieldindex, index) for index in batch for fieldindex in filterfields]
-            results = _readmap(tasks, _readtasks(file, plan.ntasks, length(tasks))) do (fieldindex, index), buffers
-                return _decodepart(file, plan.metadata, parts[index], parts[index].rows,
-                    fields[fieldindex], plan.limits, budget, buffers, plan.options)
+            results = _readmap(eachindex(tasks), _readtasks(file, plan.ntasks, length(tasks))) do task, buffers
+                fieldindex, index = tasks[task]
+                return _decodepart(batchfile, plan.metadata, parts[index], parts[index].rows,
+                    fields[fieldindex], plan.limits, budget, buffers, plan.options;
+                    pages=located[task])
             end
             for (task, result) in zip(tasks, results)
                 decoded[task] = result

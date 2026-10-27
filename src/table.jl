@@ -581,8 +581,8 @@ function _readtable(file::File, groups::AbstractVector{Int}, budget::_ByteBudget
     metadata = _withgroups(plan.metadata, Int[part.group for part in parts])
     schema = plan.schema
     _validatetablerowgroups(metadata, schema, limits)
-    columns, rows = _readselectedflat(_coalescedfile(file, metadata, schema), plan, parts,
-        filter !== nothing, offset, limit, budget)
+    columns, rows = _readselectedflat(file, plan, parts, filter !== nothing, offset, limit,
+        budget)
     named = NamedTuple{Tuple(_tablenames(schema, limits))}(Tuple(columns))
     bound === nothing && return Table(metadata, schema, named, rows, _outputcolmetadata(plan))
     projection = Tables.BoundScan(bound.columns, nothing, bound.filtercols, nothing, 0,

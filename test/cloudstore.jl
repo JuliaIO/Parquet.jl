@@ -18,6 +18,12 @@ using Tables
         @test [Tables.rowcount(part) for part in file] == [30_000, 30_000, 30_000, 10_000]
         @test file[4].b[1] == "90001"
         close(file)
+        # Filtered and windowed reads fetch the pages they decode.
+        filtered = Parquet.Table(object; filter=Parquet.col(:a) > rows - 5)
+        @test filtered.a == (rows - 4):rows
+        @test filtered.b == string.((rows - 4):rows)
+        @test Parquet.Table(object; scan=Tables.Scan(limit=3, offset=50_000)).b ==
+            ["50001", "50002", "50003"]
     end
 end
 
