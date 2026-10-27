@@ -121,86 +121,10 @@ credentials)` lists and reads the objects under a prefix.
 
 ## Write a table
 
-`Parquet.write` accepts a Tables.jl source and a path or `IO` sink, and returns the
-sink. `Parquet.write(sink)` returns a function, so a table can be piped into it:
-`CSV.File("in.csv") |> Parquet.write("out.parquet")`.
-
-```julia
-Parquet.write("output.parquet", table;
-    compress=:zstd,
-    encoding=(id=:delta_binary_packed, measurement=:byte_stream_split),
-    pageversion=:v2,
-)
-```
-
-The defaults match pyarrow's: snappy compression, dictionary encoding, version 1 data
-pages, statistics and the page index, no page checksums, row groups of 1,048,576 rows,
-and data pages of at most 1 MiB or 20,000 rows. A column chunk is dictionary encoded
-while its dictionary stays under 1 MiB and makes the chunk's first page smaller;
-otherwise its values are written PLAIN. A `PooledArray` or `CategoricalArray` column
-writes the pool entries its rows use as the dictionary instead of hashing its values
-again.
-
-An encoding symbol or string applies to all columns. A `Pair`, `NamedTuple`, or
-dictionary supplies exact column-name overrides, and an explicit encoding replaces
-dictionary encoding for that column.
-
-Row groups are encoded and written one at a time, so memory stays near the size of
-one row group. The column chunks of a row group are encoded on `ntasks` tasks
-(default `Threads.nthreads()`); the bytes written do not depend on `ntasks`. A path is
-written to a temporary file in the same directory and moved into place when writing
-finishes, so a failed write leaves an existing file intact. File and column key-value
-metadata come from the `metadata` and `colmetadata` keywords, or by default from the
-table's DataAPI metadata. The file's metadata ends with an `ARROW:schema` entry generated
-from the written columns, so pyarrow and Polars read the time zone of a
-`Durations.ZonedTimestamp` column and the unit of a `Dates` period column, and
-`Parquet.Table` reads them back as the same types.
-
-### Write a file in parts
-
-`Parquet.Writer` writes one file from several tables, such as batches that do not fit
-in memory together. Each table becomes one or more row groups. Later tables must have
-the first table's column names, and their values must convert to its column types
-exactly. Every column is nullable unless `nullable=false`.
-
-```julia
-Parquet.Writer("output.parquet"; compress=:zstd) do writer
-    for batch in batches
-        Parquet.write(writer, batch)
-    end
-end
-```
-
-`Parquet.write` writes each partition of a `Tables.partitions` source the same way.
-
-Each column's element type decides its Parquet type:
-
-| Julia element type | Parquet column |
-|:--|:--|
-| `Bool`, `Int8`-`Int64`, `UInt8`-`UInt64`, `Float32`, `Float64`, `Float16` | BOOLEAN, INT32/INT64 with an INT annotation for the narrower and unsigned types, FLOAT, DOUBLE, FLOAT16 |
-| `AbstractString`, `Symbol`, `Char` | STRING |
-| `Vector{UInt8}`, `DataStrings.DataBytes` | BYTE_ARRAY |
-| `NTuple{N,UInt8}`, `UUID` | FIXED_LEN_BYTE_ARRAY(N), UUID |
-| `Date`, `Time`, `DateTime` | DATE, TIME(NANOS), TIMESTAMP(MILLIS) |
-| `Durations.Timestamp{P}` | TIMESTAMP in unit `P`, not adjusted to UTC; `Second` values are stored as milliseconds |
-| `Durations.ZonedTimestamp{P,Z}` | TIMESTAMP in unit `P`, adjusted to UTC |
-| `Nanosecond`, `Microsecond`, `Millisecond`, `Second` | INT64 count of that unit |
-| `Minute`, `Hour`, `Day`, `Week` | INT64 count of seconds |
-| `Month`, `Year`, `Durations.Duration` | INTERVAL |
-| `DataDecimals.Decimal{P,S}` | DECIMAL(P,S) on INT32 (P <= 9), INT64 (P <= 18), or FIXED_LEN_BYTE_ARRAY |
-| `CategoricalValue` and other wrapped values | the type of the wrapped values |
-| `Vector`, `NamedTuple`, `AbstractDict` | LIST, group, MAP |
-| `Missing` only | a null column |
-
-A column whose element type is abstract or a `Union` of several types is written as
-the one type its values share. Numbers of different types are promoted when every
-value converts exactly, and strings of different types are written as STRING. Other
-mixes, `nothing` values, and `Int128` or `BigInt` columns are errors that name the
-column.
-
-The writer reads each value of a column once while encoding it and does not copy the
-column first. A column whose Parquet type depends on its values (`Parquet.Decimal` or decimals with a
-scale per value) is read once more to choose that type. Changes made to a source while it is being written are not detected.
+`Parquet.write(path, table)` writes any Tables.jl table with pyarrow's defaults and
+returns `path`; `table |> Parquet.write(path)` works too. `Parquet.Writer` writes one file
+from several tables, and `partitionby` writes a Hive-partitioned dataset. See
+[Writing](@ref) for the keywords, the column types, and memory use.
 
 ## Nested columns
 
@@ -219,10 +143,10 @@ struct, or map reads as `missing`. Copies and subsets of a nested column (`copy`
 `column[rows]`, `vcat`, `DataFrame(table)`) are plain `Vector`s of rows, so `push!` and
 `setindex!` take plain vectors, named tuples, and dictionaries.
 
-To write nested columns, use `NamedTuple` values for structs, vectors for lists, and
-dictionaries (or rows read from a file) for maps. Declared element types supply the
-schema for empty and all-null columns. Null containers, empty containers, and null
-elements remain distinct.
+To write nested columns, use `NamedTuple` values for structs, vectors or tuples for lists,
+and dictionaries or vectors of pairs for maps; rows read from a file write back as they
+are. Declared element types supply the schema for empty and all-null columns. Null
+containers, empty containers, and null elements remain distinct ([Writing](@ref)).
 
 ```@example nested
 using Parquet, Tables
@@ -279,42 +203,13 @@ out. Reading one of them reports an unsupported feature rather than an invalid f
 
 ## Statistics
 
-The writer emits row-group statistics, a complete column-order declaration, and a page
-index (a column index of page bounds and an offset index of page locations) by default.
-Set `statistics=false` to omit the statistics, the column order, and the column index;
-set `pageindex=false` to omit the page index.
-
-```julia
-Parquet.write("without-statistics.parquet", table; statistics=false)
-```
-
-`Parquet.Limits.max_statistics_value_bytes` limits each raw minimum or maximum
-before it is copied into footer metadata. The default is 4096 bytes. If one bound
-is larger, the writer omits the minimum and maximum for that column chunk. It still
-emits valid null and value counts and preserves column order.
-
-```julia
-limits = Parquet.Limits(max_statistics_value_bytes=1024)
-Parquet.write("bounded.parquet", table; limits=limits)
-```
+The writer emits statistics, a page index, and on request bloom filters
+([Writing](@ref)).
 
 Reads use statistics, the page index, and bloom filters only to skip data a filter
 cannot match, and only where the column's declared sort order defines them; bounds that
 fail validation (physical width, logical range, the writer's known statistics bugs) are
 ignored.
-
-### Bloom filters
-
-`bloomfilter=true` writes a split-block bloom filter for every column chunk, and
-`bloomfilter=[:id, :name]` for the named columns (a leaf path tuple such as
-`("tags", "list", "element")` names a nested leaf). A reader such as DuckDB
-uses a filter to skip row groups that cannot hold a value it looks for. Each filter is
-sized from its chunk's distinct values for a 1% false-positive rate and is written
-after its row group's column chunks. BOOLEAN columns get none.
-
-```julia
-Parquet.write("indexed.parquet", table; bloomfilter=[:customer_id])
-```
 
 ## Logical values
 
