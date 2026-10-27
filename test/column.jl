@@ -598,6 +598,9 @@ end
     end
     optional = MD.FieldRepetitionType.OPTIONAL
     int64 = columnleaf(MD.Type.INT64; repetition=optional)
+    boolean = columnleaf(MD.Type.BOOLEAN; repetition=optional)
+    # Optional isbits columns write values and type tags directly on supported Julias.
+    @test Parquet._UNIONTAGS
     rng = MersenneTwister(2026)
     for trial in 1:150
         segments = [rand(rng, Bool) ? (:rle, fill(rand(rng, 0:1), rand(rng, 1:20))) :
@@ -616,6 +619,12 @@ end
         v1 = columnpage(vcat(reinterpret(UInt8, [htol(UInt32(length(stream)))]), stream,
             Parquet.encode_plain(values)); v1=columnv1(entries))
         @test isequal(readsynthetic([v1], int64; num_values=entries), expected)
+        flags = rand(rng, Bool, present)
+        expectedflags = Vector{Union{Missing,Bool}}(missing, entries)
+        expectedflags[levels .== 1] = flags
+        bools = columnpage(vcat(reinterpret(UInt8, [htol(UInt32(length(stream)))]), stream,
+            Parquet.encode_plain(flags)); v1=columnv1(entries))
+        @test isequal(readsynthetic([bools], boolean; num_values=entries), expectedflags)
         v2 = datapagev2(values; levels=levels, maxlevel=1, definition=stream)
         @test isequal(readsynthetic([v2], int64; num_values=entries), expected)
         dictionary = unique(values)

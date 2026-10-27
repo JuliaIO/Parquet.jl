@@ -891,7 +891,10 @@ function _sinkpage!(decode, sink::_FlatSink{O,L,false}, count::Int, present::Int
     output = sink.output
     offset = sink.filled
     _growto!(output, offset + count)
-    if !hasdefinition || present == count
+    if _writesuniontags(O)
+        _spreadunion!(output, offset, dense, count, present, hasdefinition,
+            buffers.definition, sink.maxdefinition)
+    elseif !hasdefinition || present == count
         @inbounds for index in 1:count
             output[offset + index] = dense[index]
         end
@@ -911,6 +914,36 @@ function _sinkpage!(decode, sink::_FlatSink{O,L,false}, count::Int, present::Int
     end
     sink.filled += count
     return position
+end
+
+# `_sinkpage!`'s spread of `dense` (`present` values) over `count` entries of `output`
+# after `offset`, writing data and type tags directly: entries whose definition level is
+# below `top` take a present value's data and the `missing` tag.
+function _spreadunion!(output::Vector{Union{Missing,L}}, offset::Int, dense::Vector{L},
+        count::Int, present::Int, hasdefinition::Bool, definition::Vector{UInt16},
+        top::UInt16) where {L}
+    O = Union{Missing,L}
+    valuetag = _uniontag(O, L)
+    nulltag = _uniontag(O, Missing)
+    GC.@preserve output dense begin
+        tags = _uniontags(output) + offset
+        data = Ptr{L}(pointer(output)) + offset * sizeof(L)
+        if !hasdefinition || present == count
+            unsafe_copyto!(data, pointer(dense), count)
+            _filltags!(tags, valuetag, count)
+        elseif present == 0
+            _filltags!(tags, nulltag, count)
+        else
+            next = 0
+            @inbounds for index in 1:count
+                bit = definition[index] == top
+                unsafe_store!(data, dense[min(next + 1, present)], index)
+                unsafe_store!(tags, ifelse(bit, valuetag, nulltag), index)
+                next += bit
+            end
+        end
+    end
+    return
 end
 
 # Whether a sink reads a page's definition levels when every entry is present (flat
@@ -967,10 +1000,68 @@ function _presentlevels(levels::_ByteView, start::Int, stop::Int, count::Int,
     return present
 end
 
+# Isbits-union vectors store every element's data and, after all of it, one type-tag
+# byte per element: the position of the element's type in `Base.uniontypes` of the
+# element type, from 0. Optional columns of isbits values write both directly.
+function _uniontags(output::Vector{Union{Missing,L}}) where {L}
+    @static if VERSION >= v"1.11"
+        return ccall(:jl_genericmemory_typetagdata, Ptr{UInt8}, (Any,), output.ref.mem) +
+            (Base.memoryrefoffset(output.ref) - 1)
+    else
+        return ccall(:jl_array_typetagdata, Ptr{UInt8}, (Any,), output)
+    end
+end
+
+_uniontag(::Type{O}, ::Type{T}) where {O,T} =
+    UInt8(findfirst(==(T), Base.uniontypes(O)) - 1)
+
+_filltags!(tags::Ptr{UInt8}, tag::UInt8, count::Int) =
+    ccall(:memset, Ptr{Cvoid}, (Ptr{Cvoid}, Cint, Csize_t), tags, tag, count)
+
+# Whether `_uniontags` and `_uniontag` describe this Julia's isbits-union vectors
+# (checked when the package compiles, which is once per Julia build).
+function _checkuniontags()
+    try
+        for (L, value) in ((Int8, Int8(-3)), (Int32, Int32(7)), (Float64, 2.5),
+                (NTuple{3,Int64}, (1, 2, 3)))
+            O = Union{Missing,L}
+            output = Vector{O}(undef, 6)
+            popfirst!(output)
+            tags = _uniontags(output)
+            GC.@preserve output for index in 1:5
+                if isodd(index)
+                    unsafe_store!(Ptr{L}(pointer(output)), value, index)
+                    unsafe_store!(tags, _uniontag(O, L), index)
+                else
+                    unsafe_store!(tags, _uniontag(O, Missing), index)
+                end
+            end
+            all(index -> output[index] === (isodd(index) ? value : missing), 1:5) ||
+                return false
+        end
+        return true
+    catch
+        return false
+    end
+end
+
+const _UNIONTAGS = _checkuniontags()
+
+# Whether optional entries of type `O` (`Union{Missing,L}` for isbits `L`, or `Missing`
+# for a column with no values) are written through `_uniontags`.
+function _writesuniontags(::Type{O}) where {O}
+    O isa Union || return false
+    L = Base.nonmissingtype(O)
+    return O === Union{Missing,L} && _UNIONTAGS && isbitstype(L) && sizeof(L) > 0
+end
+
 # Spreads the present values of `source` over `count` entries of `output` after
-# `offset`, as the checked 0/1 hybrid levels `levels[start:]` say, with `null` elsewhere.
+# `offset`, as the checked 0/1 hybrid levels `levels[start:]` (`present` of them 1) say,
+# with `null` elsewhere.
 function _scatterruns!(output::Vector{O}, offset::Int, levels::_ByteView, start::Int,
-        count::Int, source, null::O) where {O}
+        count::Int, source, null::O, present::Int) where {O}
+    _writesuniontags(O) && return _scatterunion!(output, offset, levels, start, count,
+        source, present)
     filled = 0
     next = 0
     position = start
@@ -1007,6 +1098,57 @@ function _scatterruns!(output::Vector{O}, offset::Int, levels::_ByteView, start:
     return
 end
 
+# `_scatterruns!` writing data and type tags directly. Entries in a bit-packed run take
+# a present value's data whether present or not (only their tags differ), so the run
+# has no branches.
+function _scatterunion!(output::Vector{Union{Missing,L}}, offset::Int, levels::_ByteView,
+        start::Int, count::Int, source, present::Int) where {L}
+    O = Union{Missing,L}
+    valuetag = _uniontag(O, L)
+    nulltag = _uniontag(O, Missing)
+    GC.@preserve output begin
+        tags = _uniontags(output) + offset
+        data = Ptr{L}(pointer(output)) + offset * sizeof(L)
+        if present == 0
+            _filltags!(tags, nulltag, count)
+            return
+        end
+        filled = 0
+        next = 0
+        position = start
+        @inbounds while filled < count
+            header, position = _readhybridvarint(levels, position)
+            runs = header >> 1
+            if isodd(header)
+                produced = min(8 * Int(runs), count - filled)
+                for index in 0:(produced - 1)
+                    bit = (levels[position + (index >> 3)] >> (index & 7)) & 0x01
+                    unsafe_store!(data, _value(source, min(next + 1, present)),
+                        filled + index + 1)
+                    unsafe_store!(tags, ifelse(bit == 0x01, valuetag, nulltag),
+                        filled + index + 1)
+                    next += bit
+                end
+                position += Int(runs)
+            else
+                produced = min(Int(runs), count - filled)
+                if levels[position] == 0x01
+                    for index in 1:produced
+                        unsafe_store!(data, _value(source, next + index), filled + index)
+                    end
+                    next += produced
+                    _filltags!(tags + filled, valuetag, produced)
+                else
+                    _filltags!(tags + filled, nulltag, produced)
+                end
+                position += 1
+            end
+            filled += produced
+        end
+    end
+    return
+end
+
 # An optional flat page of PLAIN fixed-width values or dictionary indices whose 0/1
 # definition levels are `levels[start:(stop - 1)]` and values `bytes[position:]`, written
 # straight to its rows without decoding the levels. Returns the position after the
@@ -1025,7 +1167,8 @@ function _runscatter!(sink::_FlatSink{O,L,false}, count::Int, ::Type{P}, convert
         total = Base.checked_mul(present, sizeof(P))
         _requirebytes(bytes, position, total)
         GC.@preserve bytes _scatterruns!(output, offset, levels, start, count,
-            _PlainValues{P,C}(Ptr{P}(pointer(bytes, position)), convert), _nullentry(O))
+            _PlainValues{P,C}(Ptr{P}(pointer(bytes, position)), convert), _nullentry(O),
+            present)
         position += total
     else
         hasdictionary || throw(FormatError(
@@ -1033,7 +1176,7 @@ function _runscatter!(sink::_FlatSink{O,L,false}, count::Int, ::Type{P}, convert
         position = _dictionaryindices!(buffers.indices, present, bytes, position,
             valuestop)
         _scatterruns!(output, offset, levels, start, count,
-            _DictionaryValues(buffers.indices, dictionary), _nullentry(O))
+            _DictionaryValues(buffers.indices, dictionary), _nullentry(O), present)
     end
     sink.filled += count
     return position
