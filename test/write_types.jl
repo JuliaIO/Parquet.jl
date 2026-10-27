@@ -176,6 +176,27 @@ end
     bytes = wtwrite((chained=chained, sentinel=sentinel))
     @test wtvalues(bytes, :chained) == 1:3
     @test isequal(wtvalues(bytes, :sentinel), [7, missing, 9])
+
+    # Chunks are read part by part across row group and page boundaries; page row
+    # indexes stay right for filtered reads.
+    parts = [collect(1:5), Int[], collect(6:11), [12]]
+    sentinels = map(parts) do part
+        vector = SentinelVector{Int}(undef, length(part))
+        for (i, x) in enumerate(part)
+            vector[i] = iszero(x % 4) ? missing : x
+        end
+        vector
+    end
+    strings = ChainedVector([string.(part) for part in parts])
+    table = (a=ChainedVector(parts), b=ChainedVector(sentinels), c=strings)
+    for rowgroupsize in (4, 7, 12)
+        bytes = take!(Parquet.write(IOBuffer(), table; rowgroupsize, pagesize=16))
+        @test wtvalues(bytes, :a) == 1:12
+        @test isequal(wtvalues(bytes, :b), [iszero(x % 4) ? missing : x for x in 1:12])
+        @test wtvalues(bytes, :c) == string.(1:12)
+        filtered = Parquet.Table(bytes; filter=Parquet.col(:a) >= 9)
+        @test collect(filtered.a) == 9:12 && collect(filtered.c) == string.(9:12)
+    end
 end
 
 @testset "write DataDecimals by storage" begin

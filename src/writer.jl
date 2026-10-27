@@ -346,9 +346,28 @@ function _encodefield(schema::_WriteSchema, field::_FlatField, binding::_FlatBin
             options.chunk)
         chunk === nothing || return _EncodedChunk[chunk]
     end
+    segments = _segments(binding.column, offset + first(range), offset + last(range))
+    segments === nothing || return _EncodedChunk[_encodesegments(leaf, segments,
+        binding.convert, binding.optional, field.name, options.chunk)]
     rows = _FlatRows(binding.column, offset + first(range), offset + last(range),
         binding.convert, binding.optional, field.name)
     return _EncodedChunk[_encodechunk(leaf, rows, options.chunk)]
+end
+
+# The parts of a chunked vector that hold rows `first:last`, as (vector, first, last)
+# triples, so the encoder reads each part directly instead of finding the part of every
+# row (the SentinelArrays extension defines it for ChainedVector).
+_segments(column, first::Int, last::Int) = nothing
+
+function _encodesegments(leaf::_LeafSpec, segments::Vector, convert, optional::Bool,
+        name::String, options::_ChunkOptions)
+    chunk = _ChunkWriter(leaf, options, _encodescratch())
+    base = 0
+    for (vector, first, last) in segments
+        _writerows!(chunk, _FlatRows(vector, first, last, convert, optional, name, base))
+        base += last - first + 1
+    end
+    return _finishchunk(chunk)
 end
 
 function _encodefield(schema::_WriteSchema, field::_NestedField, binding::_NestedBinding,

@@ -1298,6 +1298,7 @@ end
 ## Row sources
 
 # The rows of a flat leaf: one level entry and at most one value per row.
+# `base` is the chunk row of `column[first]` when a chunk is written in parts.
 struct _FlatRows{V<:AbstractVector,F}
     column::V
     first::Int
@@ -1305,7 +1306,11 @@ struct _FlatRows{V<:AbstractVector,F}
     convert::F
     optional::Bool
     name::String
+    base::Int
 end
+
+_FlatRows(column, first, last, convert, optional, name) =
+    _FlatRows(column, first, last, convert, optional, name, 0)
 
 function _writerows!(chunk::_ChunkWriter, rows::_FlatRows)
     row = rows.first
@@ -1313,8 +1318,9 @@ function _writerows!(chunk::_ChunkWriter, rows::_FlatRows)
         start = row
         stop = min(rows.last, row + min(chunk.options.pagerows, rows.last) - 1)
         row = _gatherflat!(chunk, rows, row, stop)
-        _flushpage!(chunk, row - start, start - rows.first)
-        start == rows.first && _hintoutput!(chunk, rows.last - rows.first + 1, row - start)
+        _flushpage!(chunk, row - start, start - rows.first + rows.base)
+        start == rows.first && rows.base == 0 &&
+            _hintoutput!(chunk, rows.last - rows.first + 1, row - start)
     end
     return chunk
 end

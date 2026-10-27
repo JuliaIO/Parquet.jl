@@ -26,9 +26,11 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
 [weakdeps]
 CloudStore = "3365d9ee-d53b-4a56-812d-5344d5b716d7"
+SentinelArrays = "91c51154-3ec4-41a3-a24f-3f23e20d615c"
 
 [extensions]
 ParquetCloudStoreExt = "CloudStore"
+ParquetSentinelArraysExt = "SentinelArrays"
 
 [compat]
 Base64 = "1"
