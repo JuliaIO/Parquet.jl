@@ -35,21 +35,35 @@ end
 _isflatfield(plan::_NestedPlan) =
     plan isa _NestedLeafPlan && plan.source.max_repetition_level == 0
 
-# One leaf's chunk in row group `rowgroup`, decoded and assembled along its path.
-function _readleafchunk(file::File, metadata::Metadata.FileMetaData,
-        plan::_NestedSchemaPlan, path::_LeafPath, rowgroup::Int, limits::Limits,
+# One leaf's chunks in row groups `groups`, decoded in order and assembled along its path.
+function _readleafchunks(file::File, metadata::Metadata.FileMetaData,
+        plan::_NestedSchemaPlan, path::_LeafPath, groups::UnitRange{Int}, limits::Limits,
         budget::_ByteBudget, buffers::_PageBuffers, options::_ReadOptions)
     node = plan.leaves[path.leaf].source
-    group = metadata.row_groups[rowgroup]
-    md = _chunkmetadata(group.columns[Int(node.column_index)], node)
-    start, stop = _leafchunkrange(file.source, md, file.footer.offset, limits)
+    index = Int(node.column_index)
+    chunks = map(groups) do rowgroup
+        group = metadata.row_groups[rowgroup]
+        md = _chunkmetadata(group.columns[index], node)
+        return group, md, _leafchunkrange(file.source, md, file.footer.offset, limits)
+    end
     convert, L = _valueconverter(node, limits, options)
-    entries = _claimcapacity(md.num_values, stop - start)
-    sink = _leafsink(path, L, _scratch(buffers.dense, L),
-        _claimcapacity(group.num_rows, stop - start), entries, buffers)
-    _readchunk!(sink, _physicaleltype(node.element.type_), L, convert, file.source, md,
-        node, start, stop, limits, budget, buffers)
-    counts = _finishleaf!(sink, group.num_rows)
+    rows = sum(chunk -> _claimcapacity(chunk[1].num_rows, chunk[3][2] - chunk[3][1]),
+        chunks; init=0)
+    entries = sum(chunk -> _claimcapacity(chunk[2].num_values, chunk[3][2] - chunk[3][1]),
+        chunks; init=0)
+    sink = _leafsink(path, L, _scratch(buffers.dense, L), rows, entries, buffers)
+    total = 0
+    for (group, md, (start, stop)) in chunks
+        before = sink.slots[1]
+        sink.chunkstart = true
+        _readchunk!(sink, _physicaleltype(node.element.type_), L, convert, file.source, md,
+            node, start, stop, limits, budget, buffers)
+        sink.slots[1] - before == group.num_rows || throw(FormatError(
+            "leaf $(path.leaf) has $(sink.slots[1] - before) rows in a row group of " *
+            "$(group.num_rows)"))
+        total += Int(group.num_rows)
+    end
+    counts = _finishleaf!(sink, total)
     piece = _leafpiece(sink, _leafvalues(sink, node, convert), counts)
     _charge!(budget, sizeof(sink.output) + sum(sizeof, piece.offsets; init=0) +
         sum(bits -> sizeof(bits.chunks), piece.bits; init=0))
@@ -72,9 +86,9 @@ function _emptycolumn(node::_AssemblyNode)
 end
 
 # The columns of a table with nested fields. Flat fields read as in `_readflattable`.
-# Each leaf chunk of a nested field decodes and assembles on its own task; then each
-# nested field is built from its leaves' pieces, one row group at a time, and the row
-# groups are joined. The largest pieces are scheduled first.
+# Each nested leaf decodes and assembles its chunks on its own task, the largest first;
+# then each field is built from its leaves' pieces. With fewer nested leaves than tasks,
+# leaves split by row group for parallelism, and each field joins its row groups.
 function _readnestedcolumns(file::File, metadata::Metadata.FileMetaData, schema::Schema,
         plan::_NestedSchemaPlan, rows::Int, limits::Limits, budget::_ByteBudget,
         ntasks::Int, options::_ReadOptions)
@@ -94,30 +108,35 @@ function _readnestedcolumns(file::File, metadata::Metadata.FileMetaData, schema:
     assemblies = _FieldAssembly[_fieldassembly(fields[index], limits, options)
         for index in nested]
     groups = metadata.row_groups
-    tasks = Tuple{Int,Int,Int}[(field, position, group)
+    leaves = sum(field -> length(field.paths), assemblies)
+    tasks = _readtasks(file, ntasks, leaves * max(1, length(groups)))
+    ranges = tasks > leaves ? UnitRange{Int}[group:group for group in eachindex(groups)] :
+        UnitRange{Int}[eachindex(groups)]
+    work = Tuple{Int,Int,Int}[(field, position, range)
         for field in eachindex(assemblies)
-        for position in eachindex(assemblies[field].paths) for group in eachindex(groups)]
-    cost(task) = groups[task[3]].columns[assemblies[task[1]].paths[task[2]].leaf].
-        meta_data.total_uncompressed_size
-    order = sortperm(tasks; by=cost, rev=true)
-    results = _readmap(order, _readtasks(file, ntasks, length(tasks))) do index, buffers
-        field, position, group = tasks[index]
-        return _readleafchunk(file, metadata, plan, assemblies[field].paths[position],
-            group, limits, budget, buffers, options)
+        for position in eachindex(assemblies[field].paths) for range in eachindex(ranges)]
+    cost(item) = sum(group -> groups[group].columns[assemblies[item[1]].paths[item[2]].leaf].
+        meta_data.total_uncompressed_size, ranges[item[3]]; init=0)
+    order = sortperm(work; by=cost, rev=true)
+    results = _readmap(order, _readtasks(file, ntasks, length(work))) do index, buffers
+        field, position, range = work[index]
+        return _readleafchunks(file, metadata, plan, assemblies[field].paths[position],
+            ranges[range], limits, budget, buffers, options)
     end
-    pieces = Vector{_LeafPiece}(undef, length(tasks))
+    pieces = Vector{_LeafPiece}(undef, length(work))
     pieces[order] = results
-    starts = cumsum([0; [length(field.paths) * length(groups) for field in assemblies]])
+    starts = cumsum([0; [length(field.paths) * length(ranges) for field in assemblies]])
     fieldorder = sortperm(eachindex(assemblies); by=field -> starts[field + 1] - starts[field],
         rev=true)
     built = _readmap(fieldorder, _readtasks(file, ntasks, length(assemblies))) do field, _
         assembly = assemblies[field]
         isempty(groups) && return _emptycolumn(assembly.root)
-        parts = map(eachindex(groups)) do group
+        parts = map(eachindex(ranges)) do range
             leafpieces = _LeafPiece[pieces[starts[field] +
-                (position - 1) * length(groups) + group]
+                (position - 1) * length(ranges) + range]
                 for position in eachindex(assembly.paths)]
-            return _buildfield(assembly, leafpieces, Int(groups[group].num_rows))
+            return _buildfield(assembly, leafpieces,
+                sum(group -> Int(groups[group].num_rows), ranges[range]; init=0))
         end
         length(parts) == 1 && return only(parts)
         column = _concat(_columntype(assembly.root.eltype)[part for part in parts])

@@ -183,6 +183,7 @@ mutable struct _LeafSink{O,L}
     output::Vector{O}
     dense::Vector{L}
     null::O
+    chunkstart::Bool
     previous::UInt16
     slots::Vector{Int}
     hashes::Vector{UInt64}
@@ -211,7 +212,7 @@ function _LeafSink(path::_LeafPath, output::Vector{O}, dense::Vector{L}, null, r
         path.kind[item] == _ITEM_VALIDITY && sizehint!(bits[item], capacity)
         path.kind[item] == _ITEM_OFFSETS && sizehint!(offsets[item], capacity)
     end
-    return _LeafSink{O,L}(path, sizehint!(output, entries), dense, null, 0x0000,
+    return _LeafSink{O,L}(path, sizehint!(output, entries), dense, null, true, 0x0000,
         zeros(Int, path.depth + 1), fill(0xcbf29ce484222325, items), bits, offsets)
 end
 
@@ -245,8 +246,12 @@ function _assembleentries!(sink::_LeafSink, repetitions::Vector{UInt16},
     depth = path.depth
     slots = sink.slots
     if depth > 0
-        _checkrepetitions(path, repetitions, definitions, count, slots[1], sink.previous)
-        count > 0 && (sink.previous = definitions[count])
+        _checkrepetitions(path, repetitions, definitions, count, sink.chunkstart,
+            sink.previous)
+        if count > 0
+            sink.chunkstart = false
+            sink.previous = definitions[count]
+        end
     end
     ends = copy(slots)
     item = 1
@@ -290,10 +295,10 @@ _entrylevel(path::_LeafPath, space::Int) = space == 0 ? 0x0000 : path.entry[spac
 # A chunk starts a row, and an entry that repeats list r continues an instance that has
 # entries: it and the entry before it (in the same instance, or the one that opened it)
 # are defined at least to the list's entry level. `previous` is the definition level of
-# the entry before these.
+# the entry before these; `chunkstart` says they begin a chunk.
 function _checkrepetitions(path::_LeafPath, repetitions::Vector{UInt16},
-        definitions::Vector{UInt16}, count::Int, rows::Int, previous::UInt16)
-    count > 0 && iszero(rows) && !iszero(repetitions[1]) &&
+        definitions::Vector{UInt16}, count::Int, chunkstart::Bool, previous::UInt16)
+    count > 0 && chunkstart && !iszero(repetitions[1]) &&
         _nestedfirsterror(path, repetitions[1])
     levels = path.repeat
     bad = false

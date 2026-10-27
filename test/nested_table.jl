@@ -374,3 +374,25 @@ end
         end
     end
 end
+
+@testset "nested chunks hold their row group's rows" begin
+    fixture = ntfixture("list_columns.parquet")
+    if isfile(fixture)
+        bytes, metadata, _ = ntduplicaterowgroup(fixture)
+        # Move one row from the second row group's count to the first: the file total is
+        # unchanged, but each chunk now disagrees with its row group.
+        first, second = metadata.row_groups
+        shifted = ntreplace(metadata; row_groups=NTMD.RowGroup[
+            ntreplace(first; num_rows=first.num_rows + 1),
+            ntreplace(second; num_rows=second.num_rows - 1)])
+        footerlength = Int(Parquet._readu32le(@view bytes[(end - 7):(end - 4)]))
+        body = bytes[1:(end - 8 - footerlength)]
+        footer = Parquet.Thrift.encode(shifted)
+        corrupt = vcat(body, footer)
+        Parquet._writelittle!(corrupt, UInt32(length(footer)))
+        append!(corrupt, Parquet.PARQUET_MAGIC)
+        for ntasks in (1, 8)
+            @test_throws Parquet.FormatError Parquet.Table(corrupt; ntasks=ntasks)
+        end
+    end
+end
