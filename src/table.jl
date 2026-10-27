@@ -814,16 +814,26 @@ function Base.iterate(file::File, (index, skip, keep)::Tuple{Int,Int,Any})
     rows = _tablerows(table)
     drop = min(skip, rows)
     take = keep === nothing ? rows - drop : min(keep, rows - drop)
-    if drop > 0 || take < rows
-        columns = _tablecolumns(table)
-        sliced = Tables.scan(isempty(columns) ? (rows=Base.OneTo(rows),) : columns,
-            Tables.Scan(; offset=drop, limit=take))
-        named = NamedTuple{keys(columns)}(Tuple(Tables.getcolumn(sliced, name)
-            for name in keys(columns)))
-        table = Table(_tablemetadata(table), _tableschema(table), named, take,
-            _tablecolmetadata(table))
-    end
-    return table, (index + 1, skip - drop, keep === nothing ? nothing : keep - take)
+    return _slicetable(table, drop, take),
+        (index + 1, skip - drop, keep === nothing ? nothing : keep - take)
+end
+
+# The `take` rows of `table` after its first `drop`.
+function _slicetable(table::Table, drop::Int, take::Int)
+    rows = _tablerows(table)
+    (drop == 0 && take == rows) && return table
+    range = (drop + 1):(drop + take)
+    named = map(column -> _slicecolumn(column, range), _tablecolumns(table))
+    return Table(_tablemetadata(table), _tableschema(table), named, take,
+        _tablecolmetadata(table))
+end
+
+# Rows `range` of a column; string and byte columns keep their kind and share buffers.
+_slicecolumn(column::AbstractVector, range::UnitRange{Int}) = column[range]
+
+function _slicecolumn(column::Union{DataStrings.StringVector,DataStrings.BytesVector},
+        range::UnitRange{Int})
+    return typeof(column)(column.payloads[range], column.buffers, Val(:trusted))
 end
 
 Tables.partitions(file::File) = file

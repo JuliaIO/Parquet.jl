@@ -655,18 +655,6 @@ function _emptydatasettable(ds::Dataset)
     end
 end
 
-function _slicetable(table::Table, drop::Int, take::Int)
-    rows = _tablerows(table)
-    (drop == 0 && take == rows) && return table
-    columns = _tablecolumns(table)
-    sliced = Tables.scan(isempty(columns) ? (rows=Base.OneTo(rows),) : columns,
-        Tables.Scan(; offset=drop, limit=take))
-    named = NamedTuple{keys(columns)}(Tuple(Tables.getcolumn(sliced, name)
-        for name in keys(columns)))
-    return Table(_tablemetadata(table), _tableschema(table), named, take,
-        _tablecolmetadata(table))
-end
-
 # One table of the rows of `tables` (one per file, in order, with the same columns).
 function _vcattables(ds::Dataset, tables::Vector{Table})
     length(tables) == 1 && return only(tables)

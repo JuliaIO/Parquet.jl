@@ -215,3 +215,15 @@ end
         @test DataAPI.metadata(ds, "source") == "test"
     end
 end
+
+@testset "row windows keep column kinds" begin
+    bytes = take!(Parquet.write(IOBuffer(), (a=collect(1:100),
+        s=["a long string value number $i" for i in 1:100]); rowgroupsize=30))
+    file = Parquet.File(bytes; filter=Parquet.col(:a) > 10, limit=40)
+    parts = collect(file)
+    close(file)
+    @test sum(Tables.rowcount, parts) == 40
+    @test all(part -> part.s isa Parquet.DataStrings.StringVector, parts)
+    @test plainvalues(reduce(vcat, [collect(part.s) for part in parts])) ==
+        ["a long string value number $i" for i in 11:50]
+end
