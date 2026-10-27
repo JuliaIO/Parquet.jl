@@ -152,7 +152,7 @@ _sourcepath(input) = nothing
 function _directoryfiles(root::String)
     files = String[]
     _walkfiles!(files, root)
-    sort!(files)
+    sort!(files; by=_pathorder)
     return collect(Any, files), collect(Union{Nothing,String}, files), root
 end
 
@@ -179,11 +179,15 @@ function _globfiles(pattern::String)
     files = String[]
     isdir(root) && _walkfiles!(files, root)
     matched = String[path for path in files if occursin(regex, _relativepath(path, root))]
-    sort!(matched)
+    sort!(matched; by=_pathorder)
     return collect(Any, matched), collect(Union{Nothing,String}, matched), root
 end
 
 _relativepath(path::String, root::String) = replace(relpath(path, root), '\\' => '/')
+
+# Files read in the order of their '/'-separated paths on every platform (on Windows, `\`
+# sorts after letters, `/` before them).
+_pathorder(path::String) = Sys.iswindows() ? replace(path, '\\' => '/') : path
 
 # A glob pattern as a regex over '/'-separated relative paths.
 function _globregex(pattern::AbstractString)
