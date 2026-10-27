@@ -470,7 +470,7 @@ nullable unless `nullable=false`, so later tables may hold `missing`.
 
 The function form passes the writer to `f` and closes it when `f` returns; when `f` throws,
 the output is abandoned (a path sink is removed). Keyword arguments are those of
-[`Parquet.write`](@ref) plus `nullable`.
+[`Parquet.write`](@ref), except `partitionby` and `existing`, plus `nullable`.
 
 A path sink is written to a temporary file in the same directory and moved over `sink`
 when the writer closes, so an existing file stays intact until then.
@@ -977,12 +977,31 @@ Keywords and defaults (pyarrow's):
 - `ntasks=Threads.nthreads()`: tasks encoding column chunks in parallel; the output does
   not depend on it.
 - `limits=Parquet.Limits()`.
+- `partitionby`: column names; `sink` is then a directory that gets a Hive-style dataset
+  (`sink/year=2024/month=1/part-0.parquet`), with one file per distinct key holding that
+  key's rows without the key columns. Keys are integers, floats, Bools, `Date`s, or
+  strings, percent-encoded as pyarrow does; `missing` is `__HIVE_DEFAULT_PARTITION__` (an
+  empty string, as in pyarrow, reads back as `missing`). A non-empty `sink` is an error
+  unless `existing=:delete_matching`, which first deletes the partitions the write
+  produces and keeps the others. Each input partition adds row groups to its keys' files;
+  at most 128 files are open at once, so a key may continue in `part-1.parquet` and so
+  on. Files appear complete or not at all, but a failed write can leave some written.
 
 Writing a `Parquet.Table` keeps its stored schema and file key-value metadata, except the
 entries that describe the source's schema (`ARROW:schema`, which is generated again,
 `pandas`, and Spark's row metadata).
 """
-function write(sink::Union{IO,AbstractString}, table; kwargs...)
+function write(sink::Union{IO,AbstractString}, table; partitionby=nothing,
+        existing=nothing, kwargs...)
+    if partitionby !== nothing
+        sink isa AbstractString || throw(ArgumentError(
+            "partitionby writes a directory, so the sink must be a path"))
+        _writepartitioned(String(sink), table, partitionby, something(existing, :error),
+            values(kwargs))
+        return sink
+    end
+    existing === nothing || throw(ArgumentError(
+        "existing applies only to partitioned writes (partitionby)"))
     nullable = Tables.partitions(table) isa Tuple{Any} ? nothing : true
     options = _writeoptions(; nullable=nullable, kwargs...)
     writer = sink isa IO ? _newwriter(sink, nothing, nothing, options) :

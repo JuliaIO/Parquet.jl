@@ -46,6 +46,7 @@ include("pushdown.jl")
 include("dataset.jl")
 include("write_nested.jl")
 include("writer.jl")
+include("write_partitioned.jl")
 include("precompile.jl")
 
 if VERSION >= v"1.11"

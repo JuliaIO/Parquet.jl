@@ -86,6 +86,7 @@ using PrecompileTools: @compile_workload, @setup_workload
             write(writer, optional)
         end
         write(IOBuffer(), Tables.partitioner((scalars, scalars)))
+        write(joinpath(dir, "partitioned"), scalars; partitionby=:i8)
     end
     # Interned schema names are per-process state; the image must start without them.
     lock(_SCHEMA_NAME_REGISTRY.lock) do
