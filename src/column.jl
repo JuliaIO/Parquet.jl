@@ -600,9 +600,10 @@ function _validatelevels(levels::Vector{UInt16}, count::Int, maxlevel::Int, name
 end
 
 # Data page V1 levels: a length-prefixed RLE hybrid stream or deprecated BIT_PACKED.
+# Returns the position after them and how many are at `maxlevel`.
 function _levelsv1!(levels::Vector{UInt16}, bytes::_ByteView, position::Int, count::Int,
         encoding::Metadata.Encoding.T, maxlevel::Int, name::String, limits::Limits)
-    maxlevel == 0 && return position
+    maxlevel == 0 && return position, count
     bitwidth = _levelbitwidth(maxlevel)
     if encoding == Metadata.Encoding.RLE
         start, stop = _hybridbounds(bytes, position, true)
@@ -617,21 +618,19 @@ function _levelsv1!(levels::Vector{UInt16}, bytes::_ByteView, position::Int, cou
     else
         throw(FormatError("$name level encoding $encoding is not supported"))
     end
-    _validatelevels(levels, count, maxlevel, name)
-    return position
+    return position, _validatelevels(levels, count, maxlevel, name)
 end
 
-# Data page V2 levels; returns whether any were stored.
+# Data page V2 levels; returns whether any were stored and how many are at `maxlevel`.
 function _levelsv2!(levels::Vector{UInt16}, bytes::_ByteView, count::Int, maxlevel::Int,
         name::String)
-    isempty(bytes) && maxlevel == 0 && return false
+    isempty(bytes) && maxlevel == 0 && return false, count
     _growto!(levels, _claimcapacity(count, length(bytes)))
     position = _decodehybrid!(levels, 0, count, _levelbitwidth(maxlevel), bytes, 1,
         length(bytes) + 1)
     position == length(bytes) + 1 ||
         throw(FormatError("data page V2 $name levels have trailing bytes"))
-    _validatelevels(levels, count, maxlevel, name)
-    return true
+    return true, _validatelevels(levels, count, maxlevel, name)
 end
 
 function _datapagev1!(sink, ::Type{P}, convert, frame::PageFrame,
@@ -647,12 +646,10 @@ function _datapagev1!(sink, ::Type{P}, convert, frame::PageFrame,
         frame.header.uncompressed_page_size, limits)
     maxrepetition = Int(node.max_repetition_level)
     maxdefinition = Int(node.max_definition_level)
-    position = _levelsv1!(buffers.repetition, bytes, 1, count,
+    position, _ = _levelsv1!(buffers.repetition, bytes, 1, count,
         header.repetition_level_encoding, maxrepetition, "repetition", limits)
-    position = _levelsv1!(buffers.definition, bytes, position, count,
+    position, present = _levelsv1!(buffers.definition, bytes, position, count,
         header.definition_level_encoding, maxdefinition, "definition", limits)
-    present = maxdefinition == 0 ? count :
-        _validatelevels(buffers.definition, count, maxdefinition, "definition")
     valuestart = position
     finish = _scatterpage!(sink, count, present, P, convert, header.encoding, bytes,
         valuestart, length(bytes) + 1, dictionary, hasdictionary, buffers)
@@ -715,9 +712,9 @@ function _datapagev2!(sink, ::Type{P}, convert, frame::PageFrame,
         md.codec, limits)
     maxrepetition = Int(node.max_repetition_level)
     maxdefinition = Int(node.max_definition_level)
-    hasrepetition = _levelsv2!(buffers.repetition, repetitionbytes, count,
+    hasrepetition, _ = _levelsv2!(buffers.repetition, repetitionbytes, count,
         maxrepetition, "repetition")
-    hasdefinition = _levelsv2!(buffers.definition, definitionbytes, count,
+    hasdefinition, present = _levelsv2!(buffers.definition, definitionbytes, count,
         maxdefinition, "definition")
     actualrows = count
     if hasrepetition && count > 0
@@ -730,8 +727,6 @@ function _datapagev2!(sink, ::Type{P}, convert, frame::PageFrame,
         throw(FormatError("data page V2 declares $rows rows but its repetition levels contain $actualrows"))
     # num_nulls is advisory: writers disagree on whether empty and null ancestors count
     # (Arrow C++ counts only leaf-level nulls), so the definition levels decide.
-    present = hasdefinition ?
-        _validatelevels(buffers.definition, count, maxdefinition, "definition") : count
     position = hasdefinition ? _scatterpage!(sink, count, present, P, convert,
         header.encoding, bytes, 1, length(bytes) + 1, dictionary, hasdictionary,
         buffers) : nothing
@@ -866,8 +861,8 @@ function _sinkpage!(decode, sink::_FlatSink{O,L,false}, count::Int, present::Int
     return position
 end
 
-# An optional flat page with nulls whose values are PLAIN fixed-width or dictionary
-# indices writes each value straight to its row, without staging the present values.
+# An optional flat page whose values are PLAIN fixed-width or dictionary indices writes
+# each value straight to its row, in one pass, without staging the present values.
 # Returns the position after the values, or `nothing` when the page takes the general
 # path.
 function _scatterpage!(sink, count::Int, present::Int, ::Type{P}, convert, encoding,
@@ -880,7 +875,6 @@ function _scatterpage!(sink::_FlatSink{O,L,false}, count::Int, present::Int, ::T
         convert::C, encoding::Metadata.Encoding.T, bytes::_ByteView, position::Int,
         stop::Int, dictionary::Vector{L}, hasdictionary::Bool,
         buffers::_PageBuffers) where {O,L,P,C}
-    present == count && return nothing
     output = sink.output
     offset = sink.filled
     definition = buffers.definition
@@ -892,14 +886,21 @@ function _scatterpage!(sink::_FlatSink{O,L,false}, count::Int, present::Int, ::T
         _growto!(output, offset + count)
         GC.@preserve bytes begin
             source = Ptr{P}(pointer(bytes, position))
-            next = 0
-            @inbounds for index in 1:count
-                if definition[index] == top
-                    next += 1
+            if present == count
+                @inbounds for index in 1:count
                     output[offset + index] =
-                        _convertvalue(convert, ltoh(unsafe_load(source, next)))
-                else
-                    output[offset + index] = null
+                        _convertvalue(convert, ltoh(unsafe_load(source, index)))
+                end
+            else
+                next = 0
+                @inbounds for index in 1:count
+                    if definition[index] == top
+                        next += 1
+                        output[offset + index] =
+                            _convertvalue(convert, ltoh(unsafe_load(source, next)))
+                    else
+                        output[offset + index] = null
+                    end
                 end
             end
         end
@@ -912,15 +913,23 @@ function _scatterpage!(sink::_FlatSink{O,L,false}, count::Int, present::Int, ::T
         position = _dictionaryindices!(indices, present, bytes, position, stop)
         _growto!(output, offset + count)
         entries = UInt32(length(dictionary))
-        next = 0
-        @inbounds for index in 1:count
-            if definition[index] == top
-                next += 1
-                raw = indices[next]
+        if present == count
+            @inbounds for index in 1:count
+                raw = indices[index]
                 raw < entries || _dictionaryindexerror(raw, entries)
                 output[offset + index] = _dictionarycopy(dictionary[raw + 1])
-            else
-                output[offset + index] = null
+            end
+        else
+            next = 0
+            @inbounds for index in 1:count
+                if definition[index] == top
+                    next += 1
+                    raw = indices[next]
+                    raw < entries || _dictionaryindexerror(raw, entries)
+                    output[offset + index] = _dictionarycopy(dictionary[raw + 1])
+                else
+                    output[offset + index] = null
+                end
             end
         end
         sink.filled += count
