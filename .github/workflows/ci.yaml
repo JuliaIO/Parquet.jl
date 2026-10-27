@@ -6,7 +6,8 @@ on:
     tags: ['*']
 jobs:
   test:
-    timeout-minutes: 30
+    # The N5 conformance run plus the full suite take 16-30 minutes on hosted runners.
+    timeout-minutes: 45
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
     runs-on: ${{ matrix.os }}
     strategy:
