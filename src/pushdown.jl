@@ -1457,6 +1457,12 @@ function _readselectedflat(file::File, plan::_ReadPlan, parts::Vector{_GroupRows
             push!(tasks, (fieldindex, 0))
         end
     end
+    # Larger chunks first, so the tasks still running at the end are short ones.
+    chunkbytes(fieldindex, index) = haskey(decoded, (fieldindex, index)) ? Int64(0) :
+        _chunkbytes(metadata, parts[index], fields[fieldindex])
+    sort!(tasks; rev=true, by=((fieldindex, task),) -> task == 0 ?
+        sum(index -> chunkbytes(fieldindex, index), eachindex(parts); init=Int64(0)) :
+        chunkbytes(fieldindex, task))
     # The pages the output columns decode (the filter phase decoded the filter columns).
     decodes = [(fieldindex, index) for fieldindex in outfields for index in eachindex(parts)
         if counts[index] > 0 && !haskey(decoded, (fieldindex, index))]
@@ -1483,6 +1489,12 @@ function _readselectedflat(file::File, plan::_ReadPlan, parts::Vector{_GroupRows
             starts)
     end
     return columns, total
+end
+
+# The compressed size of the chunk of `node` in `part`'s row group.
+function _chunkbytes(metadata::Metadata.FileMetaData, part::_GroupRows, node::SchemaNode)
+    md = metadata.row_groups[part.group].columns[Int(node.column_index)].meta_data
+    return md === nothing ? Int64(0) : md.total_compressed_size
 end
 
 # Whether every chunk of `node` in `parts` has the bytes to hold the rows read from it
