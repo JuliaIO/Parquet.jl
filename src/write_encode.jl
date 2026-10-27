@@ -137,7 +137,7 @@ mutable struct _BytesBuffer
     maxlength::Int
 end
 
-_BytesBuffer(prefixed::Bool, width::Int=0, maxlength::Int=typemax(Int32)) =
+_BytesBuffer(prefixed::Bool, width::Int, maxlength::Int) =
     _BytesBuffer(UInt8[], Int[], Int32[], prefixed, width, maxlength)
 
 @noinline function _bytelengtherror(buffer::_BytesBuffer, length::Int)
@@ -272,23 +272,14 @@ end
 @inline _hashslot(bits::Unsigned, shift::Int) =
     Int((UInt64(bits) * 0x9E3779B97F4A7C15) >> shift) + 1
 
-function _dictionaryindex!(dictionary::_NumberDictionary{P,U}, value::P) where {P,U}
-    bits = reinterpret(U, value)
-    slots = dictionary.slots
-    mask = length(slots) - 1
-    slot = _hashslot(bits, dictionary.shift)
-    @inbounds while true
-        entry = slots[slot]
-        if entry == 0
-            push!(dictionary.values, value)
-            index = length(dictionary.values)
-            slots[slot] = Int32(index)
-            2 * index > length(slots) && _rehash!(dictionary)
-            return UInt32(index - 1)
-        end
-        reinterpret(U, dictionary.values[entry]) == bits && return UInt32(entry - 1)
-        slot = (slot & mask) + 1
-    end
+# Adds `value` at the empty `slot` its probe ended on; returns its index.
+function _dictionaryinsert!(dictionary::_NumberDictionary{P}, value::P,
+        slot::Int) where {P}
+    push!(dictionary.values, value)
+    index = length(dictionary.values)
+    @inbounds dictionary.slots[slot] = Int32(index)
+    2 * index > length(dictionary.slots) && _rehash!(dictionary)
+    return UInt32(index - 1)
 end
 
 function _rehash!(dictionary::_NumberDictionary{P,U}) where {P,U}
@@ -312,20 +303,22 @@ _dictionarybytes(dictionary::_NumberDictionary{P}) where {P} =
     sizeof(P) * length(dictionary.values)
 
 # Byte-array entries live in `entries`, already laid out as the dictionary page's PLAIN
-# payload, and hash with XXH64.
+# payload, and hash with `_byteshash`.
 mutable struct _BytesDictionary
     entries::_BytesBuffer
     hashes::Vector{UInt64}
     slots::Vector{Int32}
     shift::Int
+    # Which entries the page being flushed uses, for its statistics.
+    marks::Vector{Bool}
 end
 
 _BytesDictionary(buffer::_BytesBuffer) = _BytesDictionary(
     _BytesBuffer(buffer.prefixed, buffer.width, buffer.maxlength), UInt64[],
-    zeros(Int32, 1024), 64 - 10)
+    zeros(Int32, 1024), 64 - 10, Bool[])
 
 function _dictionaryindex!(dictionary::_BytesDictionary, source::Ptr{UInt8}, length::Int)
-    hash = _xxhash64(source, length)
+    hash = _byteshash(source, length)
     slots = dictionary.slots
     mask = Base.length(slots) - 1
     slot = _hashslot(hash, dictionary.shift)
@@ -443,11 +436,30 @@ end
 _newdictionary(::Vector{P}) where {P} = _NumberDictionary{P}()
 _newdictionary(buffer::_BytesBuffer) = _BytesDictionary(buffer)
 
-# Dictionary indices of values[first:last], in indices[first:last].
-function _dictionaryencode!(indices::Vector{UInt32}, dictionary::_NumberDictionary{P},
-        values::Vector{P}, first::Int, last::Int) where {P}
+# Dictionary indices of values[first:last], in indices[first:last]. The table lives in
+# locals between insertions, so a lookup is a hash, a probe, and one compare.
+function _dictionaryencode!(indices::Vector{UInt32}, dictionary::_NumberDictionary{P,U},
+        values::Vector{P}, first::Int, last::Int) where {P,U}
+    slots = dictionary.slots
+    entries = dictionary.values
+    shift = dictionary.shift
     @inbounds for index in first:last
-        indices[index] = _dictionaryindex!(dictionary, values[index])
+        value = values[index]
+        bits = reinterpret(U, value)
+        slot = _hashslot(bits, shift)
+        while true
+            entry = slots[slot]
+            if iszero(entry)
+                indices[index] = _dictionaryinsert!(dictionary, value, slot)
+                slots = dictionary.slots
+                shift = dictionary.shift
+                break
+            elseif reinterpret(U, entries[entry]) == bits
+                indices[index] = UInt32(entry - 1)
+                break
+            end
+            slot = (slot & (length(slots) - 1)) + 1
+        end
     end
     return indices
 end
@@ -708,6 +720,31 @@ function _bytesbounds(values::_BytesBuffer, order::_Order)
     return true, lo, hi, nans
 end
 
+# Bounds of the entries `indices` use, marking them in `marks` first.
+function _usedbounds(entries::_BytesBuffer, indices::Vector{UInt32}, marks::Vector{Bool},
+        order::_Order)
+    count = length(entries.starts)
+    fill!(resize!(marks, count), false)
+    @inbounds for index in indices
+        marks[Int(index) + 1] = true
+    end
+    lo = hi = 0
+    data = entries.data
+    GC.@preserve data for entry in 1:count
+        @inbounds marks[entry] || continue
+        if lo == 0
+            lo = hi = entry
+            continue
+        end
+        pointer, length = _bytesview(entries, entry)
+        lopointer, lolength = _bytesview(entries, lo)
+        hipointer, hilength = _bytesview(entries, hi)
+        _comparebytes(pointer, length, lopointer, lolength, order) < 0 && (lo = entry)
+        _comparebytes(pointer, length, hipointer, hilength, order) > 0 && (hi = entry)
+    end
+    return lo != 0, lo, hi
+end
+
 _boundbytes(value::P) where {P<:Union{Int32,Int64,Float32,Float64}} =
     collect(reinterpret(UInt8, [value]))
 _boundbytes(value::Bool) = UInt8[value ? 0x01 : 0x00]
@@ -958,7 +995,7 @@ function _encodepagevalues!(chunk::_ChunkWriter)
 end
 
 # Updates the page and chunk statistics; returns the page's (found, min, max) bounds.
-function _pagebounds!(chunk::_ChunkWriter{B}) where {B}
+function _pagebounds!(chunk::_ChunkWriter{B}, encoding::Metadata.Encoding.T) where {B}
     order = chunk.leaf.order
     order == _ORDER_NONE && return false, UInt8[], UInt8[]
     values = chunk.values
@@ -969,6 +1006,15 @@ function _pagebounds!(chunk::_ChunkWriter{B}) where {B}
         minimum, maximum = _dictionarybound(chunk.dictionary, Int(lo) + 1),
             _dictionarybound(chunk.dictionary, Int(hi) + 1)
         P = values isa _BytesBuffer ? _BytesBuffer : eltype(values)
+        nans = 0
+    elseif values isa _BytesBuffer && encoding == Metadata.Encoding.RLE_DICTIONARY &&
+            order != _ORDER_FLOAT16
+        # A dictionary page's bounds are among the entries it uses, compared once each.
+        entries = chunk.dictionary.entries
+        found, lo, hi = _usedbounds(entries, chunk.indices, chunk.dictionary.marks, order)
+        found || return false, UInt8[], UInt8[]
+        minimum, maximum = _boundbytes(entries, lo), _boundbytes(entries, hi)
+        P = _BytesBuffer
         nans = 0
     elseif values isa _BytesBuffer
         found, lo, hi, nans = _bytesbounds(values, order)
@@ -1014,10 +1060,10 @@ function _flushpage!(chunk::_ChunkWriter, rows::Int, firstrow::Int)
     entries = _pageentries(chunk)
     count = _pagevalues(chunk)
     nulls = entries - count
-    found, minimum, maximum = options.statistics ? _pagebounds!(chunk) :
-        (false, UInt8[], UInt8[])
     empty!(chunk.body)
     body, encoding = _encodepagevalues!(chunk)
+    found, minimum, maximum = options.statistics ? _pagebounds!(chunk, encoding) :
+        (false, UInt8[], UInt8[])
     page = chunk.page
     empty!(page)
     leaf.maxrep > 0 && _encodelevels!(page, chunk.repetitions, _levelwidth(leaf.maxrep),

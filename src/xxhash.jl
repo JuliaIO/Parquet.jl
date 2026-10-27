@@ -91,3 +91,58 @@ function _xxhash64(bytes::Union{Vector{UInt8},Base.CodeUnits{UInt8,String}},
 end
 
 _xxhash64(value::String, seed::UInt64=UInt64(0)) = _xxhash64(codeunits(value), seed)
+
+# The writer's dictionary hash for byte strings, after wyhash (Wang Yi, public domain):
+# 128-bit multiply mixing over 16-byte steps, with overlapping loads for short inputs.
+# Faster than XXH64 on the short and medium strings dictionaries hold; files never store it.
+const _WY0 = 0xa0761d6478bd642f
+const _WY1 = 0xe7037ed1a0b428db
+const _WY2 = 0x8ebc6af09c88c6e3
+const _WY3 = 0x589965cc75374cc3
+
+@inline function _wymix(a::UInt64, b::UInt64)
+    product = UInt128(a) * UInt128(b)
+    return (product % UInt64) ⊻ UInt64(product >> 64)
+end
+
+@inline _wyload32(pointer::Ptr{UInt8}) = UInt64(ltoh(unsafe_load(Ptr{UInt32}(pointer))))
+@inline _wyload64(pointer::Ptr{UInt8}) = ltoh(unsafe_load(Ptr{UInt64}(pointer)))
+
+function _byteshash(pointer::Ptr{UInt8}, length::Int)
+    seed = _WY0
+    if length <= 16
+        if length >= 4
+            step = (length >> 3) << 2
+            a = (_wyload32(pointer) << 32) | _wyload32(pointer + step)
+            b = (_wyload32(pointer + length - 4) << 32) | _wyload32(pointer + length - 4 - step)
+        elseif length > 0
+            a = (UInt64(unsafe_load(pointer)) << 16) |
+                (UInt64(unsafe_load(pointer + (length >> 1))) << 8) |
+                UInt64(unsafe_load(pointer + length - 1))
+            b = UInt64(0)
+        else
+            a = b = UInt64(0)
+        end
+    else
+        remaining = length
+        if remaining > 48
+            seed1 = seed2 = seed
+            while remaining > 48
+                seed = _wymix(_wyload64(pointer) ⊻ _WY1, _wyload64(pointer + 8) ⊻ seed)
+                seed1 = _wymix(_wyload64(pointer + 16) ⊻ _WY2, _wyload64(pointer + 24) ⊻ seed1)
+                seed2 = _wymix(_wyload64(pointer + 32) ⊻ _WY3, _wyload64(pointer + 40) ⊻ seed2)
+                pointer += 48
+                remaining -= 48
+            end
+            seed ⊻= seed1 ⊻ seed2
+        end
+        while remaining > 16
+            seed = _wymix(_wyload64(pointer) ⊻ _WY1, _wyload64(pointer + 8) ⊻ seed)
+            pointer += 16
+            remaining -= 16
+        end
+        a = _wyload64(pointer + remaining - 16)
+        b = _wyload64(pointer + remaining - 8)
+    end
+    return _wymix(_WY1 ⊻ UInt64(length), _wymix(a ⊻ _WY1, b ⊻ seed))
+end
