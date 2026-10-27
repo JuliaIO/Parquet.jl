@@ -370,3 +370,12 @@ end
         pdcheck(bytes; filter=filter)
     end
 end
+
+@testset "pushdown: created_by that is not UTF-8" begin
+    bytes = pdbytes((f=Float64[1, 2, 3],))
+    for createdby in ("\xff", "Polars\xff", "parquet-mr version 1.\xfe")
+        renamed = pdrefooter(metadata -> Parquet._withfields(metadata; created_by=createdby),
+            bytes)
+        @test Parquet.Table(renamed; filter=Parquet.colcmp(>, Parquet.col(:f), 1.5)).f == [2, 3]
+    end
+end

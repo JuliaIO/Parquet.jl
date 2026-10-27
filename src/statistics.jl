@@ -909,12 +909,12 @@ function _statisticissignedcomparison(comparison::Symbol)
     return comparison in (:signed, :boolean, :decimal, :floating)
 end
 
-# Polars (whose `created_by` names no version) leaves every page holding a NaN out of a
-# FLOAT or DOUBLE column chunk's bounds, and marks those pages all null in the column
-# index.
+# Polars (whose `created_by` is "Polars", with no version) leaves every page holding a NaN
+# out of a FLOAT or DOUBLE column chunk's bounds, and marks those pages all null in the
+# column index. `created_by` may hold any bytes, so it is compared bytewise.
 function _statisticspolars(createdby::Union{Nothing,String})
     createdby === nothing && return false
-    return startswith(lowercase(lstrip(createdby)), "polars")
+    return startswith(createdby, "Polars")
 end
 
 function _statisticproducertrust(element::Metadata.SchemaElement,
