@@ -71,7 +71,6 @@ end
             (DMD.Type.FIXED_LEN_BYTE_ARRAY, 9, 4))
         element = decimaltestelement("value", physical, precision, 2; width=width)
         @test Parquet._decimallogicalkind(element) === :decimal
-        @test Parquet._decimallogicaleltype(:decimal) === Parquet.Decimal
     end
     legacy = decimaltestelement("legacy", DMD.Type.INT64, 18, 4; modern=false)
     @test Parquet._decimallogicalkind(legacy) === :decimal

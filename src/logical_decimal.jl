@@ -91,11 +91,6 @@ function _decimallogicalkind(element::Metadata.SchemaElement)
     return :decimal
 end
 
-function _decimallogicaleltype(kind::Symbol)
-    kind === :decimal && return Decimal
-    return nothing
-end
-
 function _decimaldigits(value::BigInt)
     iszero(value) && return 1
     return ndigits(abs(value); base=10)
