@@ -138,7 +138,7 @@ function _datasetinputs(input)
         throw(ArgumentError("$(repr(path)) is not a file, a directory, or a glob pattern"))
     elseif input isa AbstractVector && !(input isa AbstractVector{UInt8})
         paths = Union{Nothing,String}[_sourcepath(item) for item in input]
-        found = [path for path in paths if path !== nothing]
+        found = String[path for path in paths if path !== nothing]
         return collect(Any, input), paths, _commondirectory(found)
     end
     throw(ArgumentError("a dataset source is a directory, a glob pattern, or a vector of " *
