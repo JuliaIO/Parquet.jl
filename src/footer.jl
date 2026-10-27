@@ -8,17 +8,15 @@ struct Footer{B<:AbstractVector{UInt8}}
     bytes::B
 end
 
-"""
-    Parquet.File(source; limits=Parquet.Limits())
-
-Open a Parquet file and decode its footer metadata without reading any column data.
-`source` is a path, a byte vector, an `IO`, or a `Parquet.AbstractSource`. A path is
-memory mapped until `close(file)`.
-"""
-mutable struct File{S<:AbstractSource,F<:Footer}
+# An open Parquet file: its source, footer, decoded metadata, and the read plan its
+# keywords resolve to (`P` is `_ReadPlan`, defined with the readers). `owned` is whether
+# Parquet opened the source and so closes it.
+mutable struct File{S<:AbstractSource,F<:Footer,P}
     source::S
     footer::F
     metadata::Metadata.FileMetaData
+    plan::P
+    owned::Bool
     @atomic closed::Bool
 end
 
@@ -44,22 +42,36 @@ function _magic(bytes::AbstractVector{UInt8}, offset::Int=1)
     return :invalid
 end
 
+# Bytes read from the end of a source that is not in memory: the trailer and, for most
+# files, the whole footer, in one request.
+const _FOOTER_TAIL_BYTES = Int64(64 * 1024)
+
+# The footer from the end of `src`. A source that is not in memory is read with one
+# request for the last `_FOOTER_TAIL_BYTES` (and a second only for a larger footer); its
+# leading magic is checked when that read covers the whole file.
 function readfooter(src::AbstractSource, limits::Limits=Limits())
     total = _checkedsourcelength(src)
     total >= 12 || throw(FormatError("file is shorter than the minimum 12 bytes"))
-    leading = _readrangeexact(src, total, Int64(0), Int64(4))
-    leadingmagic = _magic(leading)
-    leadingmagic === :invalid && throw(FormatError("missing leading PAR1 or PARE magic"))
-    trailer = _readrangeexact(src, total, total - 8, Int64(8))
+    inmemory = src isa MemorySource
+    tail = inmemory ? Int64(8) : min(total, _FOOTER_TAIL_BYTES)
+    tailbytes = _readrangeexact(src, total, total - tail, tail)
+    trailer = view(tailbytes, (tail - 7):tail)
     trailingmagic = _magic(trailer, 5)
     trailingmagic === :invalid && throw(FormatError("missing trailing PAR1 or PARE magic"))
-    leadingmagic === trailingmagic || throw(FormatError("leading and trailing magic differ"))
+    if inmemory || tail == total
+        leading = inmemory ? _readrangeexact(src, total, Int64(0), Int64(4)) : tailbytes
+        leadingmagic = _magic(leading)
+        leadingmagic === :invalid && throw(FormatError("missing leading PAR1 or PARE magic"))
+        leadingmagic === trailingmagic || throw(FormatError("leading and trailing magic differ"))
+    end
     footerlength = Int64(_readu32le(trailer))
     footerlength <= total - 12 || throw(FormatError("footer length exceeds the file size"))
     _checklimit(:footer_bytes, footerlength, limits.max_footer_bytes)
     footeroffset = total - 8 - footerlength
-    bytes = _readrangeexact(src, total, footeroffset, footerlength)
-    return Footer(footeroffset, footerlength, leadingmagic === :encrypted, bytes)
+    bytes = footerlength + 8 <= tail ?
+        view(tailbytes, (tail - 7 - footerlength):(tail - 8)) :
+        _readrangeexact(src, total, footeroffset, footerlength)
+    return Footer(footeroffset, footerlength, trailingmagic === :encrypted, bytes)
 end
 
 # The file metadata a footer encodes. Encrypted files are refused: a PARE footer is
@@ -73,17 +85,6 @@ function _decodefooter(footer::Footer, limits::Limits, budget::_ByteBudget)
         "encrypted Parquet files are not supported (this one has a plaintext footer)"))
     Thrift.remaining(reader) == 0 || throw(FormatError("file footer has trailing bytes"))
     return metadata
-end
-
-function File(input; limits::Limits=Limits(), budget::_ByteBudget=_ByteBudget(limits))
-    src = source(input; budget=budget)
-    try
-        footer = readfooter(src, limits)
-        return File(src, footer, _decodefooter(footer, limits, budget), false)
-    catch
-        input isa AbstractSource || close!(src)
-        rethrow()
-    end
 end
 
 function _readfilemetadata(file::File, limits::Limits,
@@ -101,7 +102,7 @@ end
 
 function close!(file::File)
     (@atomicswap file.closed = true) && return
-    close!(file.source)
+    file.owned && close!(file.source)
     return
 end
 

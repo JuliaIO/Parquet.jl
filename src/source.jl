@@ -1,12 +1,41 @@
+"""
+    Parquet.AbstractSource
+
+Bytes that Parquet reads by range, for storage a path, byte vector, or `IO` does not
+cover (object stores, custom caches). A subtype implements
+[`Parquet.sourcelength`](@ref) and [`Parquet.readrange`](@ref), and may implement
+[`Parquet.concurrentreads`](@ref). Parquet never closes a source it was given.
+"""
 abstract type AbstractSource end
 
 function close!(::AbstractSource)
     return
 end
 
+"""
+    Parquet.concurrentreads(src::Parquet.AbstractSource) -> Bool
+
+Whether `readrange` may run on several tasks at once for `src`. Defaults to `false`,
+which makes reads of `src` sequential.
+"""
 function concurrentreads(::AbstractSource)
     return false
 end
+
+"""
+    Parquet.sourcelength(src::Parquet.AbstractSource) -> Integer
+
+The total byte length of `src`.
+"""
+function sourcelength end
+
+"""
+    Parquet.readrange(src::Parquet.AbstractSource, offset, count) -> AbstractVector{UInt8}
+
+The `count` bytes of `src` starting at the zero-based byte `offset`, as a vector with
+`Base.OneTo` axes. Parquet does not modify the returned bytes.
+"""
+function readrange end
 
 mutable struct OwnerRegion{B<:AbstractVector{UInt8},I}
     bytes::B
@@ -64,9 +93,25 @@ function Base.copy(bytes::BufferSlice)
     return collect(bytes)
 end
 
+# A region over a file maps the file; closing it unmaps the bytes now rather than at
+# garbage collection, so the file can be replaced or deleted (Windows refuses both while
+# it is mapped). Nothing read from the region refers to its bytes.
 function close!(region::OwnerRegion)
     (@atomicswap region.closed = true) && return
-    region.io === nothing || close(region.io)
+    region.io === nothing && return
+    _unmap(region.bytes)
+    close(region.io)
+    return
+end
+
+# Runs the finalizer Mmap attaches to a mapped vector, which unmaps it (on the vector's
+# memory since Julia 1.11, on the vector before).
+function _unmap(bytes::Vector{UInt8})
+    @static if VERSION >= v"1.11"
+        finalize(bytes.ref.mem)
+    else
+        finalize(bytes)
+    end
     return
 end
 
@@ -201,4 +246,66 @@ function readrange(src::_ChunkSource, offset::Integer, count::Integer)
     first >= 1 && first - 1 + Int(count) <= length(src.bytes) || throw(ArgumentError(
         "read outside the prefetched column chunk"))
     return view(src.bytes, first:(first - 1 + Int(count)))
+end
+
+# The byte ranges of the column chunks a read decodes from a source that is not in
+# memory, merged where they are at most `_COALESCE_GAP` apart (up to `_COALESCE_LIMIT`
+# bytes per range) and each fetched with one request on first use. Reads outside the
+# planned ranges go to the source directly.
+# ponytail: fetched ranges stay in memory until the read ends; evict consumed ranges if
+# remote reads of very large files need less peak memory.
+const _COALESCE_GAP = Int64(64 * 1024)
+const _COALESCE_LIMIT = Int64(32 * 1024 * 1024)
+
+mutable struct _FetchedRange
+    const start::Int64
+    const stop::Int64
+    const lock::ReentrantLock
+    bytes::Vector{UInt8}
+    fetched::Bool
+end
+
+struct _CoalescedSource{S<:AbstractSource} <: AbstractSource
+    src::S
+    total::Int64
+    starts::Vector{Int64}
+    ranges::Vector{_FetchedRange}
+end
+
+function _CoalescedSource(src::AbstractSource, wanted::Vector{Tuple{Int64,Int64}})
+    total = _checkedsourcelength(src)
+    merged = Tuple{Int64,Int64}[]
+    for (start, stop) in sort(wanted)
+        if !isempty(merged) && start - last(merged)[2] <= _COALESCE_GAP &&
+                stop - last(merged)[1] <= _COALESCE_LIMIT
+            merged[end] = (last(merged)[1], max(stop, last(merged)[2]))
+        else
+            push!(merged, (start, stop))
+        end
+    end
+    ranges = _FetchedRange[_FetchedRange(start, stop, ReentrantLock(), UInt8[], false)
+        for (start, stop) in merged]
+    return _CoalescedSource(src, total, Int64[first(range) for range in merged], ranges)
+end
+
+sourcelength(src::_CoalescedSource) = src.total
+concurrentreads(src::_CoalescedSource) = concurrentreads(src.src)
+
+function readrange(src::_CoalescedSource, offset::Integer, count::Integer)
+    offset, count = Int64(offset), Int64(count)
+    index = searchsortedlast(src.starts, offset)
+    (index == 0 || offset + count > src.ranges[index].stop) &&
+        return _readrangeexact(src.src, src.total, offset, count)
+    range = src.ranges[index]
+    bytes = lock(range.lock) do
+        if !range.fetched
+            fetched = _readrangeexact(src.src, src.total, range.start,
+                range.stop - range.start)
+            range.bytes = fetched isa Vector{UInt8} ? fetched : Vector{UInt8}(fetched)
+            range.fetched = true
+        end
+        return range.bytes
+    end
+    first = Int(offset - range.start) + 1
+    return view(bytes, first:(first + Int(count) - 1))
 end

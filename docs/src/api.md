@@ -9,8 +9,28 @@ CurrentModule = Parquet
 ```@docs
 Parquet.Table
 Parquet.File
+Parquet.read
+Parquet.metadata
 Parquet.write
 Parquet.Limits
+```
+
+## Filters
+
+```@docs
+Parquet.col
+Parquet.colcmp
+Parquet.colin
+Parquet.isnull
+```
+
+## Sources
+
+```@docs
+Parquet.AbstractSource
+Parquet.sourcelength
+Parquet.readrange
+Parquet.concurrentreads
 ```
 
 ## Errors

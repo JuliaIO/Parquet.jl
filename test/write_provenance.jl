@@ -19,13 +19,11 @@ function wpreplace(value; replacements...)
     return typeof(value)(fields...)
 end
 
+# The footer metadata of `bytes`, decoded without validating the schema, so files
+# deeper than the default limits can be inspected.
 function wpmetadata(bytes::AbstractVector{UInt8})
-    file = Parquet.File(bytes)
-    try
-        return WPTH.decode(copy(file.footer.bytes), WPMD.FileMetaData)
-    finally
-        close(file)
-    end
+    footer = Parquet.readfooter(Parquet.source(Vector{UInt8}(bytes)))
+    return WPTH.decode(copy(footer.bytes), WPMD.FileMetaData)
 end
 
 function wprewritefooter(bytes::Vector{UInt8}, metadata::WPMD.FileMetaData)
@@ -155,7 +153,8 @@ function wpdeepstructtable(depth::Int, rows::Int)
     metadata = WPTH.decode(copy(file.footer.bytes), WPMD.FileMetaData)
     metadata = wpreplace(metadata; schema=elements, num_rows=Int64(rows),
         row_groups=WPMD.RowGroup[])
-    table = Parquet.Table(file, metadata, schema, (; deep=column), rows, false)
+    close(file)
+    table = Parquet.Table(metadata, schema, (; deep=column), rows)
     return table, limits
 end
 
@@ -192,7 +191,8 @@ function wpdeepstructkeytable(depth::Int)
     file = Parquet.File(seed)
     metadata = WPMD.FileMetaData(version=Int32(1), schema=elements,
         num_rows=Int64(1), row_groups=WPMD.RowGroup[])
-    table = Parquet.Table(file, metadata, schema, (; m=column), 1, false)
+    close(file)
+    table = Parquet.Table(metadata, schema, (; m=column), 1)
     return table, limits
 end
 
@@ -246,7 +246,6 @@ end
     @test decimal.precision == Int32(9)
     @test decimal.scale == Int32(2)
     close(table)
-    @test @atomic table.closed
     for pageversion in (:v1, :v2), codec in (:uncompressed, :snappy)
         output = wpexactrewrite(table; pageversion=pageversion, codec=codec)
         @test wpschemaequal(wpmetadata(output).schema, expected)

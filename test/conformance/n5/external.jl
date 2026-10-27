@@ -441,18 +441,27 @@ function n5externalnormalizerows(table::Parquet.Table)
     return output
 end
 
-function n5externalpageversions(table::Parquet.Table)
+# The data page versions of every column chunk of the file at `input`.
+function n5externalpageversions(input)
+    file = Parquet.File(input)
+    try
+        return n5externalpageversions(file)
+    finally
+        close(file)
+    end
+end
+
+function n5externalpageversions(file::Parquet.File)
     versions = Symbol[]
-    for group in Parquet._tablemetadata(table).row_groups
+    for group in file.metadata.row_groups
         for column in group.columns
             metadata = column.meta_data
             metadata === nothing && throw(ArgumentError(
                 "external column chunk has no metadata"))
-            firstbyte, stop = Parquet._chunkrange(metadata,
-                getfield(table, :file).footer.offset)
+            firstbyte, stop = Parquet._chunkrange(metadata, file.footer.offset)
             position = firstbyte
             while position < stop
-                frame = Parquet.readpage(getfield(table, :file).source, position, stop,
+                frame = Parquet.readpage(file.source, position, stop,
                     Parquet.Limits())
                 kind = Parquet.pagekind(frame)
                 if kind === :data_v1
@@ -585,7 +594,7 @@ end
                 @test Parquet._tablerows(table) == fixture.rows == length(expected)
                 @test Parquet._tablemetadata(table).num_rows == fixture.rows
                 @test all(==(fixture.page_version),
-                    n5externalpageversions(table))
+                    n5externalpageversions(path))
                 actual = n5externalnormalizerows(table)
                 @test isequal(actual, expected)
                 rewrites = Dict{Symbol,Vector{UInt8}}()
@@ -606,7 +615,7 @@ end
                         @test N5.n5schemaexact(Parquet._tablemetadata(rewritten).schema,
                             Parquet._tablemetadata(table).schema)
                         @test all(==(pageversion),
-                            n5externalpageversions(rewritten))
+                            n5externalpageversions(output.privatefirst))
                         @test isequal(n5externalnormalizerows(rewritten),
                             expected)
                     finally

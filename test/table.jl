@@ -25,13 +25,8 @@ end
 # Bytes a read charges for the footer metadata of `bytes`, the first thing it decodes.
 function tableprematerialized(bytes::Vector{UInt8})
     budget = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=typemax(Int64) - 1))
-    file = Parquet.File(bytes)
-    try
-        Parquet._readfilemetadata(file, Parquet.Limits(), budget)
-        return budget.used
-    finally
-        close(file)
-    end
+    Parquet._decodefooter(Parquet.readfooter(Parquet.source(bytes)), Parquet.Limits(), budget)
+    return budget.used
 end
 
 function tabledeepstruct(depth::Int)
@@ -363,6 +358,8 @@ end
 end
 
 @testset "Table source exception identity and ownership" begin
+    # A caller's source is read (the footer with one tail read, then the column
+    # chunks) and never closed; its errors propagate unchanged.
     bytes = Parquet._encodefile((value=Int32[1],))
     failedsentinel = TableCallbackSentinel(1)
     failed = TableCallbackSource(bytes, 1, 0, 0, failedsentinel)
@@ -376,39 +373,30 @@ end
     @test failed.reads == 1
     @test failed.closes == 0
 
-    adoptedsentinel = TableCallbackSentinel(2)
-    adopted = TableCallbackSource(bytes, 4, 0, 0, adoptedsentinel)
-    adoptederror = try
-        Parquet.Table(adopted)
+    datasentinel = TableCallbackSentinel(2)
+    datafailure = TableCallbackSource(bytes, 2, 0, 0, datasentinel)
+    dataerror = try
+        Parquet.Table(datafailure)
         nothing
     catch err
         err
     end
-    @test adoptederror === adoptedsentinel
-    @test adopted.reads == 4
-    @test adopted.closes == 1
+    @test dataerror === datasentinel
+    @test datafailure.reads == 2
+    @test datafailure.closes == 0
 
     successful = TableCallbackSource(bytes, 0, 0, 0,
         TableCallbackSentinel(3))
     table = Parquet.Table(successful)
     @test Parquet.Tables.columns(table).value == Int32[1]
-    @test successful.closes == 0
+    @test successful.reads == 2
     close(table)
-    @test successful.closes == 1
+    @test successful.closes == 0
 
-    readsentinel = TableCallbackSentinel(4)
-    closesentinel = TableCallbackSentinel(5)
-    throwingclose = TableThrowingCloseSource(bytes, 4, 0, 0, readsentinel,
-        closesentinel)
-    throwingerror = try
-        Parquet.Table(throwingclose)
-        nothing
-    catch err
-        err
-    end
-    @test throwingerror === readsentinel
-    @test throwingclose.reads == 4
-    @test throwingclose.closes == 1
+    throwingclose = TableThrowingCloseSource(bytes, 2, 0, 0, TableCallbackSentinel(4),
+        TableCallbackSentinel(5))
+    @test_throws TableCallbackSentinel Parquet.Table(throwingclose)
+    @test throwingclose.closes == 0
 end
 
 @testset "fixed-width Tables schema preservation" begin
@@ -686,26 +674,23 @@ end
         scan=Tables.Scan(select=(:id => Float64,)))
     @test_throws ArgumentError Parquet.Table(bytes; scan=Tables.Scan(select=(:nope,)))
 
-    # Only the selected chunks are fetched, each in one read.
+    # A source that is not in memory: one read of its end for the footer, then the
+    # selected chunks. They lie less than 64 KiB apart here, so one read covers them
+    # all, and it starts and ends with selected chunks.
     for pageindex in (true, false)
         paged = Parquet._encodefile(source; rowgroupsize=2, pagesize=8,
             pageindex=pageindex)
         tracked = TableScanSource(paged, Tuple{Int64,Int64}[])
         table = Parquet.Table(tracked; scan=Tables.Scan(select=(:name,)))
-        try
-            @test Parquet.Tables.columns(table).name == source.name
-        finally
-            close(table)
-        end
+        @test Parquet.Tables.columns(table).name == source.name
+        @test length(tracked.reads) == 2
+        data = tracked.reads[2]
         footer = length(paged) - 8 -
             Int(Parquet._readu32le(paged, length(paged) - 7))
-        for group in wpmetadata(paged).row_groups,
-                (index, chunk) in enumerate(group.columns)
-            start, stop = Parquet._chunkrange(chunk.meta_data, Int64(footer))
-            reads = count(read -> read[1] < stop && read[1] + read[2] > start,
-                tracked.reads)
-            @test reads == (index == 2 ? 1 : 0)
-        end
+        selected = [Parquet._chunkrange(group.columns[2].meta_data, Int64(footer))
+            for group in wpmetadata(paged).row_groups]
+        @test data[1] == first(first(selected))
+        @test data[1] + data[2] == last(last(selected))
     end
     plain = Parquet._encodefile(source; rowgroupsize=2, pagesize=8, pageindex=false)
     metadata = wpmetadata(plain)

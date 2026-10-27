@@ -20,9 +20,7 @@ Parquet.write(path, source)
 
 table = Parquet.Table(path)
 columns = Tables.columntable(table)
-result = (id=collect(columns.id), label=collect(columns.label))
-close(table)
-result
+(id=collect(columns.id), label=collect(columns.label))
 ```
 
 See the [guide](@ref "Guide") for writer options, statistics, and resource limits.

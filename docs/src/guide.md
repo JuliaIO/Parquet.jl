@@ -5,19 +5,20 @@
 `Parquet.Table(path)` reads a Parquet file into columns. A table is a
 `Tables.AbstractColumns`: `table.price`, `table[:price]`, and
 `Tables.getcolumn(table, :price)` return a column, and any Tables.jl sink accepts it.
-Close the table when it is no longer needed.
+The table owns its columns: the file is closed before `Parquet.Table` returns, so it
+can be replaced or deleted while the table is in use.
 
 ```julia
-using Parquet
+using Parquet, DataFrames
 
 table = Parquet.Table("input.parquet")
-table.price          # a column
-close(table)
+table.price                                   # a column
+df = Parquet.read("input.parquet", DataFrame) # columns handed over without a copy
 ```
 
 Column chunks decode on `Threads.nthreads()` tasks; pass `ntasks=1` to read on the
-calling task. Use `Parquet.File(path)` when you need file metadata without reading
-column data.
+calling task. `DataAPI.metadata(table)` gives the file's key-value metadata and
+`Parquet.metadata(table)` the raw footer metadata.
 
 ### Column types
 
@@ -37,19 +38,42 @@ column data.
 | JSON, BSON | `Parquet.JSONValue`, `Parquet.BSONValue` |
 
 An optional column's elements are `Union{Missing,T}`. A local `Durations.Timestamp`
-compares with `Dates.DateTime`, so a scan filter such as
-`Tables.colcmp(>=, Tables.col(:pickup), DateTime(2025, 1, 1))` works on it; compare a
+compares with `Dates.DateTime`, so a filter such as
+`Parquet.colcmp(>=, Parquet.col(:pickup), DateTime(2025, 1, 1))` works on it; compare a
 UTC timestamp with a `Durations.ZonedTimestamp`.
 
-### Read some columns
+### Read some columns and rows
 
-Pass a `Tables.Scan` request to read only the columns it needs. The column chunks of
-every other column are never read, so columns this package cannot decode can be
-skipped too. The filter, row bounds, and renames apply after reading.
+`select` and `drop` choose columns, `filter` keeps rows where a predicate is `true`,
+and `limit` caps the row count. Only the columns a read selects or filters on are
+decoded; the column chunks of every other column are never read, so columns this
+package cannot decode can be skipped too. The filter and limit apply after reading.
+
+```julia
+table = Parquet.Table("input.parquet"; select=[:id, :price],
+    filter=(Parquet.col(:qty) > 0) & !Parquet.isnull(Parquet.col(:price)), limit=1000)
+```
+
+`Parquet.col`, `Parquet.colcmp`, `Parquet.colin`, and `Parquet.isnull` are the
+`Tables.col` family. For renames or an offset, pass a `Tables.Scan` as `scan` instead
+of the keywords above:
 
 ```julia
 table = Parquet.Table("input.parquet";
-    scan=Tables.Scan(select=(:id, :price => :amount), filter=Tables.col(:qty) > 0))
+    scan=Tables.Scan(select=(:id, :price => :amount), offset=100, limit=10))
+```
+
+### Read a file one row group at a time
+
+`Parquet.File(path; keywords...)` opens a file without reading column data. It takes
+the same keywords as `Parquet.Table`. `Tables.schema(file)` gives the columns a read
+returns; iterating the file yields one `Parquet.Table` per row group, so a file is its
+own `Tables.partitions`, and `file[i]` reads row group `i`. Close the file when done.
+
+```julia
+file = Parquet.File("input.parquet"; select=[:id, :price])
+total = sum(sum(part.price) for part in file)
+close(file)
 ```
 
 ## Write a table
@@ -122,18 +146,14 @@ attrs = [Dict("a" => Int32(1)), Dict{String,Int32}(), Dict("b" => Int32(2))]
 io = IOBuffer()
 Parquet.write(io, (; profile, samples, attrs); codec=:zstd, pageversion=:v2)
 table = Parquet.Table(take!(io))
-try
-    columns = Tables.columntable(table)
-    (
-        name=String(columns.profile[2]["name"]),
-        null_list=ismissing(columns.samples[1]),
-        empty_list=isempty(columns.samples[2]),
-        values=collect(columns.samples[3]),
-        map=Dict(columns.attrs[3]),
-    )
-finally
-    close(table)
-end
+columns = Tables.columntable(table)
+(
+    name=String(columns.profile[2]["name"]),
+    null_list=ismissing(columns.samples[1]),
+    empty_list=isempty(columns.samples[2]),
+    values=collect(columns.samples[3]),
+    map=Dict(columns.attrs[3]),
+)
 ```
 
 Nested read values expose indexing and iteration; their concrete container types may
@@ -238,11 +258,26 @@ file that the reader declines. Ordinary Parquet nesting is far below these bound
 
 ## Sources and file lifetime
 
-`Parquet.File` and `Parquet.Table` accept a path to one file, a byte vector, or an
-`IO`. A directory path throws an `ArgumentError`. A path is memory mapped. `close` releases the file descriptor, but the mapping itself lives until
-the garbage collector finalizes it. On Windows the file may therefore stay locked after
-`close`. If another process truncates a mapped file while it is open, reads of the
-removed region terminate the process, and no bounds check can prevent that.
+`Parquet.File` and `Parquet.Table` accept a path to one file, a byte vector, an `IO`, a
+`Parquet.AbstractSource`, or (with CloudStore.jl loaded) a `CloudStore.Object`. A
+directory path throws an `ArgumentError`. A path is memory mapped while it is read:
+`Parquet.Table` unmaps and closes it before returning, and `Parquet.File` keeps it
+mapped until `close(file)`. If another process truncates a mapped file while it is
+open, reads of the removed region terminate the process, and no bounds check can
+prevent that.
+
+A `Parquet.AbstractSource` implements `Parquet.sourcelength` and `Parquet.readrange`,
+and `Parquet.concurrentreads` when ranges may be read on several tasks at once. A read
+takes the footer from one read of the source's last 64 KiB, then reads the column
+chunks it decodes, merging chunks less than 64 KiB apart into one range. Parquet never
+closes a source it was given.
+
+```julia
+using CloudStore, Parquet
+
+object = CloudStore.Object(bucket, "data/part-0.parquet"; credentials)
+table = Parquet.Table(object; select=[:id, :price])
+```
 
 When set, `max_materialized_bytes` covers the bytes this package allocates while
 reading. A byte vector is borrowed and a mapped path is not copied, so neither is

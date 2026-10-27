@@ -428,9 +428,10 @@ end
 
 function oireject(bytes::Vector{UInt8}, type::Type{<:Exception}=Parquet.FormatError)
     @test_throws type Parquet.Table(bytes)
+    # Parquet never closes a source it was given.
     source = OITrackedSource(copy(bytes), false)
     @test_throws type Parquet.Table(source)
-    @test source.closed
+    @test !source.closed
     return
 end
 

@@ -127,44 +127,52 @@ end
 
 
 @testset "footer exact source reads" begin
+    # A source that is not in memory gives its footer in one read of its last 64 KiB
+    # (the whole of a small file, whose leading magic is then checked too), and a second
+    # read only for a footer that does not fit.
     input = parquetbytes(UInt8[0x01, 0x02, 0x03])
     source = FooterProbeSource(input; mode=:length_changing)
     Parquet.readfooter(source)
     @test source.lengthcalls == 1
-    @test source.reads == [(Int64(0), Int64(4)),
-        (Int64(length(input) - 8), Int64(8)), (Int64(4), Int64(3))]
+    @test source.reads == [(Int64(0), Int64(length(input)))]
+
+    large = parquetbytes(fill(UInt8(0x07), 70_000))
+    largesource = FooterProbeSource(large)
+    footer = Parquet.readfooter(largesource)
+    @test footer.length == 70_000
+    @test collect(footer.bytes) == fill(UInt8(0x07), 70_000)
+    @test largesource.reads == [(Int64(length(large) - 65_536), Int64(65_536)),
+        (Int64(4), Int64(70_000))]
 
     invalid = copy(input)
     invalid[1] = 0x00
     invalidsource = FooterProbeSource(invalid)
     @test_throws Parquet.FormatError Parquet.File(invalidsource)
     @test invalidsource.lengthcalls == 1
-    @test invalidsource.reads == [(Int64(0), Int64(4))]
+    @test invalidsource.reads == [(Int64(0), Int64(length(invalid)))]
     @test invalidsource.closes == 0
 
-    for mode in (:short, :long, :wrong_type, :wrong_axes)
-        for faultread in 1:3
-            malformed = FooterProbeSource(input; mode=mode,
-                faultread=faultread)
+    for (bytes, reads) in ((input, 1), (large, 2))
+        for mode in (:short, :long, :wrong_type, :wrong_axes), faultread in 1:reads
+            malformed = FooterProbeSource(bytes; mode=mode, faultread=faultread)
             @test_throws ArgumentError Parquet.File(malformed)
             @test length(malformed.reads) == faultread
             @test malformed.closes == 0
         end
-    end
-
-    for faultread in 1:3
-        sentinel = FooterCallbackSentinel(faultread)
-        throwing = FooterProbeSource(input; mode=:throw,
-            faultread=faultread, sentinel=sentinel)
-        error = try
-            Parquet.File(throwing)
-            nothing
-        catch err
-            err
+        for faultread in 1:reads
+            sentinel = FooterCallbackSentinel(faultread)
+            throwing = FooterProbeSource(bytes; mode=:throw, faultread=faultread,
+                sentinel=sentinel)
+            error = try
+                Parquet.File(throwing)
+                nothing
+            catch err
+                err
+            end
+            @test error === sentinel
+            @test length(throwing.reads) == faultread
+            @test throwing.closes == 0
         end
-        @test error === sentinel
-        @test length(throwing.reads) == faultread
-        @test throwing.closes == 0
     end
 
     for mode in (:length_type, :length_negative)
@@ -194,12 +202,13 @@ end
     @test_throws Parquet.FormatError Parquet.File(failed)
     @test failed.closes == 0
 
-    adopted = FooterProbeSource(input)
-    file = Parquet.File(adopted)
-    @test adopted.closes == 0
+    # Parquet never closes a source it was given, even when the file is closed.
+    given = FooterProbeSource(input)
+    file = Parquet.File(given)
+    @test given.closes == 0
     close(file)
     close(file)
-    @test adopted.closes == 1
+    @test given.closes == 0
 
     # A source whose footer does not decode is not adopted.
     tablefailure = FooterProbeSource(parquetbytes(UInt8[0x01, 0x02, 0x03]))
