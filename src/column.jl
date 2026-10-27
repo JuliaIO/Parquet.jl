@@ -319,6 +319,7 @@ end
 
 # Scratch space one task reuses for every page it decodes. `dense` and `dictionary` hold
 # one vector per value type: an optional page's present values and a chunk's dictionary.
+# `bits` and `offsets` hold the nested-path arrays a leaf checks but does not keep.
 mutable struct _PageBuffers
     page::Vector{UInt8}
     repetition::Vector{UInt16}
@@ -326,11 +327,13 @@ mutable struct _PageBuffers
     indices::Vector{UInt32}
     dense::IdDict{Type,Vector}
     dictionary::IdDict{Type,Vector}
+    bits::Vector{BitVector}
+    offsets::Vector{Vector{Int}}
 end
 
 function _PageBuffers()
     return _PageBuffers(UInt8[], UInt16[], UInt16[], UInt32[], IdDict{Type,Vector}(),
-        IdDict{Type,Vector}())
+        IdDict{Type,Vector}(), BitVector[], Vector{Int}[])
 end
 
 function _scratch(vectors::IdDict{Type,Vector}, ::Type{L}) where {L}

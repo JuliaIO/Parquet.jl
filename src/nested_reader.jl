@@ -32,11 +32,13 @@ const _ITEM_KEY = 0x03        # a map key declared optional: it must be present
 
 # What one leaf builds and checks. The items of space j are
 # `first[j + 1]:(first[j + 2] - 1)`; a slot of space j >= 1 exists where the definition
-# level reaches `entry[j]`.
+# level reaches `entry[j]`, and `repeat[r + 1]` is the level an entry repeating at r
+# needs (`entry[r]`, 0 for r = 0).
 struct _LeafPath
     leaf::Int
     depth::Int
     entry::Vector{UInt16}
+    repeat::Vector{UInt16}
     first::Vector{Int}
     kind::Vector{UInt8}
     space::Vector{Int}
@@ -99,7 +101,7 @@ function _leafpath(plan::_NestedLeafPlan, entries::Vector{UInt16},
         end
         starts[space + 1] = item
     end
-    return _LeafPath(leaf, depth, copy(entries), starts,
+    return _LeafPath(leaf, depth, copy(entries), UInt16[0x0000; entries], starts,
         UInt8[entry[2] for entry in stack], Int[entry[1] for entry in stack],
         UInt16[entry[3] for entry in stack], Int[entry[4] for entry in stack],
         Bool[entry[5] == leaf for entry in stack], Bool[entry[6] for entry in stack],
@@ -174,8 +176,8 @@ function _fieldassembly(plan::_NestedPlan, limits::Limits, options::_ReadOptions
 end
 
 # One leaf's decode state: its values per slot of its space (`null` where absent), and
-# for each path item the slots seen, a hash of what was seen, and, where the leaf stores
-# the item, its validity bits or offsets.
+# for each path item its validity bits or offsets (task scratch for items the leaf does
+# not own) and, once finished, a hash of them.
 mutable struct _LeafSink{O,L}
     path::_LeafPath
     output::Vector{O}
@@ -188,14 +190,40 @@ mutable struct _LeafSink{O,L}
     offsets::Vector{Vector{Int}}
 end
 
-function _LeafSink(path::_LeafPath, output::Vector{O}, dense::Vector{L}, null) where {O,L}
+# A sink for a chunk of `rows` rows and at most `entries` entries (so at most that many
+# slots in any space below the rows), with room reserved for the arrays it keeps and
+# scratch from `buffers` for the others.
+function _LeafSink(path::_LeafPath, output::Vector{O}, dense::Vector{L}, null, rows::Int,
+        entries::Int, buffers::_PageBuffers) where {O,L}
     items = length(path.kind)
-    return _LeafSink{O,L}(path, output, dense, null, 0x0000, zeros(Int, path.depth + 1),
-        fill(0xcbf29ce484222325, items), [BitVector() for _ in 1:items],
-        [Int[] for _ in 1:items])
+    bits = Vector{BitVector}(undef, items)
+    offsets = Vector{Vector{Int}}(undef, items)
+    while length(buffers.bits) < items
+        push!(buffers.bits, BitVector())
+        push!(buffers.offsets, Int[])
+    end
+    for item in 1:items
+        owned = path.owned[item]
+        bits[item] = owned ? BitVector() : empty!(buffers.bits[item])
+        offsets[item] = owned ? Int[] : empty!(buffers.offsets[item])
+        owned || continue
+        capacity = (path.space[item] == 0 ? rows : entries) + 1
+        path.kind[item] == _ITEM_VALIDITY && sizehint!(bits[item], capacity)
+        path.kind[item] == _ITEM_OFFSETS && sizehint!(offsets[item], capacity)
+    end
+    return _LeafSink{O,L}(path, sizehint!(output, entries), dense, null, 0x0000,
+        zeros(Int, path.depth + 1), fill(0xcbf29ce484222325, items), bits, offsets)
 end
 
 @inline _mixhash(hash::UInt64, value::UInt64) = (hash ⊻ value) * 0x00000100000001b3
+
+function _hashwords(words::Vector{<:Union{UInt64,Int}})
+    hash = 0xcbf29ce484222325
+    @inbounds for word in words
+        hash = _mixhash(hash, word % UInt64)
+    end
+    return hash
+end
 
 @noinline function _nestedrepeaterror(path::_LeafPath, repetition::Integer)
     throw(FormatError("leaf $(path.leaf) repeats at level $repetition inside a null, " *
@@ -209,10 +237,10 @@ end
     "leaf $(path.leaf) has a null map key"))
 
 # Applies `count` entries (levels in `repetitions` and `definitions`, the `present`
-# values in `dense`) to the sink's slots: one pass over the levels per path item and one
-# for the leaf's values.
+# values in `source`) to the sink's slots: one pass over the levels per path node and
+# one for the leaf's values.
 function _assembleentries!(sink::_LeafSink, repetitions::Vector{UInt16},
-        definitions::Vector{UInt16}, count::Int, present::Int, dense::AbstractVector)
+        definitions::Vector{UInt16}, count::Int, present::Int, source)
     path = sink.path
     depth = path.depth
     slots = sink.slots
@@ -221,22 +249,31 @@ function _assembleentries!(sink::_LeafSink, repetitions::Vector{UInt16},
         count > 0 && (sink.previous = definitions[count])
     end
     ends = copy(slots)
-    for item in eachindex(path.kind)
+    item = 1
+    while item <= length(path.kind)
         kind = path.kind[item]
         space = path.space[item]
-        if kind == _ITEM_VALIDITY
-            path.owned[item] && resize!(sink.bits[item], slots[space + 1] + count)
-            ends[space + 1] = _validitypass!(sink, item, repetitions, definitions, count)
-        elseif kind == _ITEM_OFFSETS
-            path.owned[item] && _growto!(sink.offsets[item], slots[space + 1] + count + 1)
-            ends[space + 1], ends[space + 2] = _offsetspass!(sink, item, repetitions,
-                definitions, count)
-        else
+        if kind == _ITEM_KEY
             _keypass(path, item, repetitions, definitions, count)
+            item += 1
+            continue
         end
+        # A nullable list or map's validity and offsets take one pass.
+        validity = kind == _ITEM_VALIDITY ? item : 0
+        offsets = kind == _ITEM_OFFSETS ? item : 0
+        if validity > 0 && item < length(path.kind) &&
+                path.kind[item + 1] == _ITEM_OFFSETS && path.node[item + 1] == path.node[item]
+            offsets = item + 1
+        end
+        validity > 0 && resize!(sink.bits[validity], slots[space + 1] + count)
+        offsets > 0 && _growto!(sink.offsets[offsets], slots[space + 1] + count + 1)
+        ends[space + 1], inner = _nodepass!(sink, validity, offsets, repetitions,
+            definitions, count)
+        offsets > 0 && (ends[space + 2] = inner)
+        item = max(validity, offsets) + 1
     end
     _growto!(sink.output, slots[depth + 1] + count)
-    ends[depth + 1], next = _leafpass!(sink, definitions, count, dense)
+    ends[depth + 1], next = _leafpass!(sink, definitions, count, source)
     next == present || throw(FormatError(
         "leaf $(path.leaf) has $present values for $next present entries"))
     copyto!(slots, ends)
@@ -258,91 +295,66 @@ function _checkrepetitions(path::_LeafPath, repetitions::Vector{UInt16},
         definitions::Vector{UInt16}, count::Int, rows::Int, previous::UInt16)
     count > 0 && iszero(rows) && !iszero(repetitions[1]) &&
         _nestedfirsterror(path, repetitions[1])
-    entry = path.entry
+    levels = path.repeat
     bad = false
     @inbounds for index in 1:count
-        repetition = repetitions[index]
         definition = definitions[index]
-        if repetition > 0
-            level = entry[repetition]
-            bad |= (definition < level) | (previous < level)
-        end
+        bad |= min(definition, previous) < levels[repetitions[index] + 1]
         previous = definition
     end
     bad || return
-    previous = definitions[1]
     for index in 2:count
         repetition = repetitions[index]
-        repetition > 0 && min(definitions[index], previous) < entry[repetition] &&
+        min(definitions[index], definitions[index - 1]) < levels[repetition + 1] &&
             _nestedrepeaterror(path, repetition)
-        previous = definitions[index]
     end
     _nestedrepeaterror(path, repetitions[1])
 end
 
-function _validitypass!(sink::_LeafSink, item::Int, repetitions::Vector{UInt16},
-        definitions::Vector{UInt16}, count::Int)
+# One node's slots in a page: its validity bits (item `validity`, or 0) and the offsets of
+# its entries (item `offsets`, or 0). Returns the slot counts of the node's space and, for
+# offsets, of the space of its entries.
+function _nodepass!(sink::_LeafSink, validity::Int, offsets::Int,
+        repetitions::Vector{UInt16}, definitions::Vector{UInt16}, count::Int)
     path = sink.path
-    space = path.space[item]
-    entrylevel = _entrylevel(path, space)
-    level = path.level[item]
-    slot = sink.slots[space + 1]
-    if path.owned[item]
-        chunks = sink.bits[item].chunks
-        @inbounds for index in 1:count
-            definition = definitions[index]
-            _opens(repetitions[index], definition, space, entrylevel) || continue
-            slot += 1
-            Base.unsafe_bitsetindex!(chunks, definition >= level, slot)
-        end
-        path.shared[item] || return slot
-        slot = sink.slots[space + 1]
-    end
-    hash = sink.hashes[item]
-    @inbounds for index in 1:count
-        definition = definitions[index]
-        _opens(repetitions[index], definition, space, entrylevel) || continue
-        slot += 1
-        hash = _mixhash(hash, UInt64(definition >= level))
-    end
-    sink.hashes[item] = hash
-    return slot
+    space = path.space[validity > 0 ? validity : offsets]
+    levels = (_entrylevel(path, space), validity > 0 ? path.level[validity] : 0x0000,
+        offsets > 0 ? path.entry[space + 1] : 0x0000)
+    return _nodestore!(validity > 0 ? sink.bits[validity].chunks : UInt64[],
+        offsets > 0 ? sink.offsets[offsets] : Int[], Val(validity > 0), Val(offsets > 0),
+        repetitions, definitions, count, space, levels, sink.slots[space + 1],
+        offsets > 0 ? sink.slots[space + 2] : 0)
 end
 
-function _offsetspass!(sink::_LeafSink, item::Int, repetitions::Vector{UInt16},
-        definitions::Vector{UInt16}, count::Int)
-    path = sink.path
-    space = path.space[item]
-    entrylevel = _entrylevel(path, space)
-    innerlevel = path.entry[space + 1]
-    slot = sink.slots[space + 1]
-    inner = sink.slots[space + 2]
-    if path.owned[item]
-        offsets = sink.offsets[item]
-        @inbounds for index in 1:count
-            repetition = repetitions[index]
-            definition = definitions[index]
-            if _opens(repetition, definition, space, entrylevel)
-                slot += 1
-                offsets[slot] = inner
-            end
-            inner += _opens(repetition, definition, space + 1, innerlevel)
-        end
-        path.shared[item] || return slot, inner
-        slot = sink.slots[space + 1]
-        inner = sink.slots[space + 2]
-    end
-    hash = sink.hashes[item]
+function _nodestore!(chunks::Vector{UInt64}, offsets::Vector{Int}, ::Val{V}, ::Val{O},
+        repetitions::Vector{UInt16}, definitions::Vector{UInt16}, count::Int,
+        space::Int, (entrylevel, level, innerlevel)::NTuple{3,UInt16}, slot::Int,
+        inner::Int) where {V,O}
+    # Bits accumulate in `word`, the chunk holding the next slot's bit.
+    shift = slot & 63
+    chunk = (slot >> 6) + 1
+    word = V && shift > 0 ? (@inbounds chunks[chunk]) & ((UInt64(1) << shift) - 1) :
+        UInt64(0)
     @inbounds for index in 1:count
         repetition = repetitions[index]
         definition = definitions[index]
         if _opens(repetition, definition, space, entrylevel)
             slot += 1
-            hash = _mixhash(hash, UInt64(inner))
+            if V
+                word |= UInt64(definition >= level) << shift
+                shift += 1
+                if shift == 64
+                    chunks[chunk] = word
+                    chunk += 1
+                    shift = 0
+                    word = UInt64(0)
+                end
+            end
+            O && (offsets[slot] = inner)
         end
-        inner += _opens(repetition, definition, space + 1, innerlevel)
+        O && (inner += _opens(repetition, definition, space + 1, innerlevel))
     end
-    sink.hashes[item] = hash
+    V && shift > 0 && (@inbounds chunks[chunk] = word)
     return slot, inner
 end
 
@@ -360,8 +372,7 @@ function _keypass(path::_LeafPath, item::Int, repetitions::Vector{UInt16},
 end
 
 # The leaf's values, one per slot of its space (every entry repeats at most at it).
-function _leafpass!(sink::_LeafSink, definitions::Vector{UInt16}, count::Int,
-        dense::AbstractVector)
+function _leafpass!(sink::_LeafSink, definitions::Vector{UInt16}, count::Int, source)
     path = sink.path
     level = _entrylevel(path, path.depth)
     maxdefinition = path.maxdefinition
@@ -375,13 +386,41 @@ function _leafpass!(sink::_LeafSink, definitions::Vector{UInt16}, count::Int,
         slot += 1
         if definition == maxdefinition
             next += 1
-            output[slot] = dense[next]
+            output[slot] = _value(source, next)
         else
             path.keyed && _nestedkeyerror(path)
             output[slot] = null
         end
     end
     return slot, next
+end
+
+# A page's present values: decoded (`_DenseValues`), PLAIN fixed-width values in the
+# page, or dictionary entries by the page's indices.
+struct _DenseValues{V<:AbstractVector}
+    values::V
+end
+
+@inline _value(source::_DenseValues, next::Int) = @inbounds source.values[next]
+
+struct _PlainValues{P,C}
+    pointer::Ptr{P}
+    convert::C
+end
+
+@inline _value(source::_PlainValues, next::Int) =
+    _convertvalue(source.convert, ltoh(unsafe_load(source.pointer, next)))
+
+struct _DictionaryValues{L}
+    indices::Vector{UInt32}
+    dictionary::Vector{L}
+end
+
+@inline function _value(source::_DictionaryValues, next::Int)
+    raw = @inbounds source.indices[next]
+    entries = UInt32(length(source.dictionary))
+    raw < entries || _dictionaryindexerror(raw, entries)
+    return @inbounds _dictionarycopy(source.dictionary[raw + 1])
 end
 
 # The vectors of a decoded leaf chunk, closed at `rows` rows.
@@ -395,15 +434,13 @@ function _finishleaf!(sink::_LeafSink, rows::Integer)
     for item in eachindex(path.kind)
         slot = counts[item]
         if path.kind[item] == _ITEM_VALIDITY
-            path.owned[item] && resize!(sink.bits[item], slot)
+            bits = resize!(sink.bits[item], slot)
+            path.shared[item] && (sink.hashes[item] = _hashwords(bits.chunks))
         elseif path.kind[item] == _ITEM_OFFSETS
-            stop = slots[path.space[item] + 2]
-            sink.hashes[item] = _mixhash(sink.hashes[item], UInt64(stop))
-            if path.owned[item]
-                offsets = _growto!(sink.offsets[item], slot + 1)
-                offsets[slot + 1] = stop
-                resize!(offsets, slot + 1)
-            end
+            offsets = _growto!(sink.offsets[item], slot + 1)
+            offsets[slot + 1] = slots[path.space[item] + 2]
+            resize!(offsets, slot + 1)
+            path.shared[item] && (sink.hashes[item] = _hashwords(offsets))
         end
     end
     return counts
@@ -419,21 +456,28 @@ struct _LeafPiece
     offsets::Vector{Vector{Int}}
 end
 
-_leafpiece(sink::_LeafSink, values::AbstractVector, counts::Vector{Int}) =
-    _LeafPiece(values, counts, sink.hashes, sink.bits, sink.offsets)
+# The piece keeps only the arrays its leaf owns (the others are task scratch).
+function _leafpiece(sink::_LeafSink, values::AbstractVector, counts::Vector{Int})
+    owned = sink.path.owned
+    return _LeafPiece(values, counts, sink.hashes,
+        BitVector[owned[item] ? sink.bits[item] : BitVector() for item in eachindex(owned)],
+        Vector{Int}[owned[item] ? sink.offsets[item] : Int[] for item in eachindex(owned)])
+end
 
-# The sink of a leaf whose values convert to `L`: string payloads are filled with
-# missing or empty payloads, other values with `missing` or a placeholder.
-function _leafsink(path::_LeafPath, ::Type{L}, dense::Vector{L}, capacity::Int) where {L}
+# The sink of a leaf whose values convert to `L`, for a chunk of `rows` rows and at most
+# `entries` entries: string payloads are filled with missing or empty payloads, other
+# values with `missing` or a placeholder.
+function _leafsink(path::_LeafPath, ::Type{L}, dense::Vector{L}, rows::Int,
+        entries::Int, buffers::_PageBuffers) where {L}
     if L === DataStrings.StringPayload
         null = path.nullable ? DataStrings.PAYLOAD_MISSING :
             DataStrings.StringPayload(UInt64(0), UInt64(0))
-        return _LeafSink(path, sizehint!(DataStrings.StringPayload[], capacity), dense,
-            null)
+        return _LeafSink(path, DataStrings.StringPayload[], dense, null, rows, entries,
+            buffers)
     end
-    path.nullable && return _LeafSink(path, sizehint!(Union{Missing,L}[], capacity),
-        dense, missing)
-    return _LeafSink(path, sizehint!(L[], capacity), dense, _filler(L))
+    path.nullable && return _LeafSink(path, Union{Missing,L}[], dense, missing, rows,
+        entries, buffers)
+    return _LeafSink(path, L[], dense, _filler(L), rows, entries, buffers)
 end
 
 # The vector of a leaf's values: string payloads wrap their page buffers.
@@ -625,9 +669,9 @@ function _streampiece(path::_LeafPath, leaf::_NestedLeafPlan, stream::LeafStream
     dense = L[_convertvalue(convert, value) for value in stream.values]
     count = length(stream.repetition)
     _chargearray!(budget, L, 2 * count)
-    sink = _leafsink(path, L, dense, count)
+    sink = _leafsink(path, L, dense, rows, count, _PageBuffers())
     _assembleentries!(sink, stream.repetition, stream.definition, count, length(dense),
-        dense)
+        _DenseValues(dense))
     counts = _finishleaf!(sink, rows)
     return _leafpiece(sink, _leafvalues(sink, leaf.source, convert), counts)
 end
@@ -664,11 +708,44 @@ _assemblenested(plan::_NestedSchemaPlan, streams::AbstractVector, rows::Integer,
 function _sinkpage!(decode, sink::_LeafSink, count::Int, present::Int,
         hasrepetition::Bool, hasdefinition::Bool, buffers::_PageBuffers)
     position = decode(sink.dense, 0)
+    _assemblepage!(sink, count, present, hasrepetition, hasdefinition, buffers,
+        _DenseValues(sink.dense))
+    return position
+end
+
+function _assemblepage!(sink::_LeafSink, count::Int, present::Int, hasrepetition::Bool,
+        hasdefinition::Bool, buffers::_PageBuffers, source)
     repetitions = buffers.repetition
     definitions = buffers.definition
     hasrepetition || fill!(view(_growto!(repetitions, count), 1:count), 0x0000)
     hasdefinition || fill!(view(_growto!(definitions, count), 1:count),
         sink.path.maxdefinition)
-    _assembleentries!(sink, repetitions, definitions, count, present, sink.dense)
-    return position
+    _assembleentries!(sink, repetitions, definitions, count, present, source)
+    return
+end
+
+# PLAIN fixed-width and dictionary pages place their values straight into the leaf's
+# slots. A page reaching here decoded both level kinds its leaf has.
+function _scatterpage!(sink::_LeafSink{O,L}, count::Int, present::Int, ::Type{P},
+        convert::C, encoding::Metadata.Encoding.T, bytes::_ByteView, position::Int,
+        stop::Int, dictionary::Vector{L}, hasdictionary::Bool,
+        buffers::_PageBuffers) where {O,L,P,C}
+    hasrepetition = sink.path.depth > 0
+    hasdefinition = sink.path.maxdefinition > 0
+    if encoding == Metadata.Encoding.PLAIN && P <: Union{Int32,Int64,Float32,Float64}
+        total = Base.checked_mul(present, sizeof(P))
+        _requirebytes(bytes, position, total)
+        GC.@preserve bytes _assemblepage!(sink, count, present, hasrepetition,
+            hasdefinition, buffers, _PlainValues{P,C}(Ptr{P}(pointer(bytes, position)),
+                convert))
+        return position + total
+    elseif _isdictionaryencoding(encoding)
+        hasdictionary || throw(FormatError(
+            "dictionary-encoded data page has no dictionary page"))
+        position = _dictionaryindices!(buffers.indices, present, bytes, position, stop)
+        _assemblepage!(sink, count, present, hasrepetition, hasdefinition, buffers,
+            _DictionaryValues(buffers.indices, dictionary))
+        return position
+    end
+    return nothing
 end

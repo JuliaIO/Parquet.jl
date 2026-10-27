@@ -44,14 +44,16 @@ function _readleafchunk(file::File, metadata::Metadata.FileMetaData,
     md = _chunkmetadata(group.columns[Int(node.column_index)], node)
     start, stop = _leafchunkrange(file.source, md, file.footer.offset, limits)
     convert, L = _valueconverter(node, limits, options)
-    capacity = _claimcapacity(md.num_values, stop - start)
-    sink = _leafsink(path, L, _scratch(buffers.dense, L), capacity)
+    entries = _claimcapacity(md.num_values, stop - start)
+    sink = _leafsink(path, L, _scratch(buffers.dense, L),
+        _claimcapacity(group.num_rows, stop - start), entries, buffers)
     _readchunk!(sink, _physicaleltype(node.element.type_), L, convert, file.source, md,
         node, start, stop, limits, budget, buffers)
     counts = _finishleaf!(sink, group.num_rows)
-    _charge!(budget, sizeof(sink.output) + sum(sizeof, sink.offsets; init=0) +
-        sum(bits -> sizeof(bits.chunks), sink.bits; init=0))
-    return _leafpiece(sink, _leafvalues(sink, node, convert), counts)
+    piece = _leafpiece(sink, _leafvalues(sink, node, convert), counts)
+    _charge!(budget, sizeof(sink.output) + sum(sizeof, piece.offsets; init=0) +
+        sum(bits -> sizeof(bits.chunks), piece.bits; init=0))
+    return piece
 end
 
 # An empty column of `node`'s rows.
