@@ -631,28 +631,32 @@ function _writetable!(writer::Writer, table, source)
     fieldcount = length(schema.fields)
     pending = _ChunkRecord[]
     groupstart = Ref(Int64(0))
+    jobs = _encodejobs(schema, rows, size)
     work = function (job)
-        group, fieldindex = divrem(job - 1, fieldcount) .+ 1
+        group, fields = jobs[job]
         first = (group - 1) * size + 1
         range = first:min(rows, group * size)
-        field = schema.fields[fieldindex]
-        try
-            return _encodefield(schema, field, bindings[fieldindex], range, options)
-        catch err
-            throw(_encodefielderror(field, err))
+        return map(fields) do fieldindex
+            field = schema.fields[fieldindex]
+            try
+                return _encodefield(schema, field, bindings[fieldindex], range, options)
+            catch err
+                throw(_encodefielderror(field, err))
+            end
         end
     end
-    consume = function (job, chunks::Vector{_EncodedChunk})
-        group, fieldindex = divrem(job - 1, fieldcount) .+ 1
-        _writemagic!(writer)
-        fieldindex == 1 && (groupstart[] = writer.offset)
-        field = schema.fields[fieldindex]
-        leaves = field isa _FlatField ? (field.leaf:field.leaf) : field.leaves
-        for (leafindex, chunk) in zip(leaves, chunks)
-            push!(pending, _writechunk!(writer, schema.leaves[leafindex], chunk,
-                field.name))
-        end
-        if fieldindex == fieldcount
+    consume = function (job, results::Vector{Vector{_EncodedChunk}})
+        group, fields = jobs[job]
+        for (fieldindex, chunks) in zip(fields, results)
+            _writemagic!(writer)
+            fieldindex == 1 && (groupstart[] = writer.offset)
+            field = schema.fields[fieldindex]
+            leaves = field isa _FlatField ? (field.leaf:field.leaf) : field.leaves
+            for (leafindex, chunk) in zip(leaves, chunks)
+                push!(pending, _writechunk!(writer, schema.leaves[leafindex], chunk,
+                    field.name))
+            end
+            fieldindex == fieldcount || continue
             _writeblooms!(writer, pending)
             grouprows = min(rows, group * size) - (group - 1) * size
             uncompressed = sum(record.meta.total_uncompressed_size for record in pending)
@@ -664,8 +668,33 @@ function _writetable!(writer::Writer, table, source)
         end
         return
     end
-    _runordered(work, consume, groups * fieldcount, options.ntasks)
+    _runordered(work, consume, length(jobs), options.ntasks)
     return
+end
+
+# A job encodes a run of consecutive fields of one row group: a large field alone, small
+# ones together until they hold _JOB_VALUES leaf values, so a table of many short columns
+# does not pay a task handoff per column.
+const _JOB_VALUES = 1 << 20
+
+function _encodejobs(schema::_WriteSchema, rows::Int, size::Int)
+    jobs = Tuple{Int,UnitRange{Int}}[]
+    fieldcount = length(schema.fields)
+    for group in 1:cld(rows, size)
+        grouprows = min(rows, group * size) - (group - 1) * size
+        start = 1
+        values = 0
+        for fieldindex in 1:fieldcount
+            field = schema.fields[fieldindex]
+            values += grouprows * (field isa _FlatField ? 1 : length(field.leaves))
+            if values >= _JOB_VALUES || fieldindex == fieldcount
+                push!(jobs, (group, start:fieldindex))
+                start = fieldindex + 1
+                values = 0
+            end
+        end
+    end
+    return jobs
 end
 
 @noinline function _bindmismatch(schema::_WriteSchema, columns)
