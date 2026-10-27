@@ -214,10 +214,13 @@ end
 _structrow(::Type{StructValue}, names, children, index::Int) =
     StructValue(names, children, index)
 
-@inline function _structrow(::Type{R}, names, children::Vector{AbstractVector},
+# Generated so each field reads through its own type (an `ntuple` closure that is not
+# inlined looks field types up at run time, allocating per row).
+@generated function _structrow(::Type{R}, names, children::Vector{AbstractVector},
         index::Int) where {R<:NamedTuple}
-    return R(ntuple(field -> (@inbounds _childvalue(fieldtype(R, field), children[field],
-        index)), Val(fieldcount(R))))
+    fields = [:(@inbounds _childvalue($(fieldtype(R, field)), children[$field], index))
+        for field in 1:fieldcount(R)]
+    return :(R(($(fields...),)))
 end
 
 # Converting plain values to rows (as `push!` on a column of rows does) copies them into

@@ -37,6 +37,11 @@ end
     @test column[3] === missing
     firsta(rows) = coalesce(rows[1], (a=Int32(0), b=missing)).a
     @test (@inferred firsta(column)) === Int32(1)
+    # Struct rows are built without allocating.
+    many = Parquet.StructVector(["a", "b"], (collect(Int32, 1:1000), collect(1.0:1000.0)))
+    sumrows(rows) = sum(row -> row.a + row.b, rows)
+    sumrows(many)
+    @test @allocated(sumrows(many)) < 1000
 
     nested = Parquet.StructVector(["s"], (column,))
     @test nested[1].s.a === Int32(1)
