@@ -602,14 +602,34 @@ function _validatelevels(levels::Vector{UInt16}, count::Int, maxlevel::Int, name
     return atmaximum
 end
 
+# Whether the hybrid stream `bytes[start:(stop - 1)]` of `count > 0` levels is one valid
+# RLE run of `value` covering them all (as `_decodehybrid!` would read it).
+function _onerun(bytes::_ByteView, start::Int, stop::Int, count::Int, bitwidth::Int,
+        value::Int)
+    count > 0 && start < stop || return false
+    header, position = _readhybridvarint(bytes, start)
+    iseven(header) && count <= header >> 1 <= typemax(Int32) || return false
+    width = cld(bitwidth, 8)
+    position + width == stop || return false
+    stored = 0
+    for index in 0:(width - 1)
+        stored |= Int(bytes[position + index]) << (8 * index)
+    end
+    return stored == value
+end
+
 # Data page V1 levels: a length-prefixed RLE hybrid stream or deprecated BIT_PACKED.
-# Returns the position after them and how many are at `maxlevel`.
+# Returns the position after them and how many are at `maxlevel`. Without
+# `materialize`, levels that are all `maxlevel` (one RLE run) are not written out.
 function _levelsv1!(levels::Vector{UInt16}, bytes::_ByteView, position::Int, count::Int,
-        encoding::Metadata.Encoding.T, maxlevel::Int, name::String, limits::Limits)
+        encoding::Metadata.Encoding.T, maxlevel::Int, name::String, limits::Limits,
+        materialize::Bool=true)
     maxlevel == 0 && return position, count
     bitwidth = _levelbitwidth(maxlevel)
     if encoding == Metadata.Encoding.RLE
         start, stop = _hybridbounds(bytes, position, true)
+        materialize || !_onerun(bytes, start, stop, count, bitwidth, maxlevel) ||
+            return stop, count
         _growto!(levels, _claimcapacity(count, stop - start))
         position = _decodehybrid!(levels, 0, count, bitwidth, bytes, start, stop)
         position == stop || throw(FormatError("hybrid stream has trailing bytes"))
@@ -625,9 +645,13 @@ function _levelsv1!(levels::Vector{UInt16}, bytes::_ByteView, position::Int, cou
 end
 
 # Data page V2 levels; returns whether any were stored and how many are at `maxlevel`.
+# Without `materialize`, levels that are all `maxlevel` (one RLE run) are not written
+# out (and count as stored).
 function _levelsv2!(levels::Vector{UInt16}, bytes::_ByteView, count::Int, maxlevel::Int,
-        name::String)
+        name::String, materialize::Bool=true)
     isempty(bytes) && maxlevel == 0 && return false, count
+    materialize || !_onerun(bytes, 1, length(bytes) + 1, count, _levelbitwidth(maxlevel),
+        maxlevel) || return true, count
     _growto!(levels, _claimcapacity(count, length(bytes)))
     position = _decodehybrid!(levels, 0, count, _levelbitwidth(maxlevel), bytes, 1,
         length(bytes) + 1)
@@ -649,10 +673,23 @@ function _datapagev1!(sink, ::Type{P}, convert, frame::PageFrame,
         frame.header.uncompressed_page_size, limits)
     maxrepetition = Int(node.max_repetition_level)
     maxdefinition = Int(node.max_definition_level)
+    if _runscatters(sink, maxdefinition) &&
+            header.definition_level_encoding == Metadata.Encoding.RLE
+        start, stop = _hybridbounds(bytes, 1, true)
+        finish = _runscatter!(sink, count, P, convert, header.encoding, bytes, start, stop,
+            "hybrid stream has trailing bytes", bytes, stop, length(bytes) + 1, dictionary,
+            hasdictionary, buffers)
+        if finish !== nothing
+            finish == length(bytes) + 1 || throw(FormatError(
+                "data page has $(length(bytes) - finish + 1) bytes after its values"))
+            return count
+        end
+    end
     position, _ = _levelsv1!(buffers.repetition, bytes, 1, count,
         header.repetition_level_encoding, maxrepetition, "repetition", limits)
     position, present = _levelsv1!(buffers.definition, bytes, position, count,
-        header.definition_level_encoding, maxdefinition, "definition", limits)
+        header.definition_level_encoding, maxdefinition, "definition", limits,
+        _needslevels(sink))
     valuestart = position
     finish = _scatterpage!(sink, count, present, P, convert, header.encoding, bytes,
         valuestart, length(bytes) + 1, dictionary, hasdictionary, buffers)
@@ -715,10 +752,22 @@ function _datapagev2!(sink, ::Type{P}, convert, frame::PageFrame,
         md.codec, limits)
     maxrepetition = Int(node.max_repetition_level)
     maxdefinition = Int(node.max_definition_level)
+    if _runscatters(sink, maxdefinition) && !isempty(definitionbytes) &&
+            rows == count && isempty(repetitionbytes)
+        finish = _runscatter!(sink, count, P, convert, header.encoding, definitionbytes,
+            1, length(definitionbytes) + 1,
+            "data page V2 definition levels have trailing bytes", bytes, 1,
+            length(bytes) + 1, dictionary, hasdictionary, buffers)
+        if finish !== nothing
+            finish == length(bytes) + 1 || throw(FormatError(
+                "data page V2 has $(length(bytes) - finish + 1) bytes after its values"))
+            return count
+        end
+    end
     hasrepetition, _ = _levelsv2!(buffers.repetition, repetitionbytes, count,
         maxrepetition, "repetition")
     hasdefinition, present = _levelsv2!(buffers.definition, definitionbytes, count,
-        maxdefinition, "definition")
+        maxdefinition, "definition", _needslevels(sink))
     actualrows = count
     if hasrepetition && count > 0
         first = buffers.repetition[1]
@@ -864,80 +913,139 @@ function _sinkpage!(decode, sink::_FlatSink{O,L,false}, count::Int, present::Int
     return position
 end
 
-# An optional flat page whose values are PLAIN fixed-width or dictionary indices writes
-# each value straight to its row, in one pass, without staging the present values.
-# Returns the position after the values, or `nothing` when the page takes the general
-# path.
+# Whether a sink reads a page's definition levels when every entry is present (flat
+# sinks then only need the count).
+_needslevels(sink) = true
+_needslevels(::_FlatSink) = false
+
+# Whether a sink takes optional pages straight from their definition-level runs.
+_runscatters(sink, maxdefinition::Int) = false
+_runscatters(::_FlatSink{O,L,false}, maxdefinition::Int) where {O,L} = maxdefinition == 1
+
+# The entries of 0/1 definition levels `levels[start:(stop - 1)]` (an RLE/bit-packed
+# hybrid stream of `count` levels) that are 1, after checking the stream as
+# `_decodehybrid!` and `_validatelevels` would; `trailing` is the error for bytes left
+# after the levels.
+function _presentlevels(levels::_ByteView, start::Int, stop::Int, count::Int,
+        trailing::String)
+    filled = 0
+    present = 0
+    position = start
+    while filled < count
+        position < stop || throw(FormatError("hybrid stream ended before all values"))
+        header, position = _readhybridvarint(levels, position)
+        runs = header >> 1
+        runs > 0 || throw(FormatError("zero-length hybrid run"))
+        remaining = count - filled
+        if isodd(header)
+            runs <= UInt64(typemax(Int32) ÷ 8) ||
+                throw(FormatError("bit-packed hybrid run exceeds Int32 values"))
+            groups = Int(runs)
+            _requirebytes(levels, position, groups)
+            produced = min(8 * groups, remaining)
+            for index in 0:(cld(produced, 8) - 1)
+                byte = levels[position + index]
+                bits = min(8, produced - 8 * index)
+                present += count_ones(byte & ((0x01 << bits) - 0x01))
+            end
+            position += groups
+        else
+            runs <= UInt64(typemax(Int32)) ||
+                throw(FormatError("RLE hybrid run exceeds Int32 values"))
+            _requirebytes(levels, position, 1)
+            value = levels[position]
+            value <= 0x01 || throw(FormatError(
+                "definition level $value exceeds the maximum 1"))
+            position += 1
+            produced = min(Int(runs), remaining)
+            present += value * produced
+        end
+        position <= stop || throw(FormatError("hybrid run exceeds its declared length"))
+        filled += produced
+    end
+    position == stop || throw(FormatError(trailing))
+    return present
+end
+
+# Spreads the present values of `source` over `count` entries of `output` after
+# `offset`, as the checked 0/1 hybrid levels `levels[start:]` say, with `null` elsewhere.
+function _scatterruns!(output::Vector{O}, offset::Int, levels::_ByteView, start::Int,
+        count::Int, source, null::O) where {O}
+    filled = 0
+    next = 0
+    position = start
+    @inbounds while filled < count
+        header, position = _readhybridvarint(levels, position)
+        runs = header >> 1
+        if isodd(header)
+            produced = min(8 * Int(runs), count - filled)
+            for index in 0:(produced - 1)
+                if (levels[position + (index >> 3)] >> (index & 7)) & 0x01 == 0x01
+                    next += 1
+                    output[offset + filled + index + 1] = _value(source, next)
+                else
+                    output[offset + filled + index + 1] = null
+                end
+            end
+            position += Int(runs)
+        else
+            produced = min(Int(runs), count - filled)
+            if levels[position] == 0x01
+                for index in 1:produced
+                    output[offset + filled + index] = _value(source, next + index)
+                end
+                next += produced
+            else
+                for index in 1:produced
+                    output[offset + filled + index] = null
+                end
+            end
+            position += 1
+        end
+        filled += produced
+    end
+    return
+end
+
+# An optional flat page of PLAIN fixed-width values or dictionary indices whose 0/1
+# definition levels are `levels[start:(stop - 1)]` and values `bytes[position:]`, written
+# straight to its rows without decoding the levels. Returns the position after the
+# values, or `nothing` for other encodings.
+function _runscatter!(sink::_FlatSink{O,L,false}, count::Int, ::Type{P}, convert::C,
+        encoding::Metadata.Encoding.T, levels::_ByteView, start::Int, stop::Int,
+        trailing::String, bytes::_ByteView, position::Int, valuestop::Int,
+        dictionary::Vector{L}, hasdictionary::Bool, buffers::_PageBuffers) where {O,L,P,C}
+    plain = encoding == Metadata.Encoding.PLAIN && P <: Union{Int32,Int64,Float32,Float64}
+    plain || _isdictionaryencoding(encoding) || return nothing
+    present = _presentlevels(levels, start, stop, count, trailing)
+    output = sink.output
+    offset = sink.filled
+    _growto!(output, offset + count)
+    if plain
+        total = Base.checked_mul(present, sizeof(P))
+        _requirebytes(bytes, position, total)
+        GC.@preserve bytes _scatterruns!(output, offset, levels, start, count,
+            _PlainValues{P,C}(Ptr{P}(pointer(bytes, position)), convert), _nullentry(O))
+        position += total
+    else
+        hasdictionary || throw(FormatError(
+            "dictionary-encoded data page has no dictionary page"))
+        position = _dictionaryindices!(buffers.indices, present, bytes, position,
+            valuestop)
+        _scatterruns!(output, offset, levels, start, count,
+            _DictionaryValues(buffers.indices, dictionary), _nullentry(O))
+    end
+    sink.filled += count
+    return position
+end
+
+# A page whose values are PLAIN fixed-width or dictionary indices may write each value
+# straight to its slot, in one pass, without staging the present values (nested leaf
+# sinks do). Returns the position after the values, or `nothing` when the page takes the
+# general path.
 function _scatterpage!(sink, count::Int, present::Int, ::Type{P}, convert, encoding,
         bytes::_ByteView, position::Int, stop::Int, dictionary::Vector,
         hasdictionary::Bool, buffers::_PageBuffers) where {P}
-    return nothing
-end
-
-function _scatterpage!(sink::_FlatSink{O,L,false}, count::Int, present::Int, ::Type{P},
-        convert::C, encoding::Metadata.Encoding.T, bytes::_ByteView, position::Int,
-        stop::Int, dictionary::Vector{L}, hasdictionary::Bool,
-        buffers::_PageBuffers) where {O,L,P,C}
-    output = sink.output
-    offset = sink.filled
-    definition = buffers.definition
-    top = sink.maxdefinition
-    null = _nullentry(O)
-    if encoding == Metadata.Encoding.PLAIN && P <: Union{Int32,Int64,Float32,Float64}
-        total = Base.checked_mul(present, sizeof(P))
-        _requirebytes(bytes, position, total)
-        _growto!(output, offset + count)
-        GC.@preserve bytes begin
-            source = Ptr{P}(pointer(bytes, position))
-            if present == count
-                @inbounds for index in 1:count
-                    output[offset + index] =
-                        _convertvalue(convert, ltoh(unsafe_load(source, index)))
-                end
-            else
-                next = 0
-                @inbounds for index in 1:count
-                    if definition[index] == top
-                        next += 1
-                        output[offset + index] =
-                            _convertvalue(convert, ltoh(unsafe_load(source, next)))
-                    else
-                        output[offset + index] = null
-                    end
-                end
-            end
-        end
-        sink.filled += count
-        return position + total
-    elseif _isdictionaryencoding(encoding)
-        hasdictionary || throw(FormatError(
-            "dictionary-encoded data page has no dictionary page"))
-        indices = buffers.indices
-        position = _dictionaryindices!(indices, present, bytes, position, stop)
-        _growto!(output, offset + count)
-        entries = UInt32(length(dictionary))
-        if present == count
-            @inbounds for index in 1:count
-                raw = indices[index]
-                raw < entries || _dictionaryindexerror(raw, entries)
-                output[offset + index] = _dictionarycopy(dictionary[raw + 1])
-            end
-        else
-            next = 0
-            @inbounds for index in 1:count
-                if definition[index] == top
-                    next += 1
-                    raw = indices[next]
-                    raw < entries || _dictionaryindexerror(raw, entries)
-                    output[offset + index] = _dictionarycopy(dictionary[raw + 1])
-                else
-                    output[offset + index] = null
-                end
-            end
-        end
-        sink.filled += count
-        return position
-    end
     return nothing
 end
 

@@ -561,6 +561,89 @@ end
         codec=MD.CompressionCodec.SNAPPY) == Int32[]
 end
 
+@testset "optional flat pages read from mixed level runs" begin
+    # 0/1 level streams of explicit RLE and bit-packed runs (bit width 1).
+    function levelruns(segments)
+        bytes = UInt8[]
+        for (kind, levels) in segments
+            if kind === :rle
+                Parquet._writehybridvarint!(bytes, UInt64(length(levels)) << 1)
+                push!(bytes, UInt8(first(levels)))
+            else
+                packed = zeros(UInt8, cld(length(levels), 8))
+                for (index, level) in enumerate(levels)
+                    packed[((index - 1) >> 3) + 1] |= UInt8(level) << ((index - 1) & 7)
+                end
+                Parquet._writehybridvarint!(bytes, UInt64(length(packed)) << 1 | 1)
+                append!(bytes, packed)
+            end
+        end
+        return bytes
+    end
+    function referencepresent(stream, entries)
+        levels = UInt16[]
+        stop = length(stream) + 1
+        position = Parquet._decodehybrid!(levels, 0, entries, 1, Parquet._byteview(stream),
+            1, stop)
+        position == stop || throw(Parquet.FormatError("trailing bytes"))
+        return Parquet._validatelevels(levels, entries, 1, "definition")
+    end
+    function outcome(f)
+        try
+            return f()
+        catch err
+            err isa Parquet.FormatError || rethrow()
+            return :formaterror
+        end
+    end
+    optional = MD.FieldRepetitionType.OPTIONAL
+    int64 = columnleaf(MD.Type.INT64; repetition=optional)
+    rng = MersenneTwister(2026)
+    for trial in 1:150
+        segments = [rand(rng, Bool) ? (:rle, fill(rand(rng, 0:1), rand(rng, 1:20))) :
+            (:packed, rand(rng, 0:1, 8 * rand(rng, 1:3))) for _ in 1:rand(rng, 1:6)]
+        levels = reduce(vcat, last.(segments))
+        # A final bit-packed run pads its last group past the page's entries.
+        entries = length(levels) - (first(last(segments)) === :packed ? rand(rng, 0:7) : 0)
+        levels = levels[1:entries]
+        present = count(==(1), levels)
+        values = rand(rng, Int64, present)
+        expected = Vector{Union{Missing,Int64}}(missing, entries)
+        expected[levels .== 1] = values
+        stream = levelruns(segments)
+        @test Parquet._presentlevels(Parquet._byteview(stream), 1, length(stream) + 1,
+            entries, "trailing") == present
+        v1 = columnpage(vcat(reinterpret(UInt8, [htol(UInt32(length(stream)))]), stream,
+            Parquet.encode_plain(values)); v1=columnv1(entries))
+        @test isequal(readsynthetic([v1], int64; num_values=entries), expected)
+        v2 = datapagev2(values; levels=levels, maxlevel=1, definition=stream)
+        @test isequal(readsynthetic([v2], int64; num_values=entries), expected)
+        dictionary = unique(values)
+        indices = UInt64[findfirst(==(value), dictionary) - 1 for value in values]
+        width = isempty(indices) ? 0 : 64 - leading_zeros(max(maximum(indices), 1))
+        dictpage = columnpage(Parquet.encode_plain(dictionary); type=MD.PageType.DICTIONARY_PAGE,
+            dict=MD.DictionaryPageHeader(num_values=Int32(length(dictionary)),
+                encoding=MD.Encoding.PLAIN))
+        indexpage = columnpage(vcat(reinterpret(UInt8, [htol(UInt32(length(stream)))]), stream,
+            UInt8[width], Parquet.encode_hybrid(indices, width));
+            v1=columnv1(entries; encoding=MD.Encoding.RLE_DICTIONARY))
+        @test isequal(readsynthetic([dictpage, indexpage], int64; num_values=entries,
+            dictionary_page_offset=4, data_page_offset=4 + length(dictpage)), expected)
+        # Corrupt streams fail exactly when the level decoder rejects them.
+        for _ in 1:4
+            broken = copy(stream)
+            if rand(rng, Bool) && length(broken) > 1
+                resize!(broken, rand(rng, 1:(length(broken) - 1)))
+            else
+                broken[rand(rng, eachindex(broken))] = rand(rng, UInt8)
+            end
+            @test outcome(() -> Parquet._presentlevels(Parquet._byteview(broken), 1,
+                length(broken) + 1, entries, "trailing")) ==
+                outcome(() -> referencepresent(broken, entries))
+        end
+    end
+end
+
 @testset "page value encoding dispatch" begin
     bytearray = columnleaf(MD.Type.BYTE_ARRAY)
     fixed = columnleaf(MD.Type.FIXED_LEN_BYTE_ARRAY; width=3)
