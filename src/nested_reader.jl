@@ -567,7 +567,8 @@ function _buildnode(field::_FieldAssembly, node::_AssemblyNode, pieces, count::I
     length(offsets) == count + 1 || throw(FormatError("$(_nestedreadlabel(plan)) has " *
         "$(length(offsets) - 1) occurrences where its parent expects $count"))
     entries = last(offsets)
-    children = [_buildnode(field, child, pieces, entries) for child in node.children]
+    children = AbstractVector[_buildnode(field, child, pieces, entries)
+        for child in node.children]
     plan isa _NestedListPlan && return ListVector{T}(offsets, validity, only(children))
     values = length(children) == 2 ? children[2] : Vector{Missing}(undef, entries)
     return MapVector{T}(offsets, validity, children[1], values)

@@ -111,13 +111,19 @@ mutable struct _ReadQueue
     @atomic next::Int
 end
 
-# `map(index -> f(index, buffers), indices)`, where `buffers` are the `_PageBuffers` of
-# the task that runs `f`. With `ntasks > 1`, that many tasks take the indices in order.
-# An error from `f` is rethrown as itself rather than in a TaskFailedException.
+# `Any[f(index, buffers) for index in indices]`, where `buffers` are the `_PageBuffers`
+# of the task that runs `f`. With `ntasks > 1`, that many tasks take the indices in
+# order. The result is a `Vector{Any}` for any `ntasks`, so callers compile once rather
+# than for each combination of result types. An error from `f` is rethrown as itself
+# rather than in a TaskFailedException.
 function _readmap(f, indices, ntasks::Int)
     if ntasks <= 1
         buffers = _PageBuffers()
-        return map(index -> f(index, buffers), indices)
+        results = Vector{Any}(undef, length(indices))
+        for (position, index) in enumerate(indices)
+            results[position] = f(index, buffers)
+        end
+        return results
     end
     items = collect(indices)
     results = Vector{Any}(undef, length(items))

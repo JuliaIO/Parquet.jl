@@ -215,11 +215,15 @@ _structrow(::Type{StructValue}, names, children, index::Int) =
     StructValue(names, children, index)
 
 # Generated so each field reads through its own type (an `ntuple` closure that is not
-# inlined looks field types up at run time, allocating per row).
+# inlined looks field types up at run time, allocating per row). The generator loops
+# rather than using a comprehension, whose closure would compile for each row type.
 @generated function _structrow(::Type{R}, names, children::Vector{AbstractVector},
         index::Int) where {R<:NamedTuple}
-    fields = [:(@inbounds _childvalue($(fieldtype(R, field)), children[$field], index))
-        for field in 1:fieldcount(R)]
+    fields = Expr[]
+    for field in 1:fieldcount(R)
+        push!(fields, :(@inbounds _childvalue($(fieldtype(R, field)), children[$field],
+            index)))
+    end
     return :(R(($(fields...),)))
 end
 
