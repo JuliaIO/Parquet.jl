@@ -261,9 +261,9 @@ end
     end
 end
 
-@testset "footer limit leaves public destinations unchanged" begin
+@testset "footer limit leaves path destinations unchanged" begin
     table = (value=Int32[1, 2],)
-    reference = Parquet._encodefile(table)
+    reference = take!(Parquet.write(IOBuffer(), table))
     file = Parquet.File(reference)
     exact = Int64(length(file.footer.bytes))
     close(file)
@@ -284,7 +284,10 @@ end
     @test err isa Parquet.LimitError
     @test err.resource == :footer_bytes
     @test err.requested == exact
-    @test take!(io) == sentinel
+    # Row groups stream to an IO before the footer; the IO keeps what was written.
+    written = take!(io)
+    @test written[1:4] == sentinel
+    @test written[5:8] == Parquet.PARQUET_MAGIC
     mktempdir() do directory
         existing = joinpath(directory, "existing.parquet")
         Base.write(existing, sentinel)
@@ -310,59 +313,19 @@ end
         Union{Missing,Date}[Date(2020, 1, 2), missing],
     ]
     input = (id=Int32[1, 2], days=days)
-    plan = Parquet._writeplan(input)
-    @test plan.rows == 2
-    @test length(plan.rowgroups) == 1
-    @test plan.elements[1].num_children == 2
-    @test length(plan.schema.root.children) == 2
-    @test [element.name for element in plan.elements] ==
-        ["schema", "id", "days", "list", "element"]
-    rowgroup = only(plan.rowgroups)
-    @test rowgroup.rows == plan.rows
-    @test [leaf.ordinal for leaf in rowgroup.leaves] == Int32[1, 2]
-    @test [leaf.path for leaf in rowgroup.leaves] ==
-        [["id"], ["days", "list", "element"]]
-    @test [leaf.path for leaf in rowgroup.leaves] ==
-        [leaf.path for leaf in plan.schema.leaves]
-    @test all(isempty(leaf.column.schema) for leaf in rowgroup.leaves)
-    @test all(leaf.column.path == leaf.path for leaf in rowgroup.leaves)
     bytes = Parquet._encodefile(input)
     file = Parquet.File(bytes)
     metadata = TH.decode(file.footer.bytes, MD.FileMetaData)
-    @test metadata.schema == plan.elements
-    @test metadata.num_rows == plan.rows
-    @test metadata.row_groups[1].num_rows == rowgroup.rows
+    @test metadata.num_rows == 2
+    @test length(metadata.row_groups) == 1
+    @test metadata.schema[1].num_children == 2
+    @test [element.name for element in metadata.schema] ==
+        ["schema", "id", "days", "list", "element"]
+    @test metadata.row_groups[1].num_rows == 2
     @test [chunk.meta_data.path_in_schema for chunk in metadata.row_groups[1].columns] ==
-        [leaf.path for leaf in rowgroup.leaves]
+        [["id"], ["days", "list", "element"]]
+    @test [group.ordinal for group in metadata.row_groups] == Int16[0]
     close(file)
-
-    leftsource = Parquet._writecolumn(:left, Int32[1, 2])
-    rightsource = Parquet._writecolumn(:right, Float64[1, 2])
-    left = Parquet._withoutcolumnschema(leftsource, ["pair", "left"])
-    right = Parquet._withoutcolumnschema(rightsource, ["pair", "right"])
-    group = MD.SchemaElement(name="pair", num_children=Int32(2),
-        repetition_type=MD.FieldRepetitionType.REQUIRED)
-    field = Parquet.WriteFieldPlan(
-        MD.SchemaElement[group, only(leftsource.schema), only(rightsource.schema)],
-        Parquet.WriteColumn[left, right])
-    grouped = Parquet._writeplan(Parquet.WriteFieldPlan[field], 2, Parquet.Limits())
-    @test grouped.elements[1].num_children == 1
-    @test length(grouped.schema.root.children) == 1
-    @test length(grouped.schema.leaves) == 2
-    @test [leaf.ordinal for leaf in only(grouped.rowgroups).leaves] == Int32[1, 2]
-    @test [leaf.path for leaf in only(grouped.rowgroups).leaves] ==
-        [["pair", "left"], ["pair", "right"]]
-    @test_throws Parquet.UnsupportedFeatureError Parquet._validatewritechoicecount(
-        only(grouped.rowgroups).leaves,
-        Parquet.WriteEncodingChoice[Parquet.WriteEncodingChoice(nothing, false)])
-    incomplete = Parquet.WriteFieldPlan(field.schema, Parquet.WriteColumn[left])
-    @test_throws ArgumentError Parquet._writeplan(
-        Parquet.WriteFieldPlan[incomplete], 2, Parquet.Limits())
-
-    emptyplan = Parquet._writeplan((value=Int32[],))
-    @test emptyplan.rows == 0
-    @test isempty(emptyplan.rowgroups)
-    @test emptyplan.elements[1].num_children == 1
     for pageversion in (:v1, :v2)
         emptybytes = Parquet._encodefile((value=Int32[],); pageversion=pageversion)
         emptyfile = Parquet.File(emptybytes)
@@ -380,6 +343,13 @@ end
 end
 
 @testset "writer output is deterministic with row-group offsets" begin
+    mixed = (id=collect(1:50_000), label=["v$(index % 97)" for index in 1:50_000],
+        lists=[[index, index + 1] for index in 1:50_000])
+    serial = take!(Parquet.write(IOBuffer(), mixed; ntasks=1, rowgroupsize=7_000))
+    for ntasks in (2, 3, 8)
+        @test take!(Parquet.write(IOBuffer(), mixed; ntasks=ntasks,
+            rowgroupsize=7_000)) == serial
+    end
     flat = (
         id=Int32[1, 2, 3],
         label=Union{Missing,String}["a", missing, "b"],
@@ -395,11 +365,11 @@ end
     )
     @test bytes2hex(sha256(Parquet._encodefile(dictionary;
         pageversion=:v2, dictionary=true, statistics=false))) ==
-        "4c65c27c3b2eeb850b74ea6c5e76454a44480bcb774724c88bdad955b10a87e5"
+        "882a9fa55dc6f7cae7dd78db80d99a6bb0dd92a1d586537d71cd8f9d2105cd63"
     @test bytes2hex(sha256(Parquet._encodefile(dictionary;
         pageversion=:v2, dictionary=true, pageindex=false,
         statistics=false))) ==
-        "979f70b637a8225075e6822836e1bd4d3041fa105a87155a3d4583ac1a108996"
+        "81f6ae40c63b1ae73f6df1344ec4ba81031910092519cda6808f198d7ce30182"
     lists = (
         days=Union{Missing,Vector{Union{Missing,Date}}}[
             missing,
@@ -604,10 +574,9 @@ end
     @test_throws ArgumentError Parquet._encodefile((a=Int32[1], b=Int32[1, 2]))
     @test_throws ArgumentError Parquet._encodefile((a=Int128[1, 2],))
     @test_throws Parquet.LimitError Parquet._encodefile((a=Int32[1, 2],); limits=Parquet.Limits(max_container_elements=1))
-    splitbytes = Parquet._encodefile((a=fill("large", 10),);
-        limits=Parquet.Limits(max_page_bytes=10))
+    splitbytes = Parquet._encodefile((a=fill("large", 10),); pagesize=10)
     splitpages, _ = writtenpages(splitbytes, 1)
-    @test length(splitpages) == 10
+    @test length(splitpages) == 5
     splittable = Parquet.Table(splitbytes)
     @test Parquet.Tables.columns(splittable).a == fill("large", 10)
     close(splittable)
@@ -661,7 +630,7 @@ end
     @test Parquet._encodefile(input; codec=:SNAPPY) == Parquet._encodefile(input; codec="snappy")
     @test Parquet.Table(Parquet._encodefile(input; codec=:gzip, compressionlevel=9)).id == input.id
     @test_throws ArgumentError Parquet._encodefile(input; codec=:unknown)
-    @test_throws ArgumentError Parquet._encodefile(input; codec=:lz4)
+    @test Parquet._encodefile(input; codec=:lz4) == Parquet._encodefile(input; codec=:lz4_raw)
     @test_throws ArgumentError Parquet._encodefile(input; codec=:lzo)
     @test_throws ArgumentError Parquet._encodefile(input; codec=1)
     @test_throws ArgumentError Parquet._encodefile(input; compressionlevel=1)
@@ -671,9 +640,10 @@ end
         limits=Parquet.Limits(max_page_bytes=4))
 end
 
+# Public writes with the options of Parquet._encodefile, for byte comparisons.
 function publicwritebytes(table; kwargs...)
     io = IOBuffer()
-    Parquet.write(io, table; kwargs...)
+    Parquet.write(io, table; checksum=true, dictionary=false, compress=nothing, kwargs...)
     return take!(io)
 end
 
@@ -801,7 +771,12 @@ end
 
 function encodedvaluepayload(values::AbstractVector, encoding::MD.Encoding.T)
     column = Parquet._writecolumn(:value, values)
-    return Parquet._encodedpayload(column, encoding, Parquet.Limits())
+    element = only(column.schema)
+    buffer = Parquet._pagebuffer(element, Parquet.Limits())
+    for value in column.values
+        ismissing(value) || Parquet._appendvalue!(buffer, value)
+    end
+    return Parquet._explicitpayload!(UInt8[], encoding, buffer, element)
 end
 
 @testset "explicit writer value encodings" begin
@@ -919,8 +894,10 @@ end
         MD.Encoding.BIT_PACKED, MD.Encoding.T(Int32(99)), :unknown, 5)
         @test_throws ArgumentError Parquet._encodefile((value=Int32[1],); encoding=encoding)
     end
-    @test_throws ArgumentError Parquet._encodefile((value=Int32[1],);
-        encoding=MD.Encoding.PLAIN, dictionary=true)
+    # An explicit table-wide encoding takes precedence over dictionary encoding.
+    @test writtenpages(Parquet._encodefile((value=fill(Int32(1), 100),);
+        encoding=MD.Encoding.PLAIN, dictionary=true), 1)[2].encodings ==
+        [MD.Encoding.PLAIN]
     mixed = (valid=fill(Int32(1), 100), invalid=fill("x", 100))
     @test_throws ArgumentError Parquet._encodefile(mixed;
         encoding=MD.Encoding.DELTA_BINARY_PACKED,
@@ -993,8 +970,7 @@ end
             @test length(pages) == 1
         end
         pages, metadata = writtenpages(bytes, length(input))
-        @test metadata.encodings == [MD.Encoding.PLAIN, MD.Encoding.RLE,
-            MD.Encoding.RLE_DICTIONARY]
+        @test metadata.encodings == [MD.Encoding.PLAIN, MD.Encoding.RLE_DICTIONARY]
         @test metadata.dictionary_page_offset !== nothing
         @test [page.header.type_ for page in pages] ==
             [MD.PageType.DICTIONARY_PAGE,
@@ -1028,8 +1004,8 @@ end
     @test_throws ArgumentError Parquet._encodefile(plain; encoding=(value=1,))
     @test_throws ArgumentError Parquet._encodefile((value=["one"],);
         encoding=(value=:delta_binary_packed,))
-    @test_throws ArgumentError Parquet._encodefile(plain;
-        dictionary=true, encoding=:plain)
+    @test Parquet._encodefile(plain; dictionary=true, encoding=:plain) ==
+        Parquet._encodefile(plain; encoding=:plain)
     @test_throws ArgumentError Parquet._encodefile(plain;
         encoding=(value=:rle_dictionary,))
     @test_throws ArgumentError Parquet._encodefile(plain;
@@ -1098,8 +1074,7 @@ end
     dictionary = Parquet._encodefile(repeated; dictionary=true)
     _, metadata = writtenpages(dictionary, 1)
     @test metadata.dictionary_page_offset !== nothing
-    @test metadata.encodings == [MD.Encoding.PLAIN, MD.Encoding.RLE,
-        MD.Encoding.RLE_DICTIONARY]
+    @test metadata.encodings == [MD.Encoding.PLAIN, MD.Encoding.RLE_DICTIONARY]
     table = Parquet.Table(dictionary)
     @test Parquet.Tables.columns(table).value == expectedtablevalues(repeated.value)
     close(table)
@@ -1161,6 +1136,14 @@ end
     finally
         close(table)
     end
+    # Later partitions convert to the first partition's types exactly or fail.
+    widened = Tables.partitioner([(a=[1, 2],), (a=Int32[3],), (a=[missing],)])
+    table = Parquet.Table(take!(Parquet.write(IOBuffer(), widened)))
+    try
+        @test isequal(table.a, [1, 2, 3, missing])
+    finally
+        close(table)
+    end
     mismatched = Tables.partitioner([(a=[1, 2],), (a=[1.5, 2.5],)])
     err = try
         Parquet.write(IOBuffer(), mismatched)
@@ -1169,9 +1152,10 @@ end
         error
     end
     @test err isa ArgumentError
-    @test occursin("column \"a\" of partition 2", err.msg)
+    @test occursin("\"a\"", err.msg)
     renamed = Tables.partitioner([(a=[1],), (c=[2],)])
-    @test_throws "partition 2 has column \"c\"" Parquet.write(IOBuffer(), renamed)
+    @test_throws "column 1 is \"c\" but the file's column 1 is \"a\"" Parquet.write(
+        IOBuffer(), renamed)
     @test_throws "at least one partition" Parquet.write(IOBuffer(),
         Tables.partitioner(NamedTuple[]))
 end

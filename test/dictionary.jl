@@ -200,12 +200,10 @@ end
     booleantable = Parquet.Table(boolean)
     @test Parquet.Tables.columns(booleantable).value == fill(true, 2000)
     close(booleantable)
+    # A page without values never starts a dictionary.
     allmissing = Union{Missing,Int32}[missing for _ in 1:8]
-    missingcolumn = Parquet._writecolumn(:value, allmissing)
-    missinglimit = length(Parquet._definitionpayload(missingcolumn))
-    tight = Parquet.Limits(max_page_bytes=missinglimit)
-    @test Parquet._encodefile((value=allmissing,); dictionary=true, limits=tight) ==
-        Parquet._encodefile((value=allmissing,); dictionary=false, limits=tight)
+    @test Parquet._encodefile((value=allmissing,); dictionary=true) ==
+        Parquet._encodefile((value=allmissing,); dictionary=false)
     plain = Parquet._encodefile((value=fill(Int32(1), 128),))
     plainfile = Parquet.File(plain)
     plainmeta = TH.decode(plainfile.footer.bytes, MD.FileMetaData)
@@ -222,37 +220,30 @@ end
 end
 
 @testset "adaptive dictionary V2 writer" begin
+    # The dictionary is chosen once, on the chunk's first page, whatever the codec.
     input = (value=fill(Int32(42), 128),)
-    dictionarycount = 0
-    plaincount = 0
     for codec in (:uncompressed, :snappy, :gzip, :brotli, :zstd, :lz4_raw)
         bytes = Parquet._encodefile(input; dictionary=true, codec=codec, pageversion=:v2)
-        plain = Parquet._encodefile(input; dictionary=false, codec=codec, pageversion=:v2)
         table = Parquet.Table(bytes)
         @test Parquet.Tables.columns(table).value == input.value
         close(table)
         pages, metadata = writtenpages(bytes, 1)
-        _, plainmetadata = writtenpages(plain, 1)
-        @test metadata.total_compressed_size <= plainmetadata.total_compressed_size
-        if metadata.dictionary_page_offset === nothing
-            plaincount += 1
-            @test [page.header.type_ for page in pages] == [MD.PageType.DATA_PAGE_V2]
-            @test pages[1].header.data_page_header_v2.encoding == MD.Encoding.PLAIN
-        else
-            dictionarycount += 1
-            @test [page.header.type_ for page in pages] ==
-                [MD.PageType.DICTIONARY_PAGE, MD.PageType.DATA_PAGE_V2]
-            @test pages[2].header.data_page_header_v2.encoding == MD.Encoding.RLE_DICTIONARY
-            @test metadata.encoding_stats == [
-                MD.PageEncodingStats(page_type=MD.PageType.DICTIONARY_PAGE,
-                    encoding=MD.Encoding.PLAIN, count=Int32(1)),
-                MD.PageEncodingStats(page_type=MD.PageType.DATA_PAGE_V2,
-                    encoding=MD.Encoding.RLE_DICTIONARY, count=Int32(1)),
-            ]
-        end
+        @test [page.header.type_ for page in pages] ==
+            [MD.PageType.DICTIONARY_PAGE, MD.PageType.DATA_PAGE_V2]
+        @test pages[2].header.data_page_header_v2.encoding == MD.Encoding.RLE_DICTIONARY
+        @test metadata.encoding_stats == [
+            MD.PageEncodingStats(page_type=MD.PageType.DICTIONARY_PAGE,
+                encoding=MD.Encoding.PLAIN, count=Int32(1)),
+            MD.PageEncodingStats(page_type=MD.PageType.DATA_PAGE_V2,
+                encoding=MD.Encoding.RLE_DICTIONARY, count=Int32(1)),
+        ]
     end
-    @test dictionarycount > 0
-    @test plaincount > 0
+    # Unique values do not pay for a dictionary: the chunk is PLAIN, with no dictionary page.
+    unique = (value=collect(Int32(1):Int32(500)),)
+    pages, metadata = writtenpages(Parquet._encodefile(unique; dictionary=true,
+        pageversion=:v2), 1)
+    @test [page.header.type_ for page in pages] == [MD.PageType.DATA_PAGE_V2]
+    @test metadata.dictionary_page_offset === nothing
 end
 
 @testset "official dictionary fixtures" begin

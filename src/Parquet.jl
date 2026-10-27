@@ -33,22 +33,23 @@ include("dictionary.jl")
 include("column.jl")
 include("nested_reader.jl")
 include("nested_table.jl")
+include("xxhash.jl")
 include("write_types.jl")
+include("write_encode.jl")
 include("write.jl")
 include("write_statistics.jl")
 include("write_logical.jl")
 include("logical_column.jl")
 include("table.jl")
 include("write_nested.jl")
-include("write_splitting.jl")
-include("page_index.jl")
+include("writer.jl")
 include("precompile.jl")
 
 if VERSION >= v"1.11"
     Core.eval(@__MODULE__, Expr(:public, :AbstractSource, :BSONValue, :Decimal, :File,
         :FormatError, :JSONValue, :LimitError, :Limits, :LogicalColumn, :Table,
-        :UnsupportedFeatureError, :col, :colcmp, :colin, :concurrentreads, :isnull,
-        :metadata, :read, :readrange, :sourcelength, :write))
+        :UnsupportedFeatureError, :Writer, :col, :colcmp, :colin, :concurrentreads,
+        :isnull, :metadata, :read, :readrange, :sourcelength, :write))
 end
 
 end

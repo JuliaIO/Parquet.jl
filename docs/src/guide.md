@@ -86,22 +86,52 @@ close(file)
 
 `Parquet.write` accepts a Tables.jl source and a path or `IO` sink, and returns the
 sink. `Parquet.write(sink)` returns a function, so a table can be piped into it:
-`CSV.File("in.csv") |> Parquet.write("out.parquet")`. Each partition of a
-`Tables.partitions` source becomes one or more row groups; every partition must have
-the first partition's column types and nullability.
+`CSV.File("in.csv") |> Parquet.write("out.parquet")`.
 
 ```julia
 Parquet.write("output.parquet", table;
-    codec=:zstd,
-    dictionary=true,
+    compress=:zstd,
     encoding=(id=:delta_binary_packed, measurement=:byte_stream_split),
     pageversion=:v2,
 )
 ```
 
+The defaults match pyarrow's: snappy compression, dictionary encoding, version 1 data
+pages, statistics and the page index, no page checksums, row groups of 1,048,576 rows,
+and data pages of at most 1 MiB or 20,000 rows. A column chunk is dictionary encoded
+while its dictionary stays under 1 MiB and makes the chunk's first page smaller;
+otherwise its values are written PLAIN. A `PooledArray` or `CategoricalArray` column
+writes the pool entries its rows use as the dictionary instead of hashing its values
+again.
+
 An encoding symbol or string applies to all columns. A `Pair`, `NamedTuple`, or
-dictionary supplies exact column-name overrides. Unlisted columns use PLAIN, or use
-adaptive dictionary encoding when `dictionary=true`.
+dictionary supplies exact column-name overrides, and an explicit encoding replaces
+dictionary encoding for that column.
+
+Row groups are encoded and written one at a time, so memory stays near the size of
+one row group. The column chunks of a row group are encoded on `ntasks` tasks
+(default `Threads.nthreads()`); the bytes written do not depend on `ntasks`. A path is
+written to a temporary file in the same directory and moved into place when writing
+finishes, so a failed write leaves an existing file intact. File and column key-value
+metadata come from the `metadata` and `colmetadata` keywords, or by default from the
+table's DataAPI metadata.
+
+### Write a file in parts
+
+`Parquet.Writer` writes one file from several tables, such as batches that do not fit
+in memory together. Each table becomes one or more row groups. Later tables must have
+the first table's column names, and their values must convert to its column types
+exactly. Every column is nullable unless `nullable=false`.
+
+```julia
+Parquet.Writer("output.parquet"; compress=:zstd) do writer
+    for batch in batches
+        Parquet.write(writer, batch)
+    end
+end
+```
+
+`Parquet.write` writes each partition of a `Tables.partitions` source the same way.
 
 Each column's element type decides its Parquet type:
 
@@ -128,9 +158,9 @@ value converts exactly, and strings of different types are written as STRING. Ot
 mixes, `nothing` values, and `Int128` or `BigInt` columns are errors that name the
 column.
 
-The writer reads each value of a scalar column once: a column that is not a `Vector`
-is first collected into one, so lazy or computed vectors are evaluated a single time.
-Changes made to a source while it is being written are not detected.
+The writer reads each value of a column once while encoding it and does not copy the
+column first. A column whose Parquet type depends on its values (`Parquet.Decimal` or decimals with a
+scale per value) is read once more to choose that type. Changes made to a source while it is being written are not detected.
 
 ## Nested columns
 
@@ -150,7 +180,7 @@ samples = Union{Missing,Vector{Union{Missing,Int32}}}[
 attrs = [Dict("a" => Int32(1)), Dict{String,Int32}(), Dict("b" => Int32(2))]
 
 io = IOBuffer()
-Parquet.write(io, (; profile, samples, attrs); codec=:zstd, pageversion=:v2)
+Parquet.write(io, (; profile, samples, attrs); compress=:zstd, pageversion=:v2)
 table = Parquet.Table(take!(io))
 columns = Tables.columntable(table)
 (
@@ -188,8 +218,10 @@ out. Reading one of them reports an unsupported feature rather than an invalid f
 
 ## Statistics
 
-The writer emits row-group statistics and a complete column-order declaration by
-default. Set `statistics=false` to omit both.
+The writer emits row-group statistics, a complete column-order declaration, and a page
+index (a column index of page bounds and an offset index of page locations) by default.
+Set `statistics=false` to omit the statistics, the column order, and the column index;
+set `pageindex=false` to omit the page index.
 
 ```julia
 Parquet.write("without-statistics.parquet", table; statistics=false)

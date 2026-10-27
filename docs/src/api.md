@@ -12,6 +12,7 @@ Parquet.File
 Parquet.read
 Parquet.metadata
 Parquet.write
+Parquet.Writer
 Parquet.Limits
 ```
 

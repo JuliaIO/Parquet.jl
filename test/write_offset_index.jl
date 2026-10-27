@@ -148,6 +148,7 @@ function oiinspect(bytes::Vector{UInt8}; pageindex::Bool=true)
         groups = []
         indexgroups = []
         physicalintervals = Tuple{Int64,Int64}[]
+        columnintervals = Tuple{Int64,Int64}[]
         indexintervals = Tuple{Int64,Int64}[]
         for group in metadata.row_groups
             frames = []
@@ -187,6 +188,10 @@ function oiinspect(bytes::Vector{UInt8}; pageindex::Bool=true)
                         only(dictionaries).offset
                 end
                 @test column.index_page_offset === nothing
+                chunk.column_index_offset === nothing ||
+                    push!(columnintervals, (Int64(chunk.column_index_offset),
+                        Int64(chunk.column_index_offset) +
+                            Int64(chunk.column_index_length)))
                 if pageindex
                     index, raw = oirawindex(bytes, file.footer.offset, chunk)
                     expected, rows = oiexpectedlocations(chunkframes, column,
@@ -217,12 +222,13 @@ function oiinspect(bytes::Vector{UInt8}; pageindex::Bool=true)
                     physicalintervals[index][1]
             end
             if pageindex
-                @test last(physicalintervals)[2] == first(indexintervals)[1]
-                for index in 2:length(indexintervals)
-                    @test indexintervals[index - 1][2] ==
-                        indexintervals[index][1]
+                # Column indexes, then offset indexes, follow the data contiguously.
+                sections = vcat(columnintervals, indexintervals)
+                @test last(physicalintervals)[2] == first(sections)[1]
+                for index in 2:length(sections)
+                    @test sections[index - 1][2] == sections[index][1]
                 end
-                @test last(indexintervals)[2] == file.footer.offset
+                @test last(sections)[2] == file.footer.offset
             else
                 @test last(physicalintervals)[2] == file.footer.offset
                 @test isempty(indexintervals)
@@ -748,7 +754,7 @@ end
         E[Date(2003, 1, 1)],
         E[Date(2004, 1, 1)],
     ])
-    v1 = Parquet._encodefile(nested; pageversion=:v1, pagesize=40,
+    v1 = Parquet._encodefile(nested; pageversion=:v1, pagesize=20,
         rowgroupsize=nothing, checksum=false)
     v1result = oiinspect(v1)
     @test [location.first_row_index for location in
@@ -759,7 +765,7 @@ end
         filter(oidatapage, v1result.groups[1][1])] == Int64[1, 2]
     oiroundtrip(v1, nested)
 
-    v2 = Parquet._encodefile(nested; pageversion=:v2, pagesize=40,
+    v2 = Parquet._encodefile(nested; pageversion=:v2, pagesize=20,
         rowgroupsize=nothing, checksum=false)
     result = oiinspect(v2)
     frames = filter(oidatapage, result.groups[1][1])
@@ -799,27 +805,21 @@ end
 end
 
 @testset "offset-index writer limits" begin
+    # max_page_index_bytes bounds each serialized index.
     probe = (; value=Int32.(1:64))
     indexed = Parquet._encodefile(probe; pagesize=4, checksum=false)
     metadata = oimetadata(indexed)
-    lengths = Int64[chunk.offset_index_length for group in
-        metadata.row_groups for chunk in group.columns]
-    total = sum(lengths; init=Int64(0))
-    @test total > 0
+    lengths = Int64[length for group in metadata.row_groups for chunk in group.columns
+        for length in (chunk.offset_index_length, chunk.column_index_length)]
+    largest = maximum(lengths)
     @test Parquet._encodefile(probe; pagesize=4, checksum=false,
-        limits=Parquet.Limits(max_page_index_bytes=total)) == indexed
+        limits=Parquet.Limits(max_page_index_bytes=largest)) == indexed
     writerlimit = oierror() do
         Parquet._encodefile(probe; pagesize=4, checksum=false,
-            limits=Parquet.Limits(max_page_index_bytes=total - 1))
+            limits=Parquet.Limits(max_page_index_bytes=largest - 1))
     end
     @test writerlimit isa Parquet.LimitError
     @test writerlimit.resource == :page_index_bytes
-
-    index = oiindexobjects(indexed)[1][1]
-    exact = Parquet._writeoffsetindexencodedsize(index)
-    encoded, cumulativebytes = Parquet._writeencodeoffsetindex(index,
-        Int64(0), Parquet.Limits())
-    @test length(encoded) == exact == cumulativebytes
 end
 
 @testset "offset-index public failure atomicity" begin
@@ -831,7 +831,8 @@ end
         Parquet.write(io, input; pagesize=4, limits=limits)
     end
     @test error isa Parquet.LimitError
-    @test isempty(take!(io))
+    # Row groups stream to an IO before the page index; a path stays untouched.
+    @test take!(io)[1:4] == Parquet.PARQUET_MAGIC
     mktempdir() do directory
         newpath = joinpath(directory, "new.parquet")
         error = oierror() do

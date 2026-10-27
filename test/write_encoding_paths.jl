@@ -32,8 +32,8 @@ end
     @test length(tablewide) == length(leaves)
     @test all(choice -> choice.encoding == MD.Encoding.PLAIN &&
         !choice.dictionary, tablewide)
-    @test_throws ArgumentError Parquet._writeencodingchoices(
-        leaves, :plain, true)
+    # An explicit table-wide encoding takes precedence over dictionary encoding.
+    @test Parquet._writeencodingchoices(leaves, :plain, true) == tablewide
 
     policies = Dict{Any,Any}(
         1 => :delta_binary_packed,

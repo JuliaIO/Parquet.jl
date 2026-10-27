@@ -53,7 +53,8 @@ function _nestedwritedepthadd(depth::Int, increment::Int, limits::Limits)
     return requested
 end
 
-function _nestedwritesplittype(declared::Type; key::Bool=false, path::String="")
+function _nestedwritesplittype(declared::Type; key::Bool=false, path::String="",
+        nullable::Bool=false)
     declared === Any && throw(ArgumentError(
         "Parquet field $(repr(path)) has element type Any; write a column with one " *
         "concrete element type"))
@@ -68,7 +69,7 @@ function _nestedwritesplittype(declared::Type; key::Bool=false, path::String="")
         end
         value_type === Nothing && throw(ArgumentError(
             "nothing is not a Parquet null value; use missing"))
-        return value_type, false
+        return value_type, nullable && !key
     end
     length(members) == 2 && Missing in members || throw(ArgumentError(
         "Parquet field $(repr(path)) has element type $declared; Parquet fields " *
@@ -118,26 +119,28 @@ function _nestedwritecheckconcrete(value_type::Type, label::AbstractString)
 end
 
 function _nestedwritelistshape(name::String, value_type::Type, optional::Bool,
-        elementtype::Type, source, limits::Limits, depth::Int, path::String)
+        elementtype::Type, source, limits::Limits, depth::Int, path::String,
+        nullable::Bool)
     element = _nestedwriteshape("element", elementtype, source, limits;
-        depth=_nestedwritedepthadd(depth, 2, limits), path="$path.element")
+        depth=_nestedwritedepthadd(depth, 2, limits), path="$path.element",
+        nullable=nullable)
     return _NestedWriteListShape(name, value_type, optional, element)
 end
 
 function _nestedwritemapshape(name::String, value_type::Type, optional::Bool,
         keytype::Type, valuetype::Type, keysource, valuesource, limits::Limits,
-        depth::Int, path::String)
+        depth::Int, path::String, nullable::Bool)
     childdepth = _nestedwritedepthadd(depth, 2, limits)
     key = _nestedwriteshape("key", keytype, keysource, limits; key=true,
         depth=childdepth, path="$path.key")
     value = _nestedwriteshape("value", valuetype, valuesource, limits;
-        depth=childdepth, path="$path.value")
+        depth=childdepth, path="$path.value", nullable=nullable)
     return _NestedWriteMapShape(name, value_type, optional, key, value)
 end
 
 function _nestedwritestructshape(name::String, value_type::Type,
         optional::Bool, names::Vector{String}, types, sources, limits::Limits,
-        depth::Int, path::String)
+        depth::Int, path::String, nullable::Bool)
     isempty(names) && throw(ArgumentError(
         "zero-field structs cannot be written to Parquet"))
     _checklimit(:container_elements, length(names),
@@ -148,24 +151,28 @@ function _nestedwritestructshape(name::String, value_type::Type,
     for index in eachindex(names)
         source = sources === nothing ? nothing : sources[index]
         push!(children, _nestedwriteshape(names[index], types[index], source,
-            limits; depth=childdepth, path="$path.$(names[index])"))
+            limits; depth=childdepth, path="$path.$(names[index])", nullable=nullable))
     end
     return _NestedWriteStructShape(name, value_type, optional, names, children)
 end
 
 """
-    _nestedwriteshape(name, declared, source, limits; key=false, depth=2, path=name)
+    _nestedwriteshape(name, declared, source, limits; key=false, depth=2, path=name,
+        nullable=false)
 
 Return the writer shape for a field of declared type `declared`. `source` is the vector
 that holds the field's values when it is a package vector (`StructVector`, `ListVector`,
 `MapVector`, `LogicalColumn`, `FixedByteArrayVector`), whose layout then decides the shape;
-otherwise `nothing`. `path` names the field in error messages.
+otherwise `nothing`. `path` names the field in error messages. With `nullable=true` every
+field is optional except map keys.
 """
 function _nestedwriteshape(name::String, declared::Type, source,
-        limits::Limits; key::Bool=false, depth::Int=2, path::String=name)
+        limits::Limits; key::Bool=false, depth::Int=2, path::String=name,
+        nullable::Bool=false)
     Base.@nospecialize declared source
     _checklimit(:metadata_depth, depth, limits.max_metadata_depth)
-    value_type, optional = _nestedwritesplittype(declared; key=key, path=path)
+    value_type, optional = _nestedwritesplittype(declared; key=key, path=path,
+        nullable=nullable)
     if source isa LogicalColumn
         key && optional && throw(ArgumentError(
             "Parquet MAP key types cannot include Missing"))
@@ -177,27 +184,27 @@ function _nestedwriteshape(name::String, declared::Type, source,
         return _nestedwriteleafshape(name, value_type, optional;
             fixed_width=source.width)
     elseif source isa StructVector
-        (source.ranks !== nothing) == optional || throw(ArgumentError(
+        (source.ranks !== nothing) == (Missing <: declared) || throw(ArgumentError(
             "StructVector validity does not match its declared element type"))
         types = Type[eltype(child) for child in source.children]
         return _nestedwritestructshape(name, StructValue, optional,
-            copy(source.names), types, copy(source.children), limits, depth, path)
+            copy(source.names), types, copy(source.children), limits, depth, path, nullable)
     elseif source isa ListVector
-        (source.validity !== nothing) == optional || throw(ArgumentError(
+        (source.validity !== nothing) == (Missing <: declared) || throw(ArgumentError(
             "ListVector validity does not match its declared element type"))
         return _nestedwritelistshape(name, value_type, optional,
-            eltype(source.values), source.values, limits, depth, path)
+            eltype(source.values), source.values, limits, depth, path, nullable)
     elseif source isa MapVector
-        (source.validity !== nothing) == optional || throw(ArgumentError(
+        (source.validity !== nothing) == (Missing <: declared) || throw(ArgumentError(
             "MapVector validity does not match its declared element type"))
         values = source.values
         return _nestedwritemapshape(name, value_type, optional,
             eltype(source.keys), values === nothing ? Missing : eltype(values),
-            source.keys, values, limits, depth, path)
+            source.keys, values, limits, depth, path, nullable)
     elseif value_type <: ListValue
         _nestedwritecheckconcrete(value_type, "Parquet list view type")
         return _nestedwritelistshape(name, value_type, optional,
-            eltype(value_type), nothing, limits, depth, path)
+            eltype(value_type), nothing, limits, depth, path, nullable)
     elseif _nestedwriteisscalar(value_type)
         value_type === Missing || _nestedwritecheckconcrete(value_type,
             "Parquet scalar type")
@@ -209,7 +216,7 @@ function _nestedwriteshape(name::String, declared::Type, source,
         _nestedwritecheckconcrete(value_type, "Parquet struct type")
         names = String[String(field) for field in fieldnames(value_type)]
         return _nestedwritestructshape(name, value_type, optional, names,
-            fieldtypes(value_type), nothing, limits, depth, path)
+            fieldtypes(value_type), nothing, limits, depth, path, nullable)
     elseif value_type <: MapValue
         _nestedwritecheckconcrete(value_type, "Parquet map view type")
         pairtype = eltype(value_type)
@@ -217,16 +224,16 @@ function _nestedwriteshape(name::String, declared::Type, source,
             "MapValue has no concrete key and value types"))
         return _nestedwritemapshape(name, value_type, optional,
             pairtype.parameters[1], pairtype.parameters[2], nothing, nothing,
-            limits, depth, path)
+            limits, depth, path, nullable)
     elseif value_type <: AbstractDict
         _nestedwritecheckconcrete(value_type, "Parquet map type")
         return _nestedwritemapshape(name, value_type, optional,
             Base.keytype(value_type), Base.valtype(value_type), nothing,
-            nothing, limits, depth, path)
+            nothing, limits, depth, path, nullable)
     elseif value_type <: AbstractVector
         _nestedwritecheckconcrete(value_type, "Parquet list type")
         return _nestedwritelistshape(name, value_type, optional,
-            eltype(value_type), nothing, limits, depth, path)
+            eltype(value_type), nothing, limits, depth, path, nullable)
     end
     throw(_writeunsupported(value_type, path))
 end
@@ -575,8 +582,8 @@ end
 # logical kind and `V` the type its present values must have. STRING and ENUM values
 # are kept as strings; other BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY values are copied.
 struct _NestedWriteLeaf{T,K,V,M}
-    repetition::Vector{UInt64}
-    definition::Vector{UInt64}
+    repetition::Vector{UInt16}
+    definition::Vector{UInt16}
     values::Vector{T}
     element::Metadata.SchemaElement
     kind::K
@@ -608,7 +615,7 @@ function _nestedwriteleaf(plan::_NestedLeafPlan, value_type::Type,
     T = map !== nothing ? _writephysicaltype(map) :
         kind in (:string, :enum) && value_type <: AbstractString &&
         isconcretetype(value_type) ? value_type : _physicaleltype(element.type_)
-    return _NestedWriteLeaf{T,typeof(kind),value_type,typeof(map)}(UInt64[], UInt64[],
+    return _NestedWriteLeaf{T,typeof(kind),value_type,typeof(map)}(UInt16[], UInt16[],
         T[], element, kind, limits, map)
 end
 
@@ -645,8 +652,8 @@ function _nestedwritephysical(leaf::_NestedWriteLeaf{T}, value) where {T}
     return _nestedwritephysical(leaf.kind, leaf.element, value, leaf.limits)
 end
 
-function _nestedwritemarker!(leaf::_NestedWriteLeaf, repetition::UInt64,
-        definition::UInt64)
+function _nestedwritemarker!(leaf::_NestedWriteLeaf, repetition::UInt16,
+        definition::UInt16)
     push!(leaf.repetition, repetition)
     push!(leaf.definition, definition)
     return
@@ -659,19 +666,19 @@ struct _NestedWriteNode
     value_type::Type
     children::Vector{_NestedWriteNode}
     leaves::UnitRange{Int32}
-    absent::UInt64
-    present::UInt64
+    absent::UInt16
+    present::UInt16
 end
 
 function _NestedWriteNode(plan::_NestedPlan, value_type::Type,
         children::Vector{_NestedWriteNode})
     return _NestedWriteNode(plan, value_type, children,
-        getfield(plan, :leaf_range), UInt64(getfield(plan, :parent_definition)),
-        UInt64(getfield(plan, :present_definition)))
+        getfield(plan, :leaf_range), UInt16(getfield(plan, :parent_definition)),
+        UInt16(getfield(plan, :present_definition)))
 end
 
 function _nestedwritemissing!(leaves::Vector{Any}, node::_NestedWriteNode,
-        repetition::UInt64)
+        repetition::UInt16)
     node.absent == node.present && _nestedwriterequirederror(node)
     for index in node.leaves
         _nestedwritemarker!(leaves[Int(index)], repetition, node.absent)
@@ -680,7 +687,7 @@ function _nestedwritemissing!(leaves::Vector{Any}, node::_NestedWriteNode,
 end
 
 function _nestedwritepresent!(leaves::Vector{Any}, node::_NestedWriteNode,
-        repetition::UInt64)
+        repetition::UInt16)
     for index in node.leaves
         _nestedwritemarker!(leaves[Int(index)], repetition, node.present)
     end
@@ -693,7 +700,7 @@ function _nestedwriterequirederror(node::_NestedWriteNode)
 end
 
 function _nestedwritepush!(leaf::_NestedWriteLeaf{T,K,V}, node::_NestedWriteNode,
-        value, repetition::UInt64) where {T,K,V}
+        value, repetition::UInt16) where {T,K,V}
     if ismissing(value)
         node.absent == node.present && _nestedwriterequirederror(node)
         _nestedwritemarker!(leaf, repetition, node.absent)
@@ -714,7 +721,7 @@ function _nestedwriteleafof(leaves::Vector{Any}, node::_NestedWriteNode)
 end
 
 function _nestedwriteshred!(leaves::Vector{Any}, node::_NestedWriteNode, value,
-        repetition::UInt64)
+        repetition::UInt16)
     plan = node.plan
     if plan isa _NestedLeafPlan
         _nestedwritepush!(_nestedwriteleafof(leaves, node), node, value,
@@ -744,7 +751,7 @@ function _nestedwriteshred!(leaves::Vector{Any}, node::_NestedWriteNode, value,
             return
         end
         element = only(node.children)
-        repeated = UInt64(plan.repetition_level)
+        repeated = UInt16(plan.repetition_level)
         if element.plan isa _NestedLeafPlan
             _nestedwritepushitems!(_nestedwriteleafof(leaves, element), element,
                 items, indices, repetition, repeated)
@@ -764,7 +771,7 @@ end
 # Consecutive entries of one repeated leaf: the first continues the parent's repetition
 # level, the rest repeat at the list's level.
 function _nestedwritepushitems!(leaf::_NestedWriteLeaf, node::_NestedWriteNode,
-        items, indices, repetition::UInt64, repeated::UInt64)
+        items, indices, repetition::UInt16, repeated::UInt16)
     for index in indices
         _nestedwritepush!(leaf, node, items[index], repetition)
         repetition = repeated
@@ -773,7 +780,7 @@ function _nestedwritepushitems!(leaf::_NestedWriteLeaf, node::_NestedWriteNode,
 end
 
 function _nestedwriteshredmap!(leaves::Vector{Any}, node::_NestedWriteNode,
-        plan::_NestedMapPlan, value, repetition::UInt64)
+        plan::_NestedMapPlan, value, repetition::UInt16)
     count = value isa MapValue ? value.last - value.first + 1 :
         length(_nestedwritepairs(value))
     if iszero(count)
@@ -782,7 +789,7 @@ function _nestedwriteshredmap!(leaves::Vector{Any}, node::_NestedWriteNode,
     end
     key = node.children[1]
     item = length(node.children) == 2 ? node.children[2] : nothing
-    repeated = UInt64(plan.repetition_level)
+    repeated = UInt16(plan.repetition_level)
     if key.plan isa _NestedLeafPlan && (item === nothing || item.plan isa _NestedLeafPlan)
         # Leaf keys and values take one typed loop.
         keyleaf = _nestedwriteleafof(leaves, key)
@@ -818,7 +825,7 @@ function _nestedwritekeycheck(key, node::_NestedWriteNode)
 end
 
 function _nestedwriteshredentry!(leaves::Vector{Any}, key::_NestedWriteNode,
-        item, entrykey, entryvalue, repetition::UInt64)
+        item, entrykey, entryvalue, repetition::UInt16)
     _nestedwritekeycheck(entrykey, key)
     _nestedwriteshred!(leaves, key, entrykey, repetition)
     item === nothing || _nestedwriteshred!(leaves, item, entryvalue, repetition)
@@ -826,8 +833,8 @@ function _nestedwriteshredentry!(leaves::Vector{Any}, key::_NestedWriteNode,
 end
 
 function _nestedwritepushentries!(keyleaf::_NestedWriteLeaf, key::_NestedWriteNode,
-        itemleaf, item, keys, values, indices, repetition::UInt64,
-        repeated::UInt64)
+        itemleaf, item, keys, values, indices, repetition::UInt16,
+        repeated::UInt16)
     for index in indices
         entrykey = keys[index]
         _nestedwritekeycheck(entrykey, key)
@@ -840,8 +847,8 @@ function _nestedwritepushentries!(keyleaf::_NestedWriteLeaf, key::_NestedWriteNo
 end
 
 function _nestedwritepushentries!(keyleaf::_NestedWriteLeaf, key::_NestedWriteNode,
-        itemleaf, item, pairs::AbstractDict, repetition::UInt64,
-        repeated::UInt64)
+        itemleaf, item, pairs::AbstractDict, repetition::UInt16,
+        repeated::UInt16)
     for pair in pairs
         _nestedwritekeycheck(pair.first, key)
         _nestedwritepush!(keyleaf, key, pair.first, repetition)
@@ -860,11 +867,11 @@ function _nestedwriteshredcolumn!(leaves::Vector{Any}, node::_NestedWriteNode,
         sizehint!(leaf.repetition, length(column))
         sizehint!(leaf.definition, length(column))
         _nestedwritepushitems!(leaf, node, column, eachindex(column),
-            UInt64(0), UInt64(0))
+            UInt16(0), UInt16(0))
         return
     end
     for value in column
-        _nestedwriteshred!(leaves, node, value, UInt64(0))
+        _nestedwriteshred!(leaves, node, value, UInt16(0))
     end
     return
 end
@@ -883,6 +890,34 @@ function _nestedwriteleaves(semantic::_NestedSchemaPlan,
     foreach(collect, nodes)
     return Any[_nestedwriteleaf(semantic.leaves[index], types[index], limits)
         for index in eachindex(semantic.leaves)]
+end
+
+function _nestedwriteleaftypes!(types::Vector{Type}, node::_NestedWriteNode)
+    if node.plan isa _NestedLeafPlan
+        types[Int(first(node.leaves))] = node.value_type
+    else
+        foreach(child -> _nestedwriteleaftypes!(types, child), node.children)
+    end
+    return types
+end
+
+"""
+    _nestedwriterows(semantic, node, column, limits) -> Vector{Any}
+
+Shred every value of `column`, the rows of one top-level field bound to `node`, into fresh
+level streams and dense values for the field's leaves, in schema order.
+"""
+function _nestedwriterows(semantic::_NestedSchemaPlan, node::_NestedWriteNode,
+        column::AbstractVector, limits::Limits)
+    count = length(semantic.leaves)
+    leaves = Vector{Any}(undef, count)
+    types = _nestedwriteleaftypes!(Vector{Type}(undef, count), node)
+    for index in node.leaves
+        leaves[Int(index)] = _nestedwriteleaf(semantic.leaves[Int(index)],
+            types[Int(index)], limits)
+    end
+    _nestedwriteshredcolumn!(leaves, node, column)
+    return Any[leaves[Int(index)] for index in node.leaves]
 end
 
 function _nestedwriteshredall(semantic::_NestedSchemaPlan,
@@ -1115,17 +1150,4 @@ function _provenancewritefields(table::Table, limits::Limits, encoding,
     fragments = (Metadata.SchemaElement[] for _ in children)
     fields = _nestedwritefinishfields(fragments, semantic, leaves, rows)
     return _ProvenanceWriteFields(fields, elements, schema), rows
-end
-
-function _writeplanleaves(fields::_ProvenanceWriteFields, schema::Schema,
-        rows::Int, limits::Limits)
-    return _writeplanleaves(fields.fields, schema, rows, limits)
-end
-
-function _writeplan(fields::_ProvenanceWriteFields, rows::Int, limits::Limits)
-    rows >= 0 || throw(ArgumentError("Parquet row count must be nonnegative"))
-    leaves = _writeplanleaves(fields.fields, fields.schema, rows, limits)
-    rowgroups = iszero(rows) ? WriteRowGroupPlan[] :
-        WriteRowGroupPlan[WriteRowGroupPlan(rows, leaves)]
-    return WritePlan(fields.elements, fields.schema, rows, rowgroups)
 end

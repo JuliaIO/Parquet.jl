@@ -18,7 +18,7 @@ metadata, except the entries that describe the source's schema (`ARROW:schema`,
 `pandas`, Spark's row metadata), which a selection or rename would make stale. The nested implementation reads and writes recursive structs, lists, and
 maps, including null containers, empty containers, and null elements. The reader also
 handles the legacy list and map layouts covered by the pinned Apache corpus. The
-writer emits row-group statistics and offset indexes by default; the reader does not
+writer emits row-group statistics, column indexes, and offset indexes by default; the reader does not
 use page indexes yet. `Parquet.Table(path; scan=Tables.Scan(...))` reads only the
 columns a scan needs. Filter pushdown, datasets, bloom filters, encryption, Variant,
 and geospatial modules remain target work. LZO is not
@@ -28,15 +28,14 @@ timestamps are read but not written, because the type is deprecated in the forma
 preserves their runtime width across later writes.
 
 ```julia
-Parquet.write("output.parquet", table; codec=:zstd, dictionary=true,
+Parquet.write("output.parquet", table; compress=:zstd,
     encoding=(id=:delta_binary_packed, measurement=:byte_stream_split),
-    pageversion=:v2, statistics=true)
+    pageversion=:v2)
 ```
 
 An `encoding` Symbol or string applies to every column. A `Pair`, `NamedTuple`, or
-dictionary supplies exact column-name overrides. Unlisted columns remain PLAIN, or
-use adaptive dictionary encoding when `dictionary=true`. Use `:dictionary` for an
-adaptive dictionary override on one column.
+dictionary supplies exact column-name overrides. Unlisted columns use dictionary
+encoding while it pays off (`dictionary=true`, the default), otherwise PLAIN.
 
 The writer emits row-group statistics by default. Set `statistics=false` to omit
 them. `Parquet.Limits(max_statistics_value_bytes=4096)` limits each raw minimum or

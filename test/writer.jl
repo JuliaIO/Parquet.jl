@@ -1,0 +1,207 @@
+using Test
+using Dates
+import Tables
+import DataAPI
+using PooledArrays, CategoricalArrays
+
+const WRMD = Parquet.Metadata
+
+function wrmetadata(bytes::Vector{UInt8})
+    file = Parquet.File(bytes)
+    try
+        return Parquet.Thrift.decode(copy(file.footer.bytes), WRMD.FileMetaData)
+    finally
+        close(file)
+    end
+end
+
+function wrcolumn(bytes::Vector{UInt8}, name::Symbol)
+    table = Parquet.Table(bytes)
+    try
+        return collect(Tables.getcolumn(Tables.columns(table), name))
+    finally
+        close(table)
+    end
+end
+
+# A table with DataAPI file and column metadata.
+struct WRMetaTable
+    columns::NamedTuple
+    metadata::Dict{String,String}
+    colmetadata::Dict{Symbol,Dict{String,String}}
+end
+Tables.istable(::Type{WRMetaTable}) = true
+Tables.columnaccess(::Type{WRMetaTable}) = true
+Tables.columns(table::WRMetaTable) = table.columns
+DataAPI.metadatasupport(::Type{WRMetaTable}) = (read=true, write=false)
+DataAPI.metadatakeys(table::WRMetaTable) = keys(table.metadata)
+DataAPI.metadata(table::WRMetaTable, key::AbstractString; style::Bool=false) =
+    table.metadata[key]
+DataAPI.colmetadatasupport(::Type{WRMetaTable}) = (read=true, write=false)
+DataAPI.colmetadatakeys(table::WRMetaTable, column::Symbol) =
+    keys(get(table.colmetadata, column, Dict{String,String}()))
+DataAPI.colmetadata(table::WRMetaTable, column::Symbol, key::AbstractString;
+    style::Bool=false) = table.colmetadata[column][key]
+
+@testset "Writer appends tables as row groups" begin
+    io = IOBuffer()
+    writer = Parquet.Writer(io; rowgroupsize=2)
+    @test Parquet.write(writer, (id=[1, 2, 3], name=["a", "b", "c"])) === writer
+    # Later tables convert exactly; columns are nullable by default.
+    Parquet.write(writer, (id=Int32[4], name=[missing]))
+    @test occursin("4 rows in 3 row groups", sprint(show, writer))
+    close(writer)
+    close(writer)
+    bytes = take!(io)
+    metadata = wrmetadata(bytes)
+    @test [group.num_rows for group in metadata.row_groups] == [2, 1, 1]
+    @test all(element -> element.repetition_type == WRMD.FieldRepetitionType.OPTIONAL,
+        metadata.schema[2:end])
+    @test wrcolumn(bytes, :id) == [1, 2, 3, 4]
+    @test isequal(wrcolumn(bytes, :name), ["a", "b", "c", missing])
+    @test_throws "closed" Parquet.write(writer, (id=[5], name=["e"]))
+    @test_throws "Int64(1.5)" Parquet.Writer(IOBuffer()) do w
+        Parquet.write(w, (id=[1],))
+        Parquet.write(w, (id=[1.5],))
+    end
+    @test_throws "but the file's column 1 is" Parquet.Writer(IOBuffer()) do w
+        Parquet.write(w, (id=[1],))
+        Parquet.write(w, (other=[1],))
+    end
+    @test_throws "no schema" close(Parquet.Writer(IOBuffer()))
+    # nullable=false keeps the first table's nullability.
+    @test_throws "missing values but its Parquet field is required" Parquet.Writer(
+            IOBuffer(); nullable=false) do w
+        Parquet.write(w, (id=[1],))
+        Parquet.write(w, (id=[missing],))
+    end
+end
+
+@testset "Writer to a path replaces the file only when it closes" begin
+    mktempdir() do directory
+        path = joinpath(directory, "out.parquet")
+        write(path, "previous")
+        @test Parquet.Writer(path) do writer
+            Parquet.write(writer, (value=[1, 2],))
+            @test read(path, String) == "previous"
+        end == path
+        @test wrcolumn(read(path), :value) == [1, 2]
+        @test_throws ErrorException Parquet.Writer(path) do writer
+            Parquet.write(writer, (value=[3],))
+            error("stop")
+        end
+        @test wrcolumn(read(path), :value) == [1, 2]
+        @test readdir(directory) == ["out.parquet"]
+    end
+end
+
+@testset "write metadata keywords and DataAPI defaults" begin
+    table = WRMetaTable((id=[1, 2], name=["a", "b"]),
+        Dict("source" => "test", "ARROW:schema" => "stale"),
+        Dict(:name => Dict("unit" => "none")))
+    metadata = wrmetadata(take!(Parquet.write(IOBuffer(), table)))
+    @test [(item.key, item.value) for item in metadata.key_value_metadata] ==
+        [("source", "test")]
+    chunks = metadata.row_groups[1].columns
+    @test chunks[1].meta_data.key_value_metadata === nothing
+    @test [(item.key, item.value) for item in chunks[2].meta_data.key_value_metadata] ==
+        [("unit", "none")]
+    explicit = wrmetadata(take!(Parquet.write(IOBuffer(), (id=[1],);
+        metadata=Dict("a" => 1), colmetadata=(id=("b" => "c",),))))
+    @test [(item.key, item.value) for item in explicit.key_value_metadata] == [("a", "1")]
+    @test [(item.key, item.value) for item in
+        explicit.row_groups[1].columns[1].meta_data.key_value_metadata] == [("b", "c")]
+    @test_throws "reserved" Parquet.write(IOBuffer(), (id=[1],);
+        metadata=Dict("ARROW:schema" => "x"))
+    @test_throws "not a column" Parquet.write(IOBuffer(), (id=[1],);
+        colmetadata=(other=("b" => "c",),))
+end
+
+@testset "pooled columns write dictionary pages from their pool" begin
+    pooled = PooledArray(repeat(["b", "a", missing, "c"], 50))
+    category = categorical(repeat(["red", missing, "blue"], 67)[1:200])
+    integers = PooledArray(repeat([30, 10, 20, 10], 50))
+    bytes = take!(Parquet.write(IOBuffer(), (pooled=pooled, category=category,
+        integers=integers)))
+    @test isequal(wrcolumn(bytes, :pooled), collect(pooled))
+    @test isequal(wrcolumn(bytes, :category),
+        [ismissing(value) ? missing : String(value) for value in category])
+    @test wrcolumn(bytes, :integers) == collect(integers)
+    metadata = wrmetadata(bytes)
+    for (chunk, (lo, hi)) in zip(metadata.row_groups[1].columns,
+            (("a", "c"), ("blue", "red"), (10, 30)))
+        meta = chunk.meta_data
+        @test meta.dictionary_page_offset !== nothing
+        @test WRMD.Encoding.RLE_DICTIONARY in meta.encodings
+        bounds = (meta.statistics.min_value, meta.statistics.max_value)
+        if lo isa Integer
+            @test reinterpret(Int64, bounds[1])[1] == lo
+            @test reinterpret(Int64, bounds[2])[1] == hi
+        else
+            @test String(copy(bounds[1])) == lo && String(copy(bounds[2])) == hi
+        end
+    end
+    # Pooled columns follow `dictionary` and explicit encodings like any other.
+    plain = wrmetadata(take!(Parquet.write(IOBuffer(), (pooled=pooled,); dictionary=false)))
+    @test plain.row_groups[1].columns[1].meta_data.dictionary_page_offset === nothing
+end
+
+@testset "deprecated write keyword names" begin
+    table = (value=[1, 2, 3],)
+    @test (@test_deprecated Parquet.write(IOBuffer(), table; codec=:zstd)) isa IOBuffer
+    @test wrmetadata(take!(Parquet.write(IOBuffer(), table; codec=:zstd,
+        compressionlevel=5))).row_groups[1].columns[1].meta_data.codec ==
+        WRMD.CompressionCodec.ZSTD
+end
+
+# Every page's ColumnIndex bounds and null counts agree with the page's rows.
+function wrcheckcolumnindex(bytes::Vector{UInt8}, values::AbstractVector, column::Int,
+        decode)
+    file = Parquet.File(bytes)
+    metadata = Parquet.Thrift.decode(copy(file.footer.bytes), WRMD.FileMetaData)
+    offset = 0
+    for group in metadata.row_groups
+        chunk = group.columns[column]
+        index = Parquet.Thrift.decode(bytes[(chunk.column_index_offset + 1):(chunk.column_index_offset + chunk.column_index_length)], WRMD.ColumnIndex)
+        locations = Parquet.Thrift.decode(bytes[(chunk.offset_index_offset + 1):(chunk.offset_index_offset + chunk.offset_index_length)], WRMD.OffsetIndex).page_locations
+        starts = [location.first_row_index for location in locations]
+        stops = vcat(starts[2:end], group.num_rows)
+        for (page, (start, stop)) in enumerate(zip(starts, stops))
+            rows = values[(offset + start + 1):(offset + stop)]
+            present = filter(value -> !ismissing(value) &&
+                !(value isa AbstractFloat && isnan(value)), rows)
+            @test index.null_counts[page] == count(ismissing, rows)
+            @test index.null_pages[page] == all(ismissing, rows)
+            isempty(present) && continue
+            @test decode(index.min_values[page]) == minimum(present)
+            @test decode(index.max_values[page]) == maximum(present)
+        end
+        offset += group.num_rows
+    end
+    close(file)
+    return
+end
+
+@testset "ColumnIndex bounds match each page" begin
+    rows = 50_000
+    integers = [isodd(row) ? missing : (row * 7919) % 1000 - 500 for row in 1:rows]
+    floats = [row % 9 == 0 ? NaN : sin(row) for row in 1:rows]
+    strings = ["s$(lpad(row % 997, 4, '0'))" for row in 1:rows]
+    sorted = collect(1:rows)
+    table = (integers=integers, floats=floats, strings=strings, sorted=sorted)
+    for options in ((;), (pageversion=:v2, compress=:zstd), (dictionary=false,
+            rowgroupsize=17_000))
+        bytes = take!(Parquet.write(IOBuffer(), table; options...))
+        int(bytes) = reinterpret(Int64, bytes)[1]
+        wrcheckcolumnindex(bytes, integers, 1, int)
+        wrcheckcolumnindex(bytes, floats, 2, bytes -> reinterpret(Float64, bytes)[1])
+        wrcheckcolumnindex(bytes, strings, 3, bytes -> String(copy(bytes)))
+        wrcheckcolumnindex(bytes, sorted, 4, int)
+        metadata = wrmetadata(bytes)
+        file = Parquet.File(bytes)
+        chunk = metadata.row_groups[1].columns[4]
+        index = Parquet.Thrift.decode(bytes[(chunk.column_index_offset + 1):(chunk.column_index_offset + chunk.column_index_length)], WRMD.ColumnIndex)
+        @test index.boundary_order == WRMD.BoundaryOrder.ASCENDING
+        close(file)
+    end
+end

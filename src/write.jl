@@ -9,8 +9,8 @@ struct WriteColumn{V}
     logical::Union{Nothing, Metadata.LogicalType}
     converted::Union{Nothing, Metadata.ConvertedType.T}
     path::Vector{String}
-    repetitions::Union{Nothing,AbstractVector{UInt64}}
-    definitions::Union{Nothing,AbstractVector{UInt64}}
+    repetitions::Union{Nothing,AbstractVector{<:Unsigned}}
+    definitions::Union{Nothing,AbstractVector{<:Unsigned}}
     max_repetition_level::Int16
     max_definition_level::Int16
     rows::Int
@@ -33,36 +33,6 @@ end
 
 function WriteLeafPlan(ordinal::Int32, path::Vector{String}, column::WriteColumn)
     return WriteLeafPlan(ordinal, path, column, Int64[], Int64[], Int64[])
-end
-
-struct WriteRowGroupPlan
-    rows::Int
-    leaves::Vector{WriteLeafPlan}
-end
-
-struct WritePlan
-    elements::Vector{Metadata.SchemaElement}
-    schema::Schema
-    rows::Int
-    rowgroups::Vector{WriteRowGroupPlan}
-end
-
-struct ColumnPages
-    bytes::Vector{UInt8}
-    uncompressed_size::Int64
-    data_offset::Int64
-    dictionary_offset::Union{Nothing,Int64}
-    encodings::Vector{Metadata.Encoding.T}
-    encoding_stats::Vector{Metadata.PageEncodingStats}
-    page_locations::Vector{Metadata.PageLocation}
-end
-
-function ColumnPages(bytes::Vector{UInt8}, uncompressed_size::Int64,
-        data_offset::Int64, dictionary_offset::Union{Nothing,Int64},
-        encodings::Vector{Metadata.Encoding.T},
-        encoding_stats::Vector{Metadata.PageEncodingStats})
-    return ColumnPages(bytes, uncompressed_size, data_offset,
-        dictionary_offset, encodings, encoding_stats, Metadata.PageLocation[])
 end
 
 struct WriteEncodingChoice
@@ -386,10 +356,50 @@ function _writeinputcolumns(table, limits::Limits)
 end
 
 # A column whose element type is abstract, a Union of several types, or a wrapper such
-# as CategoricalValue is narrowed from its values to one concrete element type.
+# as CategoricalValue is narrowed from its values to one concrete element type. Pooled
+# columns (PooledArray, CategoricalArray) stay pooled so their pool becomes the
+# dictionary.
 function _writeinputcolumn(name::String, values::AbstractVector)
+    pooled = _pooledcolumn(values)
+    pooled === nothing || return pooled
     _writedeclared(eltype(values)) && return values
     return _narrowwritecolumn(name, values)
+end
+
+"""
+    _PooledColumn{T}
+
+A pooled column (`DataAPI.refpool` is not `nothing`) seen through `DataAPI.unwrap`, with
+element type `T`: the unwrapped values, and `Missing` when the pool holds `missing`.
+"""
+struct _PooledColumn{T,V<:AbstractVector,R<:AbstractVector,P} <: AbstractVector{T}
+    values::V
+    refs::R
+    pool::P
+end
+
+Base.size(column::_PooledColumn) = size(column.values)
+Base.IndexStyle(::Type{<:_PooledColumn}) = IndexLinear()
+Base.@propagate_inbounds Base.getindex(column::_PooledColumn{T}, index::Int) where {T} =
+    DataAPI.unwrap(column.pool[column.refs[index]])::T
+
+function _pooledcolumn(values::AbstractVector)
+    values isa _PooledColumn && return values
+    pool = DataAPI.refpool(values)
+    pool === nothing && return nothing
+    refs = DataAPI.refarray(values)
+    refs === values && return nothing
+    T = Union{}
+    nulls = false
+    for ref in axes(pool, 1)
+        value = DataAPI.unwrap(pool[ref])
+        value === missing ? (nulls = true) : (T = typejoin(T, typeof(value)))
+    end
+    T === Union{} && return nothing
+    (isconcretetype(T) && _writemap(T) !== nothing) || return nothing
+    nulls |= Missing <: eltype(values)
+    E = nulls ? Union{Missing,T} : T
+    return _PooledColumn{E,typeof(values),typeof(refs),typeof(pool)}(values, refs, pool)
 end
 
 function _writedeclared(T::Type)
@@ -540,72 +550,6 @@ function _writefields(table, limits::Limits)
     return _writefieldsencoded(table, limits, nothing, false)
 end
 
-function _presentvalues(column::WriteColumn, ::Type{T}) where {T}
-    output = T[]
-    sizehint!(output, length(column.values))
-    for value in column.values
-        ismissing(value) && continue
-        push!(output, convert(T, value))
-    end
-    return output
-end
-
-function _plainbytearray(column::WriteColumn, limits::Limits)
-    output = UInt8[]
-    for value in column.values
-        ismissing(value) && continue
-        bytes = value isa AbstractString ? codeunits(value) : value
-        _checklimit(:string_bytes, length(bytes), limits.max_string_bytes)
-        length(bytes) <= typemax(Int32) || throw(ArgumentError("byte array exceeds Int32 length"))
-        requested = Base.checked_add(length(output), Base.checked_add(4, length(bytes)))
-        _checklimit(:page_bytes, requested, limits.max_page_bytes)
-        _writelittle!(output, reinterpret(UInt32, Int32(length(bytes))))
-        append!(output, bytes)
-    end
-    return output
-end
-
-function _presentfixed(column::WriteColumn, limits::Limits)
-    width = column.type_length
-    width === nothing && throw(ArgumentError("fixed byte-array column has no width"))
-    fixedwidth = Int(width)
-    _checklimit(:string_bytes, fixedwidth, limits.max_string_bytes)
-    present = length(column.values) - count(ismissing, column.values)
-    total = Base.checked_mul(Int64(fixedwidth), Int64(present))
-    _checklimit(:page_bytes, total, limits.max_page_bytes)
-    output = Matrix{UInt8}(undef, fixedwidth, present)
-    columnindex = 0
-    for value in column.values
-        ismissing(value) && continue
-        _checkfixedvalue(value, width)
-        columnindex += 1
-        @inbounds for byteindex in 1:fixedwidth
-            output[byteindex, columnindex] = value[byteindex]
-        end
-    end
-    return output
-end
-
-function _plainpayload(column::WriteColumn, limits::Limits)
-    T = Base.nonmissingtype(eltype(column.values))
-    if column.physical == Metadata.Type.BOOLEAN
-        return encode_plain(_presentvalues(column, Bool))
-    elseif column.physical == Metadata.Type.INT32
-        return encode_plain(_presentvalues(column, Int32))
-    elseif column.physical == Metadata.Type.INT64
-        return encode_plain(_presentvalues(column, Int64))
-    elseif column.physical == Metadata.Type.FLOAT
-        return encode_plain(_presentvalues(column, Float32))
-    elseif column.physical == Metadata.Type.DOUBLE
-        return encode_plain(_presentvalues(column, Float64))
-    elseif column.physical == Metadata.Type.FIXED_LEN_BYTE_ARRAY
-        return encode_plain_fixed(_presentfixed(column, limits))
-    elseif T <: AbstractString || T <: AbstractVector{UInt8}
-        return _plainbytearray(column, limits)
-    end
-    throw(ArgumentError("unsupported PLAIN writer physical type $(column.physical)"))
-end
-
 function _writeencoding(::Nothing)
     return nothing
 end
@@ -728,8 +672,7 @@ end
 
 function _writeencodingchoices(columns::Vector{WriteColumn}, encoding::Union{
         Symbol,AbstractString,Metadata.Encoding.T}, dictionary::Bool)
-    dictionary && throw(ArgumentError(
-        "dictionary=true conflicts with a table-wide encoding; use :dictionary or a per-column mapping"))
+    # An explicit encoding takes precedence over the dictionary default.
     choice = _writeencodingchoice(encoding)
     foreach(column -> _validatewriteencodingchoice(column, choice), columns)
     return fill(choice, length(columns))
@@ -877,8 +820,7 @@ end
 
 function _writeencodingchoices(leaves::Vector{WriteLeafPlan}, encoding::Union{
         Symbol,AbstractString,Metadata.Encoding.T}, dictionary::Bool)
-    dictionary && throw(ArgumentError(
-        "dictionary=true conflicts with a table-wide encoding; use :dictionary or a per-column mapping"))
+    # An explicit encoding takes precedence over the dictionary default.
     choice = _writeencodingchoice(encoding)
     foreach(leaf -> _validatewriteencodingchoice(leaf.column, choice), leaves)
     return fill(choice, length(leaves))
@@ -929,115 +871,6 @@ function _validatewriteencoding(column::WriteColumn, encoding::Metadata.Encoding
         "with physical type $physical"))
 end
 
-function _presentbytearrays(column::WriteColumn, limits::Limits)
-    T = Base.nonmissingtype(eltype(column.values))
-    output = T[]
-    sizehint!(output, length(column.values))
-    total = Int64(0)
-    for value in column.values
-        ismissing(value) && continue
-        bytes = value isa AbstractString ? codeunits(value) : value
-        _checklimit(:string_bytes, length(bytes), limits.max_string_bytes)
-        length(bytes) <= typemax(Int32) || throw(ArgumentError("byte array exceeds Int32 length"))
-        total = try
-            Base.checked_add(total, Int64(length(bytes)))
-        catch err
-            err isa OverflowError || rethrow()
-            throw(LimitError(:page_bytes, typemax(Int64), limits.max_page_bytes))
-        end
-        _checklimit(:page_bytes, total, limits.max_page_bytes)
-        push!(output, value)
-    end
-    return output
-end
-
-function _encodedpayload(column::WriteColumn, encoding::Metadata.Encoding.T, limits::Limits)
-    _validatewriteencoding(column, encoding)
-    payload = if encoding == Metadata.Encoding.PLAIN
-        _plainpayload(column, limits)
-    elseif encoding == Metadata.Encoding.DELTA_BINARY_PACKED
-        T = column.physical == Metadata.Type.INT32 ? Int32 : Int64
-        encode_delta_binary_packed(_presentvalues(column, T))
-    elseif encoding == Metadata.Encoding.DELTA_LENGTH_BYTE_ARRAY
-        encode_delta_length_byte_array(_presentbytearrays(column, limits))
-    elseif encoding == Metadata.Encoding.DELTA_BYTE_ARRAY
-        column.physical == Metadata.Type.FIXED_LEN_BYTE_ARRAY ?
-            encode_delta_byte_array_fixed(_presentfixed(column, limits)) :
-            encode_delta_byte_array(_presentbytearrays(column, limits))
-    elseif encoding == Metadata.Encoding.BYTE_STREAM_SPLIT
-        if column.physical == Metadata.Type.FIXED_LEN_BYTE_ARRAY
-            encode_byte_stream_split_fixed(_presentfixed(column, limits))
-        else
-            T = column.physical == Metadata.Type.INT32 ? Int32 :
-                column.physical == Metadata.Type.INT64 ? Int64 :
-                column.physical == Metadata.Type.FLOAT ? Float32 : Float64
-            encode_byte_stream_split(_presentvalues(column, T))
-        end
-    else
-        values = UInt64[value ? 1 : 0 for value in _presentvalues(column, Bool)]
-        encode_hybrid(values, 1; length_prefix=true)
-    end
-    _checklimit(:page_bytes, length(payload), limits.max_page_bytes)
-    length(payload) <= typemax(Int32) ||
-        throw(ArgumentError("encoded Parquet values exceed Int32 bytes"))
-    return payload
-end
-
-function _columnentrycount(column::WriteColumn)
-    column.definitions === nothing && return length(column.values)
-    return length(column.definitions)
-end
-
-function _writerpresentcount(column::WriteColumn)
-    return length(column.values) - count(ismissing, column.values)
-end
-
-function _writerrawpayloadbytes(column::WriteColumn)
-    present = _writerpresentcount(column)
-    physical = column.physical
-    physical == Metadata.Type.BOOLEAN && return Int64(cld(present, 8))
-    physical in (Metadata.Type.INT32, Metadata.Type.FLOAT) &&
-        return Base.checked_mul(Int64(present), Int64(4))
-    physical in (Metadata.Type.INT64, Metadata.Type.DOUBLE) &&
-        return Base.checked_mul(Int64(present), Int64(8))
-    if physical == Metadata.Type.FIXED_LEN_BYTE_ARRAY
-        width = column.type_length
-        width === nothing && throw(ArgumentError(
-            "fixed byte-array column has no width"))
-        return Base.checked_mul(Int64(present), Int64(width))
-    end
-    physical == Metadata.Type.BYTE_ARRAY || return Int64(0)
-    bytes = Int64(0)
-    for value in column.values
-        ismissing(value) && continue
-        payload = value isa AbstractString ? ncodeunits(value) : length(value)
-        bytes = Base.checked_add(bytes, Base.checked_add(Int64(4), Int64(payload)))
-    end
-    return bytes
-end
-
-function _columnnullcount(column::WriteColumn)
-    column.definitions === nothing && return count(ismissing, column.values)
-    maximum = UInt64(column.max_definition_level)
-    return count(!=(maximum), column.definitions)
-end
-
-function _repetitionpayload(column::WriteColumn; length_prefix::Bool=true)
-    iszero(column.max_repetition_level) && return UInt8[]
-    levels = something(column.repetitions)
-    return encode_hybrid(levels, _levelbitwidth(column.max_repetition_level);
-        length_prefix=length_prefix)
-end
-
-function _definitionpayload(column::WriteColumn; length_prefix::Bool=true)
-    iszero(column.max_definition_level) && return UInt8[]
-    levels = column.definitions === nothing ?
-        UInt64[ismissing(value) ? 0 : 1 for value in column.values] :
-        column.definitions
-    return encode_hybrid(levels, _levelbitwidth(column.max_definition_level);
-        length_prefix=length_prefix)
-end
-
 function _writecodec(codec::Metadata.CompressionCodec.T)
     codecwritable(codec) || _unwritablecodec(codec)
     return codec
@@ -1051,7 +884,7 @@ function _writecodec(codec::Symbol)
     name === :brotli && return Metadata.CompressionCodec.BROTLI
     name === :zstd && return Metadata.CompressionCodec.ZSTD
     name === :lz4_raw && return Metadata.CompressionCodec.LZ4_RAW
-    name === :lz4 && return _writecodec(Metadata.CompressionCodec.LZ4)
+    name === :lz4 && return Metadata.CompressionCodec.LZ4_RAW
     name === :lzo && return _writecodec(Metadata.CompressionCodec.LZO)
     throw(ArgumentError("unknown Parquet compression codec $(repr(codec))"))
 end
@@ -1079,98 +912,6 @@ function _writepageversion(pageversion)
     throw(ArgumentError("Parquet page version must be :v1 or :v2"))
 end
 
-function _framedpage(payload::Vector{UInt8}, type::Metadata.PageType.T, limits::Limits;
-    checksum::Bool, codec::Metadata.CompressionCodec.T,
-    compressionlevel::Union{Nothing,Integer}, data_header=nothing, dictionary_header=nothing)
-    _checklimit(:page_bytes, length(payload), limits.max_page_bytes)
-    length(payload) <= typemax(Int32) || throw(ArgumentError("Parquet page exceeds Int32 bytes"))
-    encoded = compress(codec, payload; level=compressionlevel)
-    _checklimit(:page_bytes, length(encoded), limits.max_page_bytes)
-    length(encoded) <= typemax(Int32) || throw(ArgumentError("compressed Parquet page exceeds Int32 bytes"))
-    crc = checksum ? reinterpret(Int32, pagechecksum(encoded)) : nothing
-    header = Metadata.PageHeader(
-        type_=type,
-        uncompressed_page_size=Int32(length(payload)),
-        compressed_page_size=Int32(length(encoded)),
-        crc=crc,
-        data_page_header=data_header,
-        dictionary_page_header=dictionary_header,
-    )
-    headerbytes = Thrift.encode(header)
-    _checklimit(:page_header_bytes, length(headerbytes), limits.max_page_header_bytes)
-    return vcat(headerbytes, encoded), length(headerbytes), length(payload)
-end
-
-function _framedpagev2(column::WriteColumn, values::Vector{UInt8},
-    encoding::Metadata.Encoding.T, limits::Limits; checksum::Bool,
-    codec::Metadata.CompressionCodec.T, compressionlevel::Union{Nothing,Integer})
-    repetition = _repetitionpayload(column; length_prefix=false)
-    definition = _definitionpayload(column; length_prefix=false)
-    candidate = compress(codec, values; level=compressionlevel)
-    compressedvalues = codec != Metadata.CompressionCodec.UNCOMPRESSED &&
-        !isempty(values) && length(candidate) < length(values)
-    encoded = compressedvalues ? candidate : copy(values)
-    uncompressed = Int64(length(repetition)) + Int64(length(definition)) +
-        Int64(length(values))
-    compressed = Int64(length(repetition)) + Int64(length(definition)) +
-        Int64(length(encoded))
-    _checklimit(:page_bytes, uncompressed, limits.max_page_bytes)
-    _checklimit(:page_bytes, compressed, limits.max_page_bytes)
-    uncompressed <= typemax(Int32) || throw(ArgumentError("Parquet page exceeds Int32 bytes"))
-    compressed <= typemax(Int32) || throw(ArgumentError("compressed Parquet page exceeds Int32 bytes"))
-    payload = vcat(repetition, definition, encoded)
-    crc = checksum ? reinterpret(Int32, pagechecksum(payload)) : nothing
-    data_header = Metadata.DataPageHeaderV2(
-        num_values=Int32(_columnentrycount(column)),
-        num_nulls=Int32(_columnnullcount(column)),
-        num_rows=Int32(column.rows),
-        encoding=encoding,
-        definition_levels_byte_length=Int32(length(definition)),
-        repetition_levels_byte_length=Int32(length(repetition)),
-        is_compressed=compressedvalues,
-    )
-    header = Metadata.PageHeader(
-        type_=Metadata.PageType.DATA_PAGE_V2,
-        uncompressed_page_size=Int32(uncompressed),
-        compressed_page_size=Int32(compressed),
-        crc=crc,
-        data_page_header_v2=data_header,
-    )
-    headerbytes = Thrift.encode(header)
-    _checklimit(:page_header_bytes, length(headerbytes), limits.max_page_header_bytes)
-    return vcat(headerbytes, payload), length(headerbytes), Int(uncompressed)
-end
-
-function _datapagebytes(column::WriteColumn, values::Vector{UInt8},
-    encoding::Metadata.Encoding.T, pageversion::Symbol, limits::Limits; checksum::Bool,
-    codec::Metadata.CompressionCodec.T, compressionlevel::Union{Nothing,Integer})
-    if pageversion === :v2
-        return _framedpagev2(column, values, encoding, limits; checksum=checksum,
-            codec=codec, compressionlevel=compressionlevel)
-    end
-    payload = _repetitionpayload(column)
-    append!(payload, _definitionpayload(column))
-    append!(payload, values)
-    data_header = Metadata.DataPageHeader(
-        num_values=Int32(_columnentrycount(column)),
-        encoding=encoding,
-        definition_level_encoding=Metadata.Encoding.RLE,
-        repetition_level_encoding=Metadata.Encoding.RLE,
-    )
-    return _framedpage(payload, Metadata.PageType.DATA_PAGE, limits;
-        checksum=checksum, codec=codec, compressionlevel=compressionlevel,
-        data_header=data_header)
-end
-
-function _datapagetype(pageversion::Symbol)
-    pageversion === :v1 && return Metadata.PageType.DATA_PAGE
-    return Metadata.PageType.DATA_PAGE_V2
-end
-
-function _schemaelements(column::WriteColumn)
-    return column.schema
-end
-
 function _withoutcolumnschema(column::WriteColumn, path::Vector{String}=column.path)
     return WriteColumn(column.name, column.values, column.physical, column.type_length,
         column.optional, column.logical, column.converted, copy(path), column.repetitions,
@@ -1179,7 +920,7 @@ function _withoutcolumnschema(column::WriteColumn, path::Vector{String}=column.p
 end
 
 function _writefieldplan(column::WriteColumn)
-    schema = _schemaelements(column)
+    schema = column.schema
     isempty(schema) && throw(ArgumentError(
         "writer column $(repr(column.name)) has no top-level field schema"))
     return WriteFieldPlan(copy(schema), WriteColumn[_withoutcolumnschema(column)])
@@ -1224,112 +965,6 @@ function _writeschemaleafcount(node::SchemaNode)
         total = Base.checked_add(total, _writeschemaleafcount(child))
     end
     return total
-end
-
-function _validatewriteleaf(node::SchemaNode, column::WriteColumn, rows::Int)
-    isempty(column.schema) || throw(ArgumentError(
-        "row-group leaf $(repr(column.name)) still owns a schema fragment"))
-    column.rows == rows || throw(ArgumentError(
-        "row-group leaf $(repr(column.name)) has $(column.rows) rows but $rows were expected"))
-    column.path == node.path || throw(ArgumentError(
-        "writer leaf path $(repr(column.path)) does not match schema path $(repr(node.path))"))
-    column.physical == node.element.type_ || throw(ArgumentError(
-        "writer leaf $(repr(node.path)) has a physical type that does not match its schema"))
-    column.type_length == node.element.type_length || throw(ArgumentError(
-        "writer leaf $(repr(node.path)) has a type length that does not match its schema"))
-    column.logical == node.element.logicalType || throw(ArgumentError(
-        "writer leaf $(repr(node.path)) has a logical type that does not match its schema"))
-    column.converted == node.element.converted_type || throw(ArgumentError(
-        "writer leaf $(repr(node.path)) has a converted type that does not match its schema"))
-    column.max_repetition_level == node.max_repetition_level || throw(ArgumentError(
-        "writer leaf $(repr(node.path)) has a repetition level that does not match its schema"))
-    column.max_definition_level == node.max_definition_level || throw(ArgumentError(
-        "writer leaf $(repr(node.path)) has a definition level that does not match its schema"))
-    optional = node.element.repetition_type == Metadata.FieldRepetitionType.OPTIONAL
-    column.optional == optional || throw(ArgumentError(
-        "writer leaf $(repr(node.path)) has optionality that does not match its schema"))
-    return
-end
-
-function _writeplanleaves(fields::Vector{WriteFieldPlan}, schema::Schema, rows::Int,
-    limits::Limits)
-    length(fields) == length(schema.root.children) || throw(ArgumentError(
-        "writer top-level fields do not match the parsed schema"))
-    columns = WriteColumn[]
-    sizehint!(columns, length(schema.leaves))
-    for (field, node) in zip(fields, schema.root.children)
-        length(field.leaves) == _writeschemaleafcount(node) ||
-            throw(ArgumentError(
-                "writer field $(repr(node.element.name)) does not own its schema leaves"))
-        append!(columns, field.leaves)
-    end
-    length(columns) == length(schema.leaves) || throw(ArgumentError(
-        "writer physical leaves do not match the parsed schema"))
-    leaves = WriteLeafPlan[]
-    sizehint!(leaves, length(columns))
-    for (index, (node, column)) in enumerate(zip(schema.leaves, columns))
-        prepared, entries, dense, payload =
-            _writeprepareleaf(node, column, rows, limits)
-        _validatewriteleaf(node, prepared, rows)
-        ordinal = Int32(index)
-        node.column_index == ordinal || throw(ArgumentError(
-            "writer leaf ordinal does not match the parsed schema"))
-        push!(leaves, WriteLeafPlan(ordinal, copy(node.path), prepared,
-            entries, dense, payload))
-    end
-    return leaves
-end
-
-function _writeplan(fields::Vector{WriteFieldPlan}, rows::Int, limits::Limits)
-    rows >= 0 || throw(ArgumentError(
-        "Parquet row count must be nonnegative"))
-    elements = _flattenwriteschema(fields, limits)
-    schema = Schema(elements; limits=limits)
-    leaves = _writeplanleaves(fields, schema, rows, limits)
-    rowgroups = iszero(rows) ? WriteRowGroupPlan[] :
-        WriteRowGroupPlan[WriteRowGroupPlan(rows, leaves)]
-    return WritePlan(elements, schema, rows, rowgroups)
-end
-
-function _writeplan(table, limits::Limits)
-    fields, rows = _writefields(table, limits)
-    return _writeplan(fields, rows, limits)
-end
-
-function _writeplan(table)
-    return _writeplan(table, Limits())
-end
-
-function _columnchunk(leaf::WriteLeafPlan, offset::Int64, pages::ColumnPages,
-    codec::Metadata.CompressionCodec.T,
-    statistics::Union{Nothing,Metadata.Statistics}=nothing)
-    column = leaf.column
-    dictionary_offset = pages.dictionary_offset === nothing ? nothing :
-        offset + pages.dictionary_offset
-    compressed = Int64(length(pages.bytes))
-    metadata = Metadata.ColumnMetaData(
-        type_=column.physical,
-        encodings=pages.encodings,
-        path_in_schema=leaf.path,
-        codec=codec,
-        num_values=Int64(_columnentrycount(column)),
-        total_uncompressed_size=pages.uncompressed_size,
-        total_compressed_size=compressed,
-        data_page_offset=offset + pages.data_offset,
-        dictionary_page_offset=dictionary_offset,
-        statistics=statistics,
-        encoding_stats=pages.encoding_stats,
-    )
-    return Metadata.ColumnChunk(file_offset=Int64(0), meta_data=metadata)
-end
-
-function _addgroupsize(total::Int64, value::Int64)
-    return try
-        Base.checked_add(total, value)
-    catch err
-        err isa OverflowError || rethrow()
-        throw(ArgumentError("Parquet row group byte size exceeds Int64"))
-    end
 end
 
 # Counts the encoded footer first so max_footer_bytes is checked before it is allocated.
@@ -1404,157 +1039,4 @@ function _writepartitionmismatch(expected::Vector{Metadata.SchemaElement},
     end
     throw(ArgumentError("partition $index has $(length(_writetopfields(actual))) " *
         "columns; the first partition has $(length(_writetopfields(expected)))"))
-end
-
-function _encodefile(table; checksum::Bool=true, dictionary::Bool=false,
-    codec=:uncompressed, compressionlevel::Union{Nothing,Integer}=nothing,
-    pageversion=:v1, encoding=nothing, rowgroupsize=1_048_576,
-    pagesize=1024 * 1024, pageindex::Bool=true, statistics::Bool=true,
-    limits::Limits=Limits())
-    Base.@nospecialize table
-    statisticslimit = _statisticlimit(limits)
-    compression = _writecodec(codec)
-    version = _writepageversion(pageversion)
-    target = _writepagesize(pagesize)
-    _writerowgroupsize(rowgroupsize, 0)
-    # Every partition of the source becomes one or more row groups.
-    partitions = Tables.partitions(table)
-    state = iterate(partitions)
-    state === nothing && throw(ArgumentError(
-        "Parquet.write needs a table with at least one partition"))
-    part, partstate = state
-    fields, rows = _writefieldsencoded(part, limits, encoding, dictionary)
-    initialplan = _writeplan(fields, rows, limits)
-    leaves = isempty(initialplan.rowgroups) ?
-        _writeplanleaves(fields, initialplan.schema, rows, limits) :
-        only(initialplan.rowgroups).leaves
-    choices = _writeencodingchoices(leaves, encoding, dictionary)
-    schemaplan = initialplan
-    totalrows = rows
-    groups = WriteRowGroupPlan[]
-    append!(groups, _splitwriteplan(initialplan, rowgroupsize, limits).rowgroups)
-    leaves = nothing
-    initialplan = nothing
-    index = 1
-    next = iterate(partitions, partstate)
-    while next !== nothing
-        part, partstate = next
-        index += 1
-        fields, rows = _writefieldsencoded(part, limits, encoding, dictionary)
-        partplan = _writeplan(fields, rows, limits)
-        partplan.elements == schemaplan.elements ||
-            _writepartitionmismatch(schemaplan.elements, partplan.elements, index)
-        totalrows = Base.checked_add(totalrows, rows)
-        append!(groups, _splitwriteplan(partplan, rowgroupsize, limits).rowgroups)
-        next = iterate(partitions, partstate)
-    end
-    plan = WritePlan(schemaplan.elements, schemaplan.schema, totalrows, groups)
-    columnorders = statistics ? _writecolumnorders(plan.schema) : nothing
-    output = copy(PARQUET_MAGIC)
-    rowgroups = Metadata.RowGroup[]
-    sizehint!(rowgroups, length(plan.rowgroups))
-    indexgroups = nothing
-    if pageindex
-        indexgroups = Vector{Metadata.OffsetIndex}[]
-        sizehint!(indexgroups, length(plan.rowgroups))
-    end
-    emitordinals = length(plan.rowgroups) <= Int(typemax(Int16)) + 1
-    for (groupindex, rowgroupplan) in enumerate(plan.rowgroups)
-        _validatewritechoicecount(rowgroupplan.leaves, choices)
-        chunks = Metadata.ColumnChunk[]
-        sizehint!(chunks, length(rowgroupplan.leaves))
-        indexes = nothing
-        if pageindex
-            indexes = Metadata.OffsetIndex[]
-            sizehint!(indexes, length(rowgroupplan.leaves))
-        end
-        uncompressedsize = Int64(0)
-        compressedsize = Int64(0)
-        groupoffset = Int64(length(output))
-        for (leaf, choice) in zip(rowgroupplan.leaves, choices)
-            column = leaf.column
-            columnstatistics = if statistics
-                element = plan.schema.leaves[Int(leaf.ordinal)].element
-                _writecolumnstatistics(leaf, element, statisticslimit)
-            else
-                nothing
-            end
-            offset = Int64(length(output))
-            pages = _writesplitcolumnpages(leaf, limits; pagesize=target,
-                checksum=checksum, dictionary=choice.dictionary,
-                codec=compression, compressionlevel=compressionlevel,
-                pageversion=version, encoding=choice.encoding,
-                capturelocations=pageindex)
-            append!(output, pages.bytes)
-            push!(chunks, _columnchunk(leaf, offset, pages, compression,
-                columnstatistics))
-            pageindex && push!(indexes, _writeabsoluteoffsetindex(pages,
-                offset, rowgroupplan.rows))
-            uncompressedsize = _addgroupsize(uncompressedsize, pages.uncompressed_size)
-            compressedsize = _addgroupsize(compressedsize, Int64(length(pages.bytes)))
-        end
-        push!(rowgroups, Metadata.RowGroup(
-            columns=chunks,
-            total_byte_size=uncompressedsize,
-            num_rows=Int64(rowgroupplan.rows),
-            total_compressed_size=compressedsize,
-            file_offset=groupoffset,
-            ordinal=emitordinals ? Int16(groupindex - 1) : nothing,
-        ))
-        pageindex && push!(indexgroups, indexes)
-    end
-    if pageindex
-        rowgroups = _writeoffsetindexsection!(output, rowgroups, indexgroups,
-            limits)
-    end
-    metadata = Metadata.FileMetaData(
-        version=Int32(1),
-        schema=plan.elements,
-        num_rows=Int64(plan.rows),
-        row_groups=rowgroups,
-        key_value_metadata=_writekeyvaluemetadata(table, limits),
-        created_by=_createdby(),
-        column_orders=columnorders,
-    )
-    footer = _writeencodefooter(metadata, limits)
-    append!(output, footer)
-    _writelittle!(output, UInt32(length(footer)))
-    append!(output, PARQUET_MAGIC)
-    return output
-end
-
-"""
-    Parquet.write(sink, table; kwargs...) -> sink
-    Parquet.write(sink; kwargs...) -> table -> Parquet.write(sink, table; kwargs...)
-
-Write a Tables.jl source to `sink`, a path or `IO`, and return `sink`. Every partition
-of a `Tables.partitions` source becomes one or more row groups; all partitions must
-have the first one's column types. The one-argument form returns a function, so a
-table can be piped: `CSV.File(path) |> Parquet.write("out.parquet")`.
-
-An encoding Symbol or string applies to every column. A `Pair`, `NamedTuple`, or
-dictionary overrides exact column names. Unlisted columns use PLAIN, or adaptive
-dictionary encoding when `dictionary=true`. Use `:dictionary` to request adaptive
-dictionary encoding for one selected column. Footer statistics and a complete
-column-order declaration are emitted by default. Set `statistics=false` to omit them.
-`limits.max_statistics_value_bytes` limits each emitted bound.
-
-Writing a `Parquet.Table` keeps its file key-value metadata, except the entries that
-describe the source's schema (`ARROW:schema`, `pandas`, and Spark's row metadata).
-"""
-function write(io::IO, table; kwargs...)
-    Base.write(io, _encodefile(table; kwargs...))
-    return io
-end
-
-function write(path::AbstractString, table; kwargs...)
-    bytes = _encodefile(table; kwargs...)
-    open(path, "w") do io
-        Base.write(io, bytes)
-    end
-    return path
-end
-
-function write(sink::Union{IO,AbstractString}; kwargs...)
-    return table -> write(sink, table; kwargs...)
 end

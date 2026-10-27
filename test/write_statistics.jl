@@ -219,9 +219,14 @@ end
             @test statistics.min_value !== nothing
             @test statistics.max_value !== nothing
         end
+        # A ColumnIndex is written for every leaf whose values have a sort order.
         chunk = metadata.row_groups[1].columns[index]
-        @test chunk.column_index_offset === nothing
-        @test chunk.column_index_length === nothing
+        if element.name in ("interval", "unknown")
+            @test chunk.column_index_offset === nothing
+        else
+            @test chunk.column_index_offset !== nothing
+            @test chunk.column_index_length > 0
+        end
     end
     unsigned32 = wsstats(metadata, 1, wscolumnindex(metadata, "u32"))
     @test wsle32(unsigned32.min_value) == UInt32(0)
@@ -418,37 +423,34 @@ end
         statistics=false, limits=limits)
 end
 
-@testset "writer statistics reject malformed fixed values" begin
-    malformed = WSMD.SchemaElement(
+@testset "writer rejects fixed values of the wrong width" begin
+    element = WSMD.SchemaElement(
         type_=WSMD.Type.FIXED_LEN_BYTE_ARRAY,
         type_length=Int32(2),
         repetition_type=WSMD.FieldRepetitionType.REQUIRED,
         name="value",
     )
-    column = Parquet.WriteColumn("value", Vector{UInt8}[UInt8[0x01]],
-        WSMD.Type.FIXED_LEN_BYTE_ARRAY, Int32(2), false, nothing, nothing,
-        String["value"], nothing, nothing, Int16(0), Int16(0), 1,
-        WSMD.SchemaElement[])
-    leaf = Parquet.WriteLeafPlan(Int32(1), String["value"], column)
-    @test_throws ArgumentError Parquet._writecolumnstatistics(
-        leaf, malformed, Int64(4096))
-    validcolumn = Parquet._writecolumn("value", Int32[1, 2])
-    validleaf = Parquet.WriteLeafPlan(Int32(1), String["value"], validcolumn)
-    statistics = Parquet._writecolumnstatistics(
-        validleaf, only(validcolumn.schema), Int64(4096))
-    @test statistics.null_count == 0
+    options = Parquet._writeoptions().chunk
+    leaf = Parquet._LeafSpec(element, String["value"], 0, 0,
+        Parquet._statisticorder(element), nothing, false)
+    rows = Parquet._FlatRows(Vector{UInt8}[UInt8[0x01]], 1, 1, identity, false, "value")
+    @test_throws "FIXED_LEN_BYTE_ARRAY(2) value has 1 bytes" Parquet._encodechunk(leaf,
+        rows, options)
 end
 
-@testset "writer fixed statistics allocation stays value-independent" begin
-    function allocation(values::Vector{Int32})
-        column = Parquet._writecolumn("value", values)
-        leaf = Parquet.WriteLeafPlan(Int32(1), String["value"], column)
-        return @allocated Parquet._writecolumnstatistics(
-            leaf, only(column.schema), Int64(4096))
-    end
-    allocation(Int32[1])
-    allocation(fill(Int32(1), 100_000))
-    small = allocation(Int32[1])
-    large = allocation(fill(Int32(1), 100_000))
-    @test large <= small + 512
+@testset "writer page bounds stay allocation-free" begin
+    bounds(values) = @allocated Parquet._numberbounds(values, Parquet._ORDER_SIGNED)
+    small = Int32[1]
+    large = rand(Int32, 100_000)
+    bounds(small)
+    bounds(large)
+    @test bounds(large) <= bounds(small)
+    # Julia 1.10 boxes the result tuple in @allocated, so compare sizes instead of
+    # asserting zero: the float kernel allocates nothing per value either.
+    floatbounds(values) = @allocated Parquet._numberbounds(values, Parquet._ORDER_FLOAT)
+    smallfloats = rand(1)
+    largefloats = rand(100_000)
+    floatbounds(smallfloats)
+    floatbounds(largefloats)
+    @test floatbounds(largefloats) <= floatbounds(smallfloats)
 end

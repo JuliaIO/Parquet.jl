@@ -235,25 +235,6 @@ function wsdecodedictionary(frame, codec::WSMD.CompressionCodec.T)
     return String[String(value) for value in values]
 end
 
-@testset "writer row-boundary prefixes" begin
-    input = wsgoldeninput()
-    plan = Parquet._writeplan(input)
-    leaf = only(filter(leaf -> leaf.path == ["days", "list", "element"],
-        only(plan.rowgroups).leaves))
-    @test leaf.entry_offsets == Int64[0, 1, 2, 3, 6, 7]
-    @test leaf.dense_offsets == Int64[0, 0, 0, 0, 2, 3]
-    @test leaf.payload_offsets == Int64[0, 0, 0, 0, 8, 12]
-    @test leaf.column.repetitions == UInt64[0, 0, 0, 0, 1, 1, 0]
-    @test leaf.column.definitions == UInt64[0, 1, 2, 3, 2, 3, 3]
-    @test leaf.column.values == Int32[0, -1, 11016]
-    for prefix in (leaf.entry_offsets, leaf.dense_offsets,
-            leaf.payload_offsets)
-        @test length(prefix) == length(input.id) + 1
-        @test first(prefix) == 0
-        @test issorted(prefix)
-    end
-end
-
 @testset "writer row groups and nested slices" begin
     input = wsgoldeninput()
     expectedrepetition = (
@@ -323,12 +304,12 @@ end
     end
 end
 
-@testset "writer hard page retry and propagation" begin
+@testset "writer page limits and propagation" begin
+    # Pages end once they reach pagesize; a page above max_page_bytes is an error.
     input = (; value=Int32.(1:16))
-    limits = Parquet.Limits(max_page_bytes=16)
     for pageversion in (:v1, :v2)
-        bytes = Parquet._encodefile(input; pagesize=nothing,
-            pageversion=pageversion, limits=limits)
+        bytes = Parquet._encodefile(input; pagesize=16, pageversion=pageversion,
+            limits=Parquet.Limits(max_page_bytes=16))
         result = wsinspect(bytes)
         @test wsdatacounts(only(result.groups)[1]) == Int32[4, 4, 4, 4]
         @test all(frame -> frame.header.compressed_page_size <= 16 &&
@@ -337,18 +318,9 @@ end
         wscheckaccounting(result)
         wsroundtrip(bytes, input)
     end
-
-    plan = Parquet._writeplan(input)
-    leaf = only(only(plan.rowgroups).leaves)
-    pages = Parquet._writesplitcolumnpages(leaf, limits;
-        pagesize=nothing, checksum=true, dictionary=false,
-        codec=WSMD.CompressionCodec.UNCOMPRESSED, compressionlevel=nothing,
-        pageversion=:v1)
-    @test only(pages.encoding_stats).count == 4
-
     error = try
-        Parquet._encodefile((value=Int32[1],); pagesize=nothing,
-            limits=Parquet.Limits(max_page_bytes=3))
+        Parquet._encodefile(input; pagesize=nothing,
+            limits=Parquet.Limits(max_page_bytes=16))
         nothing
     catch err
         err
@@ -453,20 +425,14 @@ end
     wscheckaccounting(result)
     wsroundtrip(bytes, split)
 
-    tie = (; value=fill(Int32(1), 5))
-    plan = Parquet._writeplan(tie)
-    leaf = only(only(plan.rowgroups).leaves)
-    limits = Parquet.Limits()
-    plain = Parquet._writeencodedchunk(leaf, nothing, WSMD.Encoding.PLAIN,
-        limits; checksum=false, codec=WSMD.CompressionCodec.UNCOMPRESSED,
-        compressionlevel=nothing, pageversion=:v1)
-    dictionary = Parquet._writedictionarychunk(leaf, nothing, limits;
-        checksum=false, codec=WSMD.CompressionCodec.UNCOMPRESSED,
-        compressionlevel=nothing, pageversion=:v1)
-    @test length(plain.bytes) == length(dictionary.bytes)
-    result = wsinspect(Parquet._encodefile(tie; dictionary=true,
-        checksum=false, pagesize=nothing))
-    @test result.metadata.row_groups[1].columns[1].meta_data.dictionary_page_offset ===
+    # The first page decides: unique values stay PLAIN, repeated values use a dictionary.
+    unique = wsinspect(Parquet._encodefile((; value=collect(Int32(1):Int32(64)));
+        dictionary=true, checksum=false, pagesize=nothing))
+    @test unique.metadata.row_groups[1].columns[1].meta_data.dictionary_page_offset ===
+        nothing
+    repeated = wsinspect(Parquet._encodefile((; value=fill(Int32(1), 64));
+        dictionary=true, checksum=false, pagesize=nothing))
+    @test repeated.metadata.row_groups[1].columns[1].meta_data.dictionary_page_offset !==
         nothing
 
     rescue = (; value=[fill("x", 20)])
@@ -616,19 +582,4 @@ end
     metadata = wsmetadata(bytes)
     @test length(metadata.row_groups) == rows
     @test all(group -> group.ordinal === nothing, metadata.row_groups)
-end
-
-@testset "writer plan construction rejects row-count mismatches" begin
-    limits = Parquet.Limits()
-    field = Parquet._writefieldplan(Parquet._writecolumn(:value, Int32[1]))
-    @test_throws ArgumentError Parquet._writeplan(
-        Parquet.WriteFieldPlan[field], 2, limits)
-
-    table = Parquet.Table(Parquet._encodefile((value=Int32[1],)))
-    try
-        fields, rows = Parquet._writefieldsencoded(table, limits, nothing, false)
-        @test_throws ArgumentError Parquet._writeplan(fields, rows + 1, limits)
-    finally
-        close(table)
-    end
 end

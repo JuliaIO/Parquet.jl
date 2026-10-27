@@ -181,17 +181,16 @@ function _decimalwriteparameters(values::AbstractVector)
     return Int32(precision), scale
 end
 
+# The fewest FIXED_LEN_BYTE_ARRAY bytes whose two's complement holds every
+# `precision`-digit coefficient.
+_decimalbytesfor(precision::Integer) =
+    cld(ndigits(big(10)^precision - 1; base=2) + 1, 8)
+
+const _DECIMAL_WIDTHS = ntuple(_decimalbytesfor, 76)
+
 function _decimalwritewidth(precision::Int32, limits::Limits)
-    width = setprecision(BigFloat, 256) do
-        bits = ceil(Int64, BigFloat(precision) * log2(BigFloat(10)) + 1)
-        return max(Int64(1), cld(bits, Int64(8)))
-    end
-    while _fixeddecimalprecision(width) < precision
-        width = Base.checked_add(width, Int64(1))
-    end
-    while width > 1 && _fixeddecimalprecision(width - 1) >= precision
-        width -= 1
-    end
+    precision >= 1 || throw(ArgumentError("DECIMAL precision must be positive"))
+    width = precision <= 76 ? _DECIMAL_WIDTHS[precision] : _decimalbytesfor(precision)
     _checklimit(:string_bytes, width, limits.max_string_bytes)
     width <= typemax(Int32) || throw(ArgumentError(
         "DECIMAL fixed width exceeds Int32"))

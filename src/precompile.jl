@@ -41,32 +41,37 @@ using PrecompileTools: @compile_workload, @setup_workload
     # One nested column sends every column of a table down the nested reader.
     mixed = merge(scalars, NamedTuple{Symbol.(:o_, keys(optional))}(values(optional)),
         nested)
-    options = ((;), (dictionary=true, codec=:snappy), (codec=:zstd,),
-        (dictionary=true, pageversion=:v2))
+    options = ((;), (compress=:zstd,), (compress=nothing, dictionary=false),
+        (pageversion=:v2,))
     dir = mktempdir()
     @compile_workload begin
         for table in (scalars, optional, mixed), option in options
             bytes = take!(write(IOBuffer(), table; option...))
-            read = Table(bytes)
+            readback = Table(bytes)
             # Writing what a read returns covers the reader's column types.
-            write(IOBuffer(), Tables.columntable(read); option...)
-            close(read)
+            write(IOBuffer(), Tables.columntable(readback); option...)
+            close(readback)
             # A fresh name each time: Windows cannot reopen a file a read still maps.
             path = write(tempname(dir) * ".parquet", table; option...)
-            read = Table(path)
-            Tables.columns(read)
-            Tables.schema(read)
+            readback = Table(path)
+            Tables.columns(readback)
+            Tables.schema(readback)
             # A rewrite of a read table takes the schema-bearing writer.
-            write(IOBuffer(), read; option...)
-            close(read)
-            read = Table(path; scan=Tables.Scan(select=(first(keys(table)),)))
-            close(read)
+            write(IOBuffer(), readback; option...)
+            close(readback)
+            readback = Table(path; scan=Tables.Scan(select=(first(keys(table)),)))
+            close(readback)
         end
-        bytes = take!(write(IOBuffer(), scalars; dictionary=true, codec=:snappy))
-        read = Table(bytes; scan=Tables.Scan(select=(:i64, :str),
+        bytes = take!(write(IOBuffer(), scalars))
+        readback = Table(bytes; scan=Tables.Scan(select=(:i64, :str),
             filter=Tables.col(:i64) > 0, limit=2))
-        Tables.columns(read)
-        close(read)
+        Tables.columns(readback)
+        close(readback)
+        Writer(joinpath(dir, "writer.parquet")) do writer
+            write(writer, optional)
+            write(writer, optional)
+        end
+        write(IOBuffer(), Tables.partitioner((scalars, scalars)))
     end
     # Interned schema names are per-process state; the image must start without them.
     lock(_SCHEMA_NAME_REGISTRY.lock) do
