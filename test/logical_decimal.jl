@@ -1,4 +1,5 @@
 using Test
+import Random
 
 const DMD = Parquet.Metadata
 # Compare exact values independently of the read column's fixed precision.
@@ -308,4 +309,51 @@ end
             Parquet._totwoscomplement(practicalvalue, practicalwidth)) == practicalvalue
     end
     @test elapsed < 5.0
+end
+
+@testset "DECIMAL storage-integer reads agree with the exact path" begin
+    # Flat reads decode straight into the storage integer of the column's
+    # DataDecimals.Decimal; every value and every error must match the BigInt path.
+    twos(x::BigInt, n) = (m = x < 0 ? (big(1) << (8n)) + x : x;
+        UInt8[(m >> (8 * (n - i))) & 0xff for i in 1:n])
+    rng = Random.Xoshiro(7)
+    limits = Parquet.Limits()
+    for p in (1, 9, 10, 18, 19, 38, 39, 76),
+            physical in (DMD.Type.FIXED_LEN_BYTE_ARRAY, DMD.Type.BYTE_ARRAY)
+        capacity = cld(ceil(Int, p * log2(10)) + 1, 8)
+        fixed = physical == DMD.Type.FIXED_LEN_BYTE_ARRAY
+        for n in (fixed ? (capacity, capacity + 3) : (1, capacity, capacity + 5))
+            element = decimaltestelement("d", physical, p, min(p, 2);
+                width=fixed ? n : nothing)
+            convert = Parquet._DecimalValue(Parquet._decimalhost(element), element, limits)
+            bound = big(10)^p
+            for trial in 1:60
+                x = trial % 7 == 0 ? rand(rng, (bound, -bound)) : rand(rng, (-bound + 1):(bound - 1))
+                bytes = twos(x, n)
+                # Skip values that need more than `n` bytes.
+                Parquet._fromtwoscomplement(bytes) == x || continue
+                exact = try Parquet._fromparquetdecimal(element, bytes, limits) catch err; err end
+                fast = try convert(view(bytes, 1:n)) catch err; err end
+                @test exact isa Exception ? fast isa Parquet.FormatError : fast === exact
+            end
+        end
+    end
+    for (P, physical, p) in ((Int32, DMD.Type.INT32, 9), (Int32, DMD.Type.INT32, 3),
+            (Int64, DMD.Type.INT64, 18), (Int64, DMD.Type.INT64, 5))
+        element = decimaltestelement("d", physical, p, 1)
+        convert = Parquet._DecimalValue(Parquet._decimalhost(element), element, limits)
+        for x in (P(0), P(1), P(-1), P(10)^p - P(1), -(P(10)^p - P(1)), P(10)^p,
+                -(P(10)^p), typemax(P), typemin(P))
+            exact = try Parquet._fromparquetdecimal(element, x, limits) catch err; err end
+            fast = try convert(x) catch err; err end
+            @test exact isa Exception ? fast isa Parquet.FormatError : fast === exact
+        end
+    end
+    element = decimaltestelement("d", DMD.Type.BYTE_ARRAY, 20, 2)
+    D = Parquet._decimalhost(element)
+    convert = Parquet._DecimalValue(D, element, Parquet.Limits(max_decimal_bytes=4))
+    @test_throws Parquet.FormatError convert(view(UInt8[], 1:0))
+    @test convert(view(UInt8[0x00, 0x00, 0x00, 0x01], 1:4)) === reinterpret(D, Int128(1))
+    caught = try convert(view(zeros(UInt8, 5), 1:5)); nothing catch err; err end
+    @test caught isa Parquet.LimitError && caught.resource == :decimal_bytes
 end

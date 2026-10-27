@@ -126,6 +126,7 @@ function _plain!(dest::Vector{L}, offset::Int, count::Int, ::Type{P}, convert::C
         source = Ptr{P}(pointer(bytes, position))
         if (L === P && convert === identity) || (_bitcopy(convert) && sizeof(L) == sizeof(P))
             unsafe_copyto!(Ptr{P}(pointer(dest, offset + 1)), source, count)
+            _aftercopy!(convert, dest, offset, count)
         else
             @inbounds for index in 1:count
                 dest[offset + index] = convert(ltoh(unsafe_load(source, index)))

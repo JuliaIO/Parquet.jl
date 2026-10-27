@@ -68,14 +68,25 @@ end
 # Writes the `count` dictionary entries selected by the indices in `bytes[position:]`
 # (a bit-width byte, then RLE/bit-packed hybrid runs ending by `stop`) to
 # `dest[(offset + 1):(offset + count)]`, using `indices` as scratch.
-function _dictionary!(dest::Vector{L}, offset::Int, count::Int, dictionary::Vector{L},
-        indices::Vector{UInt32}, bytes::_ByteView, position::Int, stop::Int) where {L}
+# Decodes `count` dictionary indices from `bytes[position:]` (a bit-width byte, then
+# RLE/bit-packed hybrid runs ending by `stop`) into `indices`.
+function _dictionaryindices!(indices::Vector{UInt32}, count::Int, bytes::_ByteView,
+        position::Int, stop::Int)
     count == 0 && position == stop && return position
     _requirebytes(bytes, position, 1)
     bitwidth = Int(bytes[position])
     bitwidth <= 32 || throw(FormatError("dictionary index bit width $bitwidth exceeds 32"))
     _growto!(indices, _claimcapacity(count, stop - position))
-    position = _decodehybrid!(indices, 0, count, bitwidth, bytes, position + 1, stop)
+    return _decodehybrid!(indices, 0, count, bitwidth, bytes, position + 1, stop)
+end
+
+@noinline function _dictionaryindexerror(raw::UInt32, entries::UInt32)
+    throw(FormatError("dictionary index $raw is outside a dictionary of $entries entries"))
+end
+
+function _dictionary!(dest::Vector{L}, offset::Int, count::Int, dictionary::Vector{L},
+        indices::Vector{UInt32}, bytes::_ByteView, position::Int, stop::Int) where {L}
+    position = _dictionaryindices!(indices, count, bytes, position, stop)
     _growto!(dest, offset + count)
     entries = UInt32(length(dictionary))
     @inbounds for index in 1:count

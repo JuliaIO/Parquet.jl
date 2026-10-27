@@ -233,9 +233,11 @@ function (::_FixedBytesValue{N})(bytes::Union{_ByteView,Vector{UInt8}}) where {N
 end
 
 # Whether a conversion only reinterprets the bits of each physical value, so PLAIN
-# values copy in bulk.
+# values copy in bulk; `_aftercopy!` then validates the copied values.
 _bitcopy(convert) = false
 _bitcopy(::_TimestampValue) = true
+_bitcopy(::_DecimalValue) = true
+_aftercopy!(convert, dest::Vector, offset::Int, count::Int) = nothing
 
 # Element types a read produces where the file leaves a choice: `int96` is the
 # resolution of INT96 timestamps.
@@ -288,6 +290,7 @@ function _valueconverter(element::Metadata.SchemaElement, limits::Limits,
     kind isa _IntegerLogicalKind && return _IntegerValue{L}(element), L
     kind isa _TimeLogicalKind && return _TimeValue(kind, element), L
     kind === :decimal && _preflightdecimalconversion(element, limits)
+    L <: DataDecimals.Decimal && return _DecimalValue(L, element, limits), L
     return _LogicalValue{L,typeof(kind)}(kind, element, limits), L
 end
 
@@ -312,33 +315,52 @@ function _scratch(vectors::IdDict{Type,Vector}, ::Type{L}) where {L}
 end
 
 # BYTE_ARRAY values as DataStrings payloads: up to 12 bytes inline, longer ones as views
-# into a copy of the page they were decoded from, which `buffers` keeps. `page` is the
-# current page's bytes; `kept` is the 0-based index of its copy in `buffers`, or -1
-# before a value needed one. `V` is whether values must be UTF-8 (STRING and ENUM).
+# into the page they were decoded from, which `buffers` keeps. A compressed page
+# decompresses into `spare`, which is kept as it is; an uncompressed page lives in the
+# source and is copied. `page` is the current page's bytes; `kept` is the 0-based index
+# of its buffer in `buffers`, or -1 before a value needed one. `V` is whether values
+# must be UTF-8 (STRING and ENUM).
 mutable struct _StringPayloads{V}
     limits::Limits
     buffers::Vector{Vector{UInt8}}
     page::_ByteView
     kept::Int
+    spare::Vector{UInt8}
+    owned::Bool
 end
 
 function _StringPayloads{V}(limits::Limits) where {V}
-    return _StringPayloads{V}(limits, Vector{UInt8}[], _byteview(UInt8[]), -1)
+    return _StringPayloads{V}(limits, Vector{UInt8}[], _byteview(UInt8[]), -1, UInt8[],
+        false)
+end
+
+# Index of the current page's buffer in `strings.buffers`, keeping it on first use.
+function _keptpage!(strings::_StringPayloads)
+    if strings.kept < 0
+        page = strings.page
+        if strings.owned
+            push!(strings.buffers, parent(page))
+            strings.spare = UInt8[]
+        else
+            push!(strings.buffers, copy(page))
+        end
+        strings.kept = length(strings.buffers) - 1
+    end
+    return strings.kept
 end
 
 function _isasciibytes(bytes::_ByteView)
     count = length(bytes)
+    words = count >> 3
     bits = UInt64(0)
     GC.@preserve bytes begin
-        start = pointer(bytes)
-        index = 0
-        while index + 8 <= count
-            bits |= unsafe_load(Ptr{UInt64}(start + index))
-            index += 8
+        start = Ptr{UInt64}(pointer(bytes))
+        for index in 1:words
+            bits |= unsafe_load(start, index)
         end
-        while index < count
-            bits |= unsafe_load(start + index)
-            index += 1
+        tail = Ptr{UInt8}(start) + (words << 3)
+        for index in 1:(count & 7)
+            bits |= unsafe_load(tail, index)
         end
     end
     return iszero(bits & 0x8080808080808080)
@@ -368,13 +390,56 @@ function (strings::_StringPayloads)(bytes::_ByteView)
     page = strings.page
     parent(bytes) === parent(page) ||
         throw(AssertionError("STRING value is outside its page"))
-    if strings.kept < 0
-        push!(strings.buffers, copy(page))
-        strings.kept = length(strings.buffers) - 1
-    end
+    kept = _keptpage!(strings)
     position = source - first(parentindices(page)[1]) + 1
-    return DataStrings.view_payload(strings.buffers[strings.kept + 1], position, count,
-        strings.kept, position - 1)
+    return DataStrings.view_payload(strings.buffers[kept + 1], position, count, kept,
+        position - 1)
+end
+
+# PLAIN BYTE_ARRAY values of the current page as payloads. One ASCII scan covers the
+# whole value section (length prefixes below 128 are ASCII too), so a page whose
+# values are all ASCII skips the per-value UTF-8 check.
+function _plainbytes!(dest::Vector{DataStrings.StringPayload}, offset::Int, count::Int,
+        strings::_StringPayloads{V}, width::Nothing, bytes::_ByteView, position::Int,
+        limits::Limits) where {V}
+    _requirebytes(bytes, position, Base.checked_mul(count, 4))
+    _growto!(dest, offset + count)
+    page = strings.page
+    buffer = parent(bytes)
+    buffer === parent(page) || throw(AssertionError("STRING values are outside their page"))
+    base = first(parentindices(bytes)[1]) - 1
+    pagebase = first(parentindices(page)[1]) - 1
+    stop = length(bytes) + 1
+    check = V && !_isasciibytes(view(bytes, position:length(bytes)))
+    maximum = limits.max_string_bytes
+    kept = -1
+    keptbuffer = buffer
+    @inbounds for index in 1:count
+        raw = GC.@preserve buffer ltoh(unsafe_load(Ptr{UInt32}(pointer(buffer, base + position))))
+        position += 4
+        length = Int(reinterpret(Int32, raw))
+        length >= 0 || throw(FormatError("negative PLAIN byte-array length"))
+        _checklimit(:string_bytes, length, maximum)
+        length <= stop - position || throw(FormatError("truncated PLAIN value"))
+        source = base + position
+        check && (isvalid(String, view(buffer, source:(source + length - 1))) ||
+            throw(FormatError("STRING value contains invalid UTF-8")))
+        if length <= DataStrings.INLINE_MAX
+            dest[offset + index] = DataStrings.inline_payload(buffer, source, length)
+        else
+            if kept < 0
+                kept = _keptpage!(strings)
+                keptbuffer = strings.buffers[kept + 1]
+            end
+            pageposition = source - pagebase
+            dest[offset + index] = DataStrings.view_payload(keptbuffer, pageposition,
+                length, kept, pageposition - 1)
+        end
+        position += length
+        # The next length prefix must be present before it is loaded.
+        index < count && (stop - position >= 4 || throw(FormatError("truncated PLAIN value")))
+    end
+    return position
 end
 
 # A value decoded into its own vector (DELTA_LENGTH_BYTE_ARRAY, DELTA_BYTE_ARRAY).
@@ -395,8 +460,11 @@ end
 function _pagebytes!(strings::_StringPayloads, buffers::_PageBuffers,
         codec::Metadata.CompressionCodec.T, payload::_ByteView, expected::Integer,
         limits::Limits)
-    bytes = _decompressinto!(buffers.page, codec, payload, expected, limits)
+    owned = codec != Metadata.CompressionCodec.UNCOMPRESSED
+    bytes = _decompressinto!(owned ? strings.spare : buffers.page, codec, payload,
+        expected, limits)
     strings.page = bytes
+    strings.owned = owned
     strings.kept = -1
     return bytes
 end
@@ -462,10 +530,10 @@ end
 
 # Writes the `count` present values of one data page, encoded with `encoding` in
 # `bytes[position:(stop - 1)]`, to `dest[(offset + 1):(offset + count)]`.
-function _pagevalues!(dest::Vector{L}, offset::Int, count::Int, ::Type{P}, convert,
+function _pagevalues!(dest::Vector{L}, offset::Int, count::Int, ::Type{P}, convert::C,
         width, encoding::Metadata.Encoding.T, bytes::_ByteView, position::Int,
         stop::Int, dictionary::Vector{L}, hasdictionary::Bool, buffers::_PageBuffers,
-        limits::Limits) where {L,P}
+        limits::Limits) where {L,P,C}
     if encoding == Metadata.Encoding.PLAIN
         P === Vector{UInt8} && return _plainbytes!(dest, offset, count, convert, width,
             bytes, position, limits)
@@ -563,11 +631,15 @@ function _datapagev1!(sink, ::Type{P}, convert, frame::PageFrame,
     present = maxdefinition == 0 ? count :
         _validatelevels(buffers.definition, count, maxdefinition, "definition")
     valuestart = position
-    finish = _sinkpage!(sink, count, present, maxrepetition > 0, maxdefinition > 0,
-        buffers) do dest, offset
-        return _pagevalues!(dest, offset, present, P, convert, _fixedwidth(node),
-            header.encoding, bytes, valuestart, length(bytes) + 1, dictionary,
-            hasdictionary, buffers, limits)
+    finish = _scatterpage!(sink, count, present, P, convert, header.encoding, bytes,
+        valuestart, length(bytes) + 1, dictionary, hasdictionary, buffers)
+    if finish === nothing
+        finish = _sinkpage!(sink, count, present, maxrepetition > 0, maxdefinition > 0,
+            buffers) do dest, offset
+            return _pagevalues!(dest, offset, present, P, convert, _fixedwidth(node),
+                header.encoding, bytes, valuestart, length(bytes) + 1, dictionary,
+                hasdictionary, buffers, limits)
+        end
     end
     finish == length(bytes) + 1 ||
         throw(FormatError("data page has $(length(bytes) - finish + 1) bytes after its values"))
@@ -637,11 +709,16 @@ function _datapagev2!(sink, ::Type{P}, convert, frame::PageFrame,
     # (Arrow C++ counts only leaf-level nulls), so the definition levels decide.
     present = hasdefinition ?
         _validatelevels(buffers.definition, count, maxdefinition, "definition") : count
-    position = _sinkpage!(sink, count, present, hasrepetition, hasdefinition,
-        buffers) do dest, offset
-        return _pagevalues!(dest, offset, present, P, convert, _fixedwidth(node),
-            header.encoding, bytes, 1, length(bytes) + 1, dictionary, hasdictionary,
-            buffers, limits)
+    position = hasdefinition ? _scatterpage!(sink, count, present, P, convert,
+        header.encoding, bytes, 1, length(bytes) + 1, dictionary, hasdictionary,
+        buffers) : nothing
+    if position === nothing
+        position = _sinkpage!(sink, count, present, hasrepetition, hasdefinition,
+            buffers) do dest, offset
+            return _pagevalues!(dest, offset, present, P, convert, _fixedwidth(node),
+                header.encoding, bytes, 1, length(bytes) + 1, dictionary, hasdictionary,
+                buffers, limits)
+        end
     end
     position == length(bytes) + 1 ||
         throw(FormatError("data page V2 has $(length(bytes) - position + 1) bytes after its values"))
@@ -764,6 +841,69 @@ function _sinkpage!(decode, sink::_FlatSink{O,L,false}, count::Int, present::Int
     end
     sink.filled += count
     return position
+end
+
+# An optional flat page with nulls whose values are PLAIN fixed-width or dictionary
+# indices writes each value straight to its row, without staging the present values.
+# Returns the position after the values, or `nothing` when the page takes the general
+# path.
+function _scatterpage!(sink, count::Int, present::Int, ::Type{P}, convert, encoding,
+        bytes::_ByteView, position::Int, stop::Int, dictionary::Vector,
+        hasdictionary::Bool, buffers::_PageBuffers) where {P}
+    return nothing
+end
+
+function _scatterpage!(sink::_FlatSink{O,L,false}, count::Int, present::Int, ::Type{P},
+        convert::C, encoding::Metadata.Encoding.T, bytes::_ByteView, position::Int,
+        stop::Int, dictionary::Vector{L}, hasdictionary::Bool,
+        buffers::_PageBuffers) where {O,L,P,C}
+    present == count && return nothing
+    output = sink.output
+    offset = sink.filled
+    definition = buffers.definition
+    top = sink.maxdefinition
+    null = _nullentry(O)
+    if encoding == Metadata.Encoding.PLAIN && P <: Union{Int32,Int64,Float32,Float64}
+        total = Base.checked_mul(present, sizeof(P))
+        _requirebytes(bytes, position, total)
+        _growto!(output, offset + count)
+        GC.@preserve bytes begin
+            source = Ptr{P}(pointer(bytes, position))
+            next = 0
+            @inbounds for index in 1:count
+                if definition[index] == top
+                    next += 1
+                    output[offset + index] =
+                        _convertvalue(convert, ltoh(unsafe_load(source, next)))
+                else
+                    output[offset + index] = null
+                end
+            end
+        end
+        sink.filled += count
+        return position + total
+    elseif _isdictionaryencoding(encoding)
+        hasdictionary || throw(FormatError(
+            "dictionary-encoded data page has no dictionary page"))
+        indices = buffers.indices
+        position = _dictionaryindices!(indices, present, bytes, position, stop)
+        _growto!(output, offset + count)
+        entries = UInt32(length(dictionary))
+        next = 0
+        @inbounds for index in 1:count
+            if definition[index] == top
+                next += 1
+                raw = indices[next]
+                raw < entries || _dictionaryindexerror(raw, entries)
+                output[offset + index] = _dictionarycopy(dictionary[raw + 1])
+            else
+                output[offset + index] = null
+            end
+        end
+        sink.filled += count
+        return position
+    end
+    return nothing
 end
 
 # Leaf streams: every entry's levels and the dense present values, appended page by

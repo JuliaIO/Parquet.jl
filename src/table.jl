@@ -432,9 +432,20 @@ function _scanresidual(columns::NamedTuple, rows::Int, bound::Tables.BoundScan,
         for column in bound.columns]
     names = Symbol[column.name for column in bound.columns]
     readnames = keys(columns)
-    bound.filter === nothing && bound.limit === nothing && iszero(bound.offset) &&
+    if bound.filter === nothing && bound.limit === nothing && iszero(bound.offset)
         positions == eachindex(readnames) && Tuple(names) == readnames &&
-        return columns, rows, metadata, schema
+            return columns, rows, metadata, schema
+        # Reordered or renamed columns keep their vectors; a column selected twice is
+        # copied so the table never holds one vector under two names.
+        seen = falses(length(readnames))
+        output = NamedTuple{Tuple(names)}(Tuple(begin
+            column = columns[position]
+            seen[position] ? copy(column) : (seen[position] = true; column)
+        end for position in positions))
+        metadata, schema = _selectfields(metadata, schema, positions,
+            String[String(name) for name in names], limits)
+        return output, rows, metadata, schema
+    end
     residual = Tables.Scan(; select=[readnames[position] => name
         for (position, name) in zip(positions, names)], filter=bound.filter,
         limit=bound.limit, offset=bound.offset, validate=bound.validate)

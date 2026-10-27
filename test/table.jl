@@ -1,5 +1,6 @@
 using Tables
 using Dates
+import Random
 
 function tablereplace(value; overrides...)
     names = fieldnames(typeof(value))
@@ -762,4 +763,77 @@ end
     @test_throws Parquet.FormatError Parquet.Table(damaged; ntasks=1)
     @test_throws Parquet.FormatError Parquet.Table(damaged; limits=capped)
     @test_throws ArgumentError Parquet.Table(bytes; ntasks=0)
+end
+
+@testset "read kernels: storage-integer decimals, PLAIN strings, nullable pages" begin
+    MD = Parquet.Metadata
+    decimal(p, s) = element -> withlogical(element;
+        logical=MD.LogicalType(DECIMAL=MD.DecimalType(scale=Int32(s), precision=Int32(p))),
+        converted=MD.ConvertedType.DECIMAL, precision=Int32(p), scale=Int32(s))
+    asstring(element) = withlogical(element;
+        logical=MD.LogicalType(STRING=MD.StringType()), converted=MD.ConvertedType.UTF8)
+
+    # INT64 DECIMAL values copy in bulk and are then checked against the precision.
+    D = Parquet.DataDecimals.Decimal{5,2,Int64}
+    for pageversion in (:v1, :v2), dictionary in (false, true)
+        good = rewritelogicalschema(decimal(5, 2),
+            Parquet._encodefile((d=Int64[1, -99_999, 99_999],); pageversion, dictionary))
+        table = Parquet.Table(good)
+        @test table.d == [reinterpret(D, Int64(v)) for v in (1, -99_999, 99_999)]
+        close(table)
+        bad = rewritelogicalschema(decimal(5, 2),
+            Parquet._encodefile((d=Int64[1, 100_000],); pageversion, dictionary))
+        @test_throws Parquet.FormatError Parquet.Table(bad)
+    end
+
+    # PLAIN STRING pages: inline (up to 12 bytes) and view values, ASCII and not,
+    # length prefixes of 128 and more, compressed pages (kept as decoded) and
+    # uncompressed ones (copied out of the source).
+    strings = ["", "short", "exactly12byt", "thirteen byte", "é", "x"^127, "y"^128,
+        "naïve café, long enough to be a view", "z"^300, "日本語のテキストです"]
+    for codec in (:uncompressed, :snappy), pageversion in (:v1, :v2)
+        table = Parquet.Table(Parquet._encodefile((s=strings, o=Union{Missing,String}[
+            isodd(i) ? missing : value for (i, value) in enumerate(strings)]);
+            codec, pageversion))
+        @test table.s == strings
+        @test isequal(table.o, [isodd(i) ? missing : v for (i, v) in enumerate(strings)])
+        close(table)
+    end
+    for values in ([UInt8[0xff]], [codeunits("ascii"), UInt8[0xc3, 0x28]],
+            [codeunits("x"^200), UInt8[0xe2, 0x82]])
+        bytes = rewritelogicalschema(asstring,
+            Parquet._encodefile((s=[collect(v) for v in values],)))
+        @test_throws Parquet.FormatError Parquet.Table(bytes)
+    end
+
+    # Optional fixed-width pages with nulls, PLAIN and dictionary, V1 and V2.
+    rng = Random.Xoshiro(3)
+    for T in (Int32, Int64, Float32, Float64), dictionary in (false, true),
+            pageversion in (:v1, :v2)
+        values = Union{Missing,T}[rand(rng) < 0.3 ? missing : T(rand(rng, 1:50))
+            for _ in 1:2_000]
+        bytes = Parquet._encodefile((x=values,); dictionary, pageversion, pagesize=256)
+        table = Parquet.Table(bytes)
+        @test isequal(table.x, values)
+        close(table)
+    end
+end
+
+@testset "scan reorders and renames without copying columns" begin
+    bytes = Parquet._encodefile((a=collect(1:5), b=collect(6:10), c=collect(11:15)))
+    table = Parquet.Table(bytes; scan=Tables.Scan(select=[:c, :a => :x]))
+    @test Tables.columnnames(table) == (:c, :x)
+    @test table.c == 11:15 && table.x == 1:5
+    @test Parquet._tablemetadata(table).schema[2].name == "c"
+    @test Parquet._tablemetadata(table).schema[3].name == "x"
+    # Column vectors come from the read itself, not a second copy.
+    large = Parquet._encodefile((a=collect(1:100_000), b=collect(1:100_000),
+        c=collect(1:100_000)))
+    inorder, reorder = Tables.Scan(select=[:a, :c]), Tables.Scan(select=[:c, :a])
+    Parquet.Table(large; scan=inorder, ntasks=1); Parquet.Table(large; scan=reorder, ntasks=1)
+    whole = @allocated Parquet.Table(large; scan=inorder, ntasks=1)
+    reordered = @allocated Parquet.Table(large; scan=reorder, ntasks=1)
+    @test reordered < whole + 100_000
+    twice = Parquet.Table(bytes; scan=Tables.Scan(select=[:a, :a => :y]))
+    @test twice.a == twice.y && twice.a !== twice.y
 end

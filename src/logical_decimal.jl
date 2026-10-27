@@ -289,3 +289,75 @@ function _toparquetdecimal(element::Metadata.SchemaElement,
     end
     return bytes
 end
+
+# DECIMAL values of precision up to 76 decode straight into the storage integer `T` of
+# `D = DataDecimals.Decimal{P,S,T}`: INT32 and INT64 values convert, byte arrays are
+# big-endian two's complement. `bound` is 10^P; a value at or past it has more digits
+# than the column's precision. `maxbytes` is the limit on one byte-array value.
+struct _DecimalValue{D,T}
+    bound::T
+    element::Metadata.SchemaElement
+    maxbytes::Int64
+end
+
+function _DecimalValue(::Type{D}, element::Metadata.SchemaElement,
+        limits::Limits) where {P,S,T,D<:DataDecimals.Decimal{P,S,T}}
+    return _DecimalValue{D,T}(_decimalbound(T, Val(P)), element, limits.max_decimal_bytes)
+end
+
+@noinline function _decimalrangeerror(convert::_DecimalValue{D}) where {D}
+    precision, _ = something(_decimalparameters(convert.element))
+    throw(FormatError("DECIMAL column $(repr(convert.element.name)) contains a value " *
+        "with more than $precision digits"))
+end
+
+@inline function _checkeddecimal(convert::_DecimalValue{D,T}, value::T) where {D,T}
+    bound = convert.bound
+    (value < bound) & (value > -bound) || _decimalrangeerror(convert)
+    return reinterpret(D, value)
+end
+
+function (convert::_DecimalValue{D,T})(value::Union{Int32,Int64}) where {D,T}
+    W = promote_type(T, typeof(value))
+    wide = W(value)
+    bound = W(convert.bound)
+    (wide < bound) & (wide > -bound) || _decimalrangeerror(convert)
+    return reinterpret(D, wide % T)
+end
+
+function (convert::_DecimalValue{D,T})(bytes::AbstractVector{UInt8}) where {D,T}
+    count = length(bytes)
+    count > 0 || throw(FormatError(
+        "DECIMAL column $(repr(convert.element.name)) contains an empty byte array"))
+    _checklimit(:decimal_bytes, count, convert.maxbytes)
+    negative = bytes[1] >= 0x80
+    # Bytes past the storage width can only repeat the sign.
+    extra = max(count - sizeof(T), 0)
+    for index in 1:extra
+        bytes[index] == (negative ? 0xff : 0x00) || _decimalrangeerror(convert)
+    end
+    bits = negative ? typemax(unsigned(T)) : zero(unsigned(T))
+    for index in (extra + 1):count
+        bits = (bits << 8) | unsigned(T)(bytes[index])
+    end
+    value = signed(bits)
+    extra > 0 && signbit(value) != negative && _decimalrangeerror(convert)
+    return _checkeddecimal(convert, value)
+end
+
+# PLAIN INT32/INT64 values whose storage type matches copy in bulk; `_aftercopy!` then
+# checks them against the precision bound.
+function _aftercopy!(convert::_DecimalValue{D,T}, dest::Vector, offset::Int,
+        count::Int) where {D,T}
+    bound = convert.bound
+    valid = true
+    GC.@preserve dest begin
+        values = Ptr{T}(pointer(dest, offset + 1))
+        @inbounds for index in 1:count
+            value = unsafe_load(values, index)
+            valid &= (value < bound) & (value > -bound)
+        end
+    end
+    valid || _decimalrangeerror(convert)
+    return
+end
