@@ -616,9 +616,8 @@ function _readgroups(file::File, groups::AbstractVector{Int}, budget::_ByteBudge
         columns = _readflattable(file, metadata, schema, rows, limits, budget, plan.ntasks,
             plan.options)
     else
-        root = _readnestedroot(file, metadata, schema, nested, limits, budget, plan.ntasks,
-            plan.options)
-        columns = root.children
+        columns = _readnestedcolumns(file, metadata, schema, nested, rows, limits, budget,
+            plan.ntasks, plan.options)
     end
     length(columns) == length(names) || throw(AssertionError(
         "table column count does not match its names"))
@@ -914,11 +913,18 @@ end
     Parquet.read(source, sink; kw...)
 
 Read `source` as [`Parquet.Table`](@ref)`(source; kw...)` does and pass its columns to
-`sink` without copying them, for example `Parquet.read(path, DataFrame)`.
+`sink` without copying their values, for example `Parquet.read(path, DataFrame)`.
+Nested columns arrive as `Vector`s of their rows, so the sink can grow and reorder them.
 """
 function read(source, sink; kw...)
-    return sink(Tables.CopiedColumns(Table(source; kw...)))
+    table = Table(source; kw...)
+    columns = map(_rowcolumn, _tablecolumns(table))
+    return sink(Tables.CopiedColumns(Table(_tablemetadata(table), _tableschema(table),
+        columns, _tablerows(table), _tablecolmetadata(table))))
 end
+
+_rowcolumn(column::AbstractVector) = column
+_rowcolumn(column::Union{ListVector,StructVector,MapVector}) = collect(column)
 
 function read(source; kw...)
     throw(ArgumentError("Parquet.read needs a sink, for example " *

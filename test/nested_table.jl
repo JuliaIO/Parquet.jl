@@ -23,47 +23,25 @@ function ntfixture(name::AbstractString)
     return joinpath(NESTED_TABLE_CORPUS, "data", name)
 end
 
-function ntreadroot(input; limits::Parquet.Limits=Parquet.Limits())
-    budget = Parquet._ByteBudget(limits)
-    file = Parquet.File(input; limits=limits, budget=budget)
-    try
-        metadata = Parquet._readfilemetadata(file, limits, budget)
-        schema = Parquet.Schema(metadata; limits=limits)
-        plan = Parquet._nestedplan(schema; limits=limits)
-        root = Parquet._readnestedroot(file, metadata, schema, plan, limits,
-            budget)
-        return (; root, metadata, schema, plan, budget)
-    finally
-        close(file)
-    end
+# The table read from `input`, with its columns as the children of one root struct.
+function ntreadroot(input; limits::Parquet.Limits=Parquet.Limits(), ntasks=1)
+    table = Parquet.Table(input; limits=limits, ntasks=ntasks)
+    columns = Parquet.Tables.columns(table)
+    root = Parquet.StructVector(String[String(name) for name in keys(columns)],
+        collect(AbstractVector, values(columns)); rows=Parquet.DataAPI.nrow(table))
+    return (; root, metadata=Parquet._tablemetadata(table))
 end
 
 function ntsemantic(value)
     ismissing(value) && return missing
-    if value isa Parquet.StructValue
-        output = Pair{String,Any}[]
-        sizehint!(output, length(value))
-        for index in 1:length(value)
-            push!(output, value.names[index] => ntsemantic(value[index]))
-        end
-        return output
-    end
-    if value isa Parquet.MapValue
-        output = Pair{Any,Any}[]
-        sizehint!(output, length(value))
-        for pair in value
-            push!(output, ntsemantic(pair.first) => ntsemantic(pair.second))
-        end
-        return output
-    end
-    if value isa Parquet.ListValue
-        output = []
-        sizehint!(output, length(value))
-        for item in value
-            push!(output, ntsemantic(item))
-        end
-        return output
-    end
+    value isa NamedTuple && return Pair{String,Any}[String(name) => ntsemantic(item)
+        for (name, item) in pairs(value)]
+    value isa Parquet.StructValue &&
+        return Pair{String,Any}[pair.first => ntsemantic(pair.second) for pair in value]
+    value isa Parquet.MapValue &&
+        return Pair{Any,Any}[ntsemantic(pair.first) => ntsemantic(pair.second)
+            for pair in value]
+    value isa Parquet.ListValue && return Any[ntsemantic(item) for item in value]
     return value
 end
 
@@ -148,40 +126,40 @@ end
         lists = ntreadroot(ntfixture("list_columns.parquet"))
         @test lists.root.names == ["int64_list", "utf8_list"]
         @test length(lists.root) == 3
-        @test isequal(ntsemantic(lists.root[1]["int64_list"]), [1, 2, 3])
-        @test isequal(ntsemantic(lists.root[2]["int64_list"]), [missing, 1])
-        @test lists.root[2]["utf8_list"] === missing
-        @test isequal(ntsemantic(lists.root[3]["utf8_list"]),
+        @test isequal(ntsemantic(lists.root[1][:int64_list]), [1, 2, 3])
+        @test isequal(ntsemantic(lists.root[2][:int64_list]), [missing, 1])
+        @test lists.root[2][:utf8_list] === missing
+        @test isequal(ntsemantic(lists.root[3][:utf8_list]),
             ["efg", missing, "hij", "xyz"])
 
         null_list = ntreadroot(ntfixture("null_list.parquet")).root
         @test null_list.names == ["emptylist"]
         @test length(null_list) == 1
-        @test null_list[1]["emptylist"] !== missing
-        @test isempty(null_list[1]["emptylist"])
+        @test null_list[1][:emptylist] !== missing
+        @test isempty(null_list[1][:emptylist])
 
         v2 = ntreadroot(ntfixture("datapage_v2.snappy.parquet")).root
         @test v2.names == ["a", "b", "c", "d", "e"]
         @test length(v2) == 5
-        @test [v2[row]["b"] for row in 1:5] == Int64[1, 2, 3, 4, 5]
-        @test isequal([v2[row]["a"] for row in 1:5],
+        @test [v2[row][:b] for row in 1:5] == Int64[1, 2, 3, 4, 5]
+        @test isequal([v2[row][:a] for row in 1:5],
             ["abc", "abc", "abc", missing, "abc"])
-        @test isequal([ntsemantic(v2[row]["e"]) for row in 1:5],
+        @test isequal([ntsemantic(v2[row][:e]) for row in 1:5],
             Any[[1, 2, 3], missing, missing, [1, 2, 3], [1, 2]])
 
         old = ntreadroot(ntfixture("old_list_structure.parquet")).root
         @test old.names == ["a"]
         @test length(old) == 1
-        @test isequal(ntsemantic(old[1]["a"]), [[1, 2], [3, 4]])
+        @test isequal(ntsemantic(old[1][:a]), [[1, 2], [3, 4]])
 
         nestedlists = ntreadroot(
             ntfixture("nested_lists.snappy.parquet")).root
         @test nestedlists.names == ["a", "b"]
         @test length(nestedlists) == 3
-        @test [nestedlists[row]["b"] for row in 1:3] == Int32[1, 1, 1]
-        @test isequal(ntsemantic(nestedlists[1]["a"]),
+        @test [nestedlists[row][:b] for row in 1:3] == Int32[1, 1, 1]
+        @test isequal(ntsemantic(nestedlists[1][:a]),
             [[Any["a", "b"], Any["c"]], [missing, Any["d"]]])
-        @test isequal(ntsemantic(nestedlists[3]["a"]),
+        @test isequal(ntsemantic(nestedlists[3][:a]),
             [[Any["a", "b"], Any["c", "d"], Any["e"]],
                 [missing, Any["f"]]])
 
@@ -189,13 +167,13 @@ end
             ntfixture("nested_maps.snappy.parquet")).root
         @test nestedmaps.names == ["a", "b", "c"]
         @test length(nestedmaps) == 6
-        @test [nestedmaps[row]["b"] for row in 1:6] == fill(Int32(1), 6)
-        @test [nestedmaps[row]["c"] for row in 1:6] == fill(1.0, 6)
-        @test isequal(ntsemantic(nestedmaps[1]["a"]),
+        @test [nestedmaps[row][:b] for row in 1:6] == fill(Int32(1), 6)
+        @test [nestedmaps[row][:c] for row in 1:6] == fill(1.0, 6)
+        @test isequal(ntsemantic(nestedmaps[1][:a]),
             ["a" => Any[1 => true, 2 => false]])
-        @test isequal(ntsemantic(nestedmaps[3]["a"]), ["c" => missing])
-        @test isequal(ntsemantic(nestedmaps[4]["a"]), ["d" => Any[]])
-        @test isequal(ntsemantic(nestedmaps[6]["a"]),
+        @test isequal(ntsemantic(nestedmaps[3][:a]), ["c" => missing])
+        @test isequal(ntsemantic(nestedmaps[4][:a]), ["d" => Any[]])
+        @test isequal(ntsemantic(nestedmaps[6][:a]),
             ["f" => Any[3 => true, 4 => false, 5 => true]])
 
         repeated = ntreadroot(
@@ -206,33 +184,33 @@ end
         expectedints = Any[[0, 1, 2, 3], [], [4], [5, 6, 7, 8]]
         expectedstrings = Any[["foo", "zero", "one", "two"], ["three"],
             ["four"], ["five", "six", "seven", "eight"]]
-        @test isequal([ntsemantic(repeated[row]["Int32_list"])
+        @test isequal([ntsemantic(repeated[row][:Int32_list])
             for row in 1:4], expectedints)
-        @test isequal([ntsemantic(repeated[row]["String_list"])
+        @test isequal([ntsemantic(repeated[row][:String_list])
             for row in 1:4], expectedstrings)
         @test all(row -> isequal(
-            ntsemantic(repeated[row]["Int32_list"]),
-            ntsemantic(repeated[row]["group_of_lists"]["Int32_list_in_group"])),
+            ntsemantic(repeated[row][:Int32_list]),
+            ntsemantic(repeated[row][:group_of_lists][:Int32_list_in_group])),
             1:4)
         @test all(row -> isequal(
-            ntsemantic(repeated[row]["String_list"]),
-            ntsemantic(repeated[row]["group_of_lists"]["String_list_in_group"])),
+            ntsemantic(repeated[row][:String_list]),
+            ntsemantic(repeated[row][:group_of_lists][:String_list_in_group])),
             1:4)
 
         nullable = ntreadroot(ntfixture("nullable.impala.parquet")).root
         @test nullable.names == ["id", "int_array", "int_array_Array",
             "int_map", "int_Map_Array", "nested_struct"]
         @test length(nullable) == 7
-        @test isequal(ntsemantic(nullable[1]["int_array"]), [1, 2, 3])
-        @test isempty(nullable[3]["int_array"])
-        @test nullable[4]["int_array"] === missing
-        @test isempty(nullable[4]["int_array_Array"])
-        @test nullable[5]["int_array_Array"] === missing
-        @test isempty(nullable[3]["int_map"])
-        @test nullable[6]["int_map"] === missing
-        @test nullable[6]["nested_struct"] === missing
-        @test nullable[7]["nested_struct"]["A"] == 7
-        @test isequal(ntsemantic(nullable[7]["nested_struct"]["b"]),
+        @test isequal(ntsemantic(nullable[1][:int_array]), [1, 2, 3])
+        @test isempty(nullable[3][:int_array])
+        @test nullable[4][:int_array] === missing
+        @test isempty(nullable[4][:int_array_Array])
+        @test nullable[5][:int_array_Array] === missing
+        @test isempty(nullable[3][:int_map])
+        @test nullable[6][:int_map] === missing
+        @test nullable[6][:nested_struct] === missing
+        @test nullable[7][:nested_struct][:A] == 7
+        @test isequal(ntsemantic(nullable[7][:nested_struct][:b]),
             [2, 3, missing])
 
         nonnullable = ntreadroot(
@@ -240,11 +218,11 @@ end
         @test nonnullable.names == ["ID", "Int_Array", "int_array_array",
             "Int_Map", "int_map_array", "nested_Struct"]
         @test length(nonnullable) == 1
-        @test nonnullable[1]["ID"] == 8
-        @test isequal(ntsemantic(nonnullable[1]["int_array_array"]),
+        @test nonnullable[1][:ID] == 8
+        @test isequal(ntsemantic(nonnullable[1][:int_array_array]),
             [[-1, -2], Any[]])
-        @test isequal(ntsemantic(nonnullable[1]["Int_Map"]), ["k1" => -1])
-        @test isempty(nonnullable[1]["nested_Struct"]["G"])
+        @test isequal(ntsemantic(nonnullable[1][:Int_Map]), ["k1" => -1])
+        @test isempty(nonnullable[1][:nested_Struct][:G])
 
         novalue = ntreadroot(ntfixture("map_no_value.parquet")).root
         @test novalue.names == ["my_map", "my_map_no_v", "my_list"]
@@ -252,35 +230,34 @@ end
         for row in 1:3
             firstkey = 3 * row - 2
             expectedkeys = collect(Int32(firstkey):Int32(firstkey + 2))
-            @test [pair.first for pair in novalue[row]["my_map"]] ==
+            @test [pair.first for pair in novalue[row][:my_map]] ==
                 expectedkeys
             @test all(pair -> ismissing(pair.second),
-                novalue[row]["my_map"])
-            @test isequal(ntsemantic(novalue[row]["my_map"]),
-                ntsemantic(novalue[row]["my_map_no_v"]))
-            @test collect(novalue[row]["my_list"]) == expectedkeys
+                novalue[row][:my_map])
+            @test isequal(ntsemantic(novalue[row][:my_map]),
+                ntsemantic(novalue[row][:my_map_no_v]))
+            @test collect(novalue[row][:my_list]) == expectedkeys
         end
 
         incorrect = ntreadroot(
             ntfixture("incorrect_map_schema.parquet")).root
         @test incorrect.names == ["my_map"]
         @test length(incorrect) == 1
-        @test length(incorrect[1]["my_map"]) == 2
-        @test Parquet.maplookup(incorrect[1]["my_map"], "name") == "report"
-        @test Parquet.maplookup(incorrect[1]["my_map"], "parent") ==
-            "another"
+        @test length(incorrect[1][:my_map]) == 2
+        @test Dict(incorrect[1][:my_map])["name"] == "report"
+        @test Dict(incorrect[1][:my_map])["parent"] == "another"
 
         structs = ntreadroot(ntfixture("nested_structs.rust.parquet")).root
         @test length(structs) == 1
         @test length(structs.names) == 36
         @test structs.names[1:4] == ["roll_num", "PC_CUR", "CVA_2012",
             "CVA_2016"]
-        @test structs[1]["roll_num"]["min"] == 190406409000602
-        @test structs[1]["PC_CUR"]["max"] == 742
-        @test structs[1]["CVA_2012"]["max"] == 32150509
-        @test structs[1]["CVA_2016"]["max"] == 35195000
-        @test structs[1]["BIA_3"]["count"] == 0
-        @test structs[1]["count"]["sum"] == 495
+        @test structs[1][:roll_num][:min] == 190406409000602
+        @test structs[1][:PC_CUR][:max] == 742
+        @test structs[1][:CVA_2012][:max] == 32150509
+        @test structs[1][:CVA_2016][:max] == 35195000
+        @test structs[1][:BIA_3][:count] == 0
+        @test structs[1][:count][:sum] == 495
     else
         @info "parquet-testing corpus not found; skipping whole-table nested fixtures" corpus=NESTED_TABLE_CORPUS
     end
@@ -309,7 +286,7 @@ end
         @test [group.num_rows for group in result.metadata.row_groups] == [3, 3]
         @test all(row -> isequal(ntsemantic(result.root[row]),
             ntsemantic(result.root[row + 3])), 1:3)
-        @test isequal([ntsemantic(result.root[row]["int64_list"])
+        @test isequal([ntsemantic(result.root[row][:int64_list])
             for row in 1:6],
             Any[[1, 2, 3], [missing, 1], [4], [1, 2, 3], [missing, 1], [4]])
     else
@@ -324,15 +301,15 @@ end
         @test result.metadata.num_rows == 0
         @test [group.num_rows for group in result.metadata.row_groups] == [6]
         @test length(result.root) == 6
-        @test [result.root[row]["id"] for row in 1:6] == Int64[1, 2, 3, 4, 5, 6]
-        @test result.root[1]["phoneNumbers"] === missing
-        @test isempty(result.root[3]["phoneNumbers"]["phone"])
-        @test result.root[4]["phoneNumbers"]["phone"][1]["number"] ==
+        @test [result.root[row][:id] for row in 1:6] == Int64[1, 2, 3, 4, 5, 6]
+        @test result.root[1][:phoneNumbers] === missing
+        @test isempty(result.root[3][:phoneNumbers][:phone])
+        @test result.root[4][:phoneNumbers][:phone][1][:number] ==
             5555555555
-        @test [phone["number"] for phone in
-            result.root[6]["phoneNumbers"]["phone"]] ==
+        @test [phone[:number] for phone in
+            result.root[6][:phoneNumbers][:phone]] ==
             Int64[1111111111, 2222222222, 3333333333]
-        @test result.root[6]["phoneNumbers"]["phone"][2]["kind"] === missing
+        @test result.root[6][:phoneNumbers][:phone][2][:kind] === missing
     else
         @info "legacy sentinel fixture not found; skipping nested row-count test" corpus=NESTED_TABLE_CORPUS
     end
@@ -341,15 +318,15 @@ end
 @testset "whole-table nested reads respect the byte cap" begin
     fixture = ntfixture("list_columns.parquet")
     if isfile(fixture)
-        setup = ntreadroot(fixture)
-        initial = 100
-        limits = Parquet.Limits(max_materialized_bytes=initial)
-        budget = Parquet._ByteBudget(limits)
         file = Parquet.File(fixture)
         try
+            plan = file.plan
+            nested = Parquet._nestedplan(plan.schema; limits=plan.limits)
+            initial = 100
+            limits = Parquet.Limits(max_materialized_bytes=initial)
             error = try
-                Parquet._readnestedroot(file, setup.metadata, setup.schema,
-                    setup.plan, limits, budget)
+                Parquet._readnestedcolumns(file, plan.metadata, plan.schema, nested, 3,
+                    limits, Parquet._ByteBudget(limits), 1, plan.options)
                 nothing
             catch err
                 err
@@ -361,6 +338,20 @@ end
             close(file)
         end
     else
-        @info "list_columns fixture not found; skipping nested cleanup test" corpus=NESTED_TABLE_CORPUS
+        @info "list_columns fixture not found; skipping nested byte-cap test" corpus=NESTED_TABLE_CORPUS
+    end
+end
+
+@testset "nested reads are the same for any ntasks" begin
+    for name in NESTED_TABLE_FIXTURES
+        fixture = ntfixture(name)
+        isfile(fixture) || continue
+        bytes, _, _ = ntduplicaterowgroup(fixture)
+        one = ntreadroot(bytes; ntasks=1).root
+        for ntasks in (2, 3, 8)
+            other = ntreadroot(bytes; ntasks=ntasks).root
+            @test isequal(ntsemantic.(one), ntsemantic.(other))
+            @test typeof(one) == typeof(other)
+        end
     end
 end

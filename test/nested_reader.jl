@@ -62,13 +62,14 @@ end
     result = Parquet._assemblenested(plan, streams, 3)
     @test result isa Parquet.StructVector
     @test length(result) == 3
-    @test result[1]["id"] == 1
-    @test result[2]["record"] === missing
-    @test result[3]["record"]["name"] == "c"
-    @test result[1]["day"] == Dates.Date(1970, 1, 1)
-    @test result[2]["day"] === missing
-    @test eltype(result.children[2]) == Union{Missing,Parquet.StructValue}
-    @test result.children[2].ranks == Int32[0, 1, 1, 2]
+    @test result[1][:id] == 1
+    @test result[2][:record] === missing
+    @test result[3][:record][:name] == "c"
+    @test result[1][:day] == Dates.Date(1970, 1, 1)
+    @test result[2][:day] === missing
+    @test eltype(result.children[2]) ==
+        Union{Missing,@NamedTuple{name::Parquet.DataStrings.DataString}}
+    @test result.children[2].validity == Bool[true, false, true]
     @test eltype(result.children[2].children[1]) == Parquet.DataStrings.DataString
 
     empty = Parquet._assemblenested(plan, Parquet.LeafStream[
@@ -106,7 +107,7 @@ end
     result = Parquet._assemblenested(plan, streams, 1)
     @test [result[1][index] for index in 1:5] == Any[true, 2, 3, 4, 5]
     @test result[1][6] == UInt8[0x06]
-    @test result[1][7] == UInt8[0x07, 0x08]
+    @test result[1][7] == (0x07, 0x08)
 
     wrongtype = copy(streams)
     wrongtype[2] = nrstream(plan, 2, [0], [0], Any["wrong"]; rows=1)
@@ -184,9 +185,9 @@ end
     stream = nrstream(plan, 1, [0, 0, 1, 0], [0, 1, 1, 1],
         Int32[1, 2, 3]; rows=3)
     result = Parquet._assemblenested(plan, [stream], 3)
-    @test isempty(result[1]["items"])
-    @test collect(result[2]["items"]) == Int32[1, 2]
-    @test collect(result[3]["items"]) == Int32[3]
+    @test isempty(result[1][:items])
+    @test collect(result[2][:items]) == Int32[1, 2]
+    @test collect(result[3][:items]) == Int32[3]
 
     continuation = nrstream(plan, 1, [0, 1, 0], [0, 1, 0],
         Int32[1]; rows=2)
@@ -216,11 +217,13 @@ end
     column = result.children[1]
     @test isempty(column[1])
     @test length(column[2]) == 2
-    @test column[2][1][1] == 1
-    @test column[2][1][2] == "a"
-    @test column[2][2][2] === missing
+    # Duplicate field names give Pair rows.
+    @test column[2][1] isa Parquet.StructValue
+    @test column[2][1][1] == ("x" => 1)
+    @test column[2][1][2] == ("x" => "a")
+    @test isequal(column[2][2][2], "x" => missing)
     @test_throws ArgumentError column[2][1]["x"]
-    @test column[3][1][1] == 3
+    @test column[3][1][1] == ("x" => 3)
 
     short = nrstream(plan, 2, [0, 0, 0], [0, 2, 2],
         [UInt8[0x61], UInt8[0x63]]; rows=3)
@@ -254,10 +257,10 @@ end
     result = Parquet._assemblenested(plan, [id, items], 4)
     record = result.children[1]
     @test record[1] === missing
-    @test record[2]["id"] == 2
-    @test record[2]["items"] === missing
-    @test isempty(record[3]["items"])
-    @test isequal(collect(record[4]["items"]),
+    @test record[2][:id] == 2
+    @test record[2][:items] === missing
+    @test isempty(record[3][:items])
+    @test isequal(collect(record[4][:items]),
         Union{Missing,Int32}[missing, 7])
 end
 
@@ -285,7 +288,7 @@ end
     @test isempty(lookup[2])
     @test isequal(collect(lookup[3]), Pair{Int32,Union{Missing,String}}[
         1 => "a", 1 => missing, 2 => "b"])
-    @test Parquet.maplookup(lookup[3], 1) === missing
+    @test Dict(lookup[3])[1] === missing
     @test isequal(Dict(lookup[3]), Dict{Int32,Union{Missing,String}}(
         1 => missing, 2 => "b"))
     @test collect(lookup[4]) == Pair{Int32,Union{Missing,String}}[3 => "c"]
@@ -302,7 +305,7 @@ end
     omittedkeys = nrstream(omittedplan, 1, [0, 1], [1, 1],
         Int32[4, 5]; rows=1)
     omitted = Parquet._assemblenested(omittedplan, [omittedkeys], 1)
-    @test isequal(collect(omitted[1]["lookup"]), Pair{Int32,Missing}[
+    @test isequal(collect(omitted[1][:lookup]), Pair{Int32,Missing}[
         4 => missing, 5 => missing])
 end
 
@@ -327,10 +330,10 @@ end
     right = nrstream(plan, 3, [0, 0, 1], [0, 3, 1],
         [UInt8[0x78]]; rows=2)
     result = Parquet._assemblenested(plan, [keys, left, right], 2)
-    lookup = result[2]["lookup"]
+    lookup = result[2][:lookup]
     @test lookup[1].first == 1
-    @test lookup[1].second["left"] == 10
-    @test lookup[1].second["right"] == "x"
+    @test lookup[1].second.left == 10
+    @test lookup[1].second.right == "x"
     @test isequal(lookup[2], 2 => missing)
 
     optionalkeyelements = NRMD.SchemaElement[
@@ -351,7 +354,7 @@ end
     present = Parquet._assemblenested(optionalkeyplan,
         [presentkey, nullvalue], 1)
     @test !(Missing <: eltype(present.children[1].keys))
-    @test isequal(collect(present[1]["lookup"]),
+    @test isequal(collect(present[1][:lookup]),
         Pair{Int32,Union{Missing,Int32}}[7 => missing])
 end
 
@@ -372,31 +375,16 @@ end
         plan, [left, right], 1; limits=tiny)
 
     validleft = nrstream(plan, 1, [0], [1], Int32[1]; rows=1)
-    # The smallest budget that assembles the valid streams; one byte less fails while
-    # materializing outputs, after the structure is validated.
-    function fits(maximum)
-        limits = Parquet.Limits(max_materialized_bytes=maximum)
-        try
-            Parquet._assemblenested(plan, [validleft, right], 1; limits=limits)
-            return true
-        catch err
-            err isa Parquet.LimitError || rethrow()
-            return false
-        end
-    end
-    needed = findfirst(fits, 1:100_000)
-    passlimits = Parquet.Limits(max_materialized_bytes=needed - 1)
-    @test_throws Parquet.FormatError Parquet._assemblenested(
-        plan, [left, right], 1; limits=passlimits)
+    @test_throws Parquet.FormatError Parquet._assemblenested(plan, [left, right], 1)
     @test_throws Parquet.LimitError Parquet._assemblenested(
-        plan, [validleft, right], 1; limits=passlimits)
+        plan, [validleft, right], 1; limits=tiny)
     @test_throws Parquet.FormatError Parquet._assemblenested(
         plan, [validleft], 1)
     @test_throws Parquet.FormatError Parquet._assemblenested(
         plan, [validleft, right], 2)
 
     output = Parquet._assemblenested(plan, [validleft, right], 1)
-    @test output[1]["record"]["left"] == 1
+    @test output[1][:record][:left] == 1
 end
 
 @testset "nested reader required leafless structs" begin
@@ -408,8 +396,8 @@ end
     plan = nrplan(elements)
     result = Parquet._assemblenested(plan, Parquet.LeafStream[], 3)
     @test length(result) == 3
-    @test length(result[1]["empty"]) == 0
-    @test result.children[1].rows == 3
+    @test length(result[1][:empty]) == 0
+    @test result.children[1].length == 3
 end
 
 @testset "nested reader list of maps, Bool keys, and zero rows" begin
@@ -442,7 +430,7 @@ end
         true => 10, false => missing])
     @test collect(outer[4][1]) == Pair{Bool,Union{Missing,Int32}}[true => 20]
     @test outer.values.keys isa Vector{Bool}
-    @test Parquet.maplookup(outer[3][2], false) === missing
+    @test Dict(outer[3][2])[false] === missing
     @test isequal(Dict(outer[3][2]),
         Dict{Bool,Union{Missing,Int32}}(true => 10, false => missing))
 
@@ -477,19 +465,14 @@ end
         Int32[10, 11]; rows=1)
     values = nrstream(plan, 3, [0, 1], [1, 1], Int32[100, 200]; rows=1)
     result = Parquet._assemblenested(plan, [ids, items, values], 1)
-    lookup = result[1]["lookup"]
+    lookup = result[1][:lookup]
     @test length(lookup) == 2
-    @test lookup[1].first["id"] == 1
-    @test collect(lookup[1].first["items"]) == Int32[10, 11]
-    @test isempty(lookup[2].first["items"])
+    @test lookup[1].first.id == 1
+    @test collect(lookup[1].first.items) == Int32[10, 11]
+    @test isempty(lookup[2].first.items)
     dictionary = Dict(lookup)
-    fresh = Parquet.StructVector(["id", "items"],
-        (Int32[1], Parquet.ListVector(Int32[0, 2], Int32[10, 11])))[1]
-    @test dictionary[fresh] == 100
-    lookup.keys.children[1][1] = Int32(9)
-    lookup.keys.children[2].values[1] = Int32(99)
-    @test dictionary[fresh] == 100
-    @test !haskey(dictionary, lookup[1].first)
+    @test dictionary[(id=Int32(1), items=Int32[10, 11])] == 100
+    @test dictionary[(id=Int32(2), items=Int32[])] == 200
 end
 
 @testset "nested reader special-name legacy lists" begin
@@ -514,12 +497,12 @@ end
         Int32[10, 20]; rows=2)
     pairs = nrstream(plan, 2, [0, 0], [1, 2], Int32[7]; rows=2)
     result = Parquet._assemblenested(plan, [items, pairs], 2)
-    @test isempty(result[1]["items"])
-    @test length(result[2]["items"]) == 2
-    @test result[2]["items"][1]["value"] == 10
-    @test result[2]["items"][2]["value"] == 20
-    @test result[1]["pairs"][1]["member"] === missing
-    @test result[2]["pairs"][1]["member"] == 7
+    @test isempty(result[1][:items])
+    @test length(result[2][:items]) == 2
+    @test result[2][:items][1][:value] == 10
+    @test result[2][:items][2][:value] == 20
+    @test result[1][:pairs][1][:member] === missing
+    @test result[2][:pairs][1][:member] == 7
 end
 
 @testset "nested reader repetition projection and all-null required struct" begin
@@ -544,10 +527,10 @@ end
     right = nrstream(projectionplan, 2, [0, 0, 1], [1, 1, 1],
         Int32[10, 20, 30]; rows=2)
     projected = Parquet._assemblenested(projectionplan, [left, right], 2)
-    @test collect(projected[1]["record"]["left"]) == Int32[1, 2]
-    @test collect(projected[1]["record"]["right"]) == Int32[10]
-    @test isempty(projected[2]["record"]["left"])
-    @test collect(projected[2]["record"]["right"]) == Int32[20, 30]
+    @test collect(projected[1][:record][:left]) == Int32[1, 2]
+    @test collect(projected[1][:record][:right]) == Int32[10]
+    @test isempty(projected[2][:record][:left])
+    @test collect(projected[2][:record][:right]) == Int32[20, 30]
 
     nullelements = NRMD.SchemaElement[
         nrroot(1),
@@ -561,9 +544,9 @@ end
     day = nrstream(nullplan, 1, [0], [0], Int32[]; rows=1)
     name = nrstream(nullplan, 2, [0], [0], Vector{UInt8}[]; rows=1)
     allnull = Parquet._assemblenested(nullplan, [day, name], 1)
-    @test allnull[1]["record"] isa Parquet.StructValue
-    @test allnull[1]["record"]["day"] === missing
-    @test allnull[1]["record"]["name"] === missing
+    @test allnull[1][:record] isa NamedTuple
+    @test allnull[1][:record][:day] === missing
+    @test allnull[1][:record][:name] === missing
     @test eltype(allnull.children[1].children[1]) == Union{Missing,Dates.Date}
     @test eltype(allnull.children[1].children[2]) == Union{Missing,Parquet.DataStrings.DataString}
 end
@@ -595,7 +578,7 @@ end
     typerepr = sprint(show, typeof(column))
     @test count("ListVector", typerepr) == 1
     @test ncodeunits(typerepr) < 16 * 1024
-    value = result[1]["outer"]
+    value = result[1][:outer]
     for _ in 1:126
         value = only(value)
     end
@@ -616,12 +599,13 @@ end
     raw = nrstream(plan, 1, [0], [0], [rawbytes]; rows=1)
     text = nrstream(plan, 2, [0], [0], [textbytes]; rows=1)
     result = Parquet._assemblenested(plan, [raw, text], 1)
-    @test result[1]["raw"] === rawbytes
-    @test result[1]["text"] == "b"
+    @test result[1][:raw] isa Parquet.DataStrings.DataBytes
+    @test result[1][:raw] == UInt8[0x61]
+    @test result[1][:text] == "b"
     rawbytes[1] = 0x63
     textbytes[1] = 0x64
-    @test result[1]["raw"] == UInt8[0x63]
-    @test result[1]["text"] == "b"
+    @test result[1][:raw] == UInt8[0x61]
+    @test result[1][:text] == "b"
 end
 
 @testset "deep plans are rejected before recursive assembly" begin

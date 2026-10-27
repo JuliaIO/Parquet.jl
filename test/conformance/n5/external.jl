@@ -400,10 +400,12 @@ const N5_EXTERNAL_EXPECTED_ROWS = n5externalexpectedrows()
 
 function n5externalnormalize(value)
     value === missing && return missing
-    if value isa Parquet.StructValue
+    if value isa Union{NamedTuple,Parquet.StructValue}
+        fields = value isa NamedTuple ? (String(name) => item for (name, item) in pairs(value)) :
+            value
         output = Pair{String,Any}[]
         sizehint!(output, length(value))
-        for pair in value
+        for pair in fields
             push!(output, Pair{String,Any}(String(pair.first),
                 n5externalnormalize(pair.second)))
         end

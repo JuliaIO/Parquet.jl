@@ -173,23 +173,16 @@ function _nestedwriteshape(name::String, declared::Type, source,
         return _nestedwriteleafshape(name, value_type, optional;
             fixed_width=source.width)
     elseif source isa StructVector
-        (source.ranks !== nothing) == (Missing <: declared) || throw(ArgumentError(
-            "StructVector validity does not match its declared element type"))
         types = Type[eltype(child) for child in source.children]
-        return _nestedwritestructshape(name, StructValue, optional,
+        return _nestedwritestructshape(name, value_type, optional,
             copy(source.names), types, copy(source.children), limits, depth, path, nullable)
     elseif source isa ListVector
-        (source.validity !== nothing) == (Missing <: declared) || throw(ArgumentError(
-            "ListVector validity does not match its declared element type"))
         return _nestedwritelistshape(name, value_type, optional,
             eltype(source.values), source.values, limits, depth, path, nullable)
     elseif source isa MapVector
-        (source.validity !== nothing) == (Missing <: declared) || throw(ArgumentError(
-            "MapVector validity does not match its declared element type"))
-        values = source.values
         return _nestedwritemapshape(name, value_type, optional,
-            eltype(source.keys), values === nothing ? Missing : eltype(values),
-            source.keys, values, limits, depth, path, nullable)
+            eltype(source.keys), eltype(source.values), source.keys, source.values,
+            limits, depth, path, nullable)
     elseif value_type <: ListValue
         _nestedwritecheckconcrete(value_type, "Parquet list view type")
         return _nestedwritelistshape(name, value_type, optional,
@@ -199,8 +192,14 @@ function _nestedwriteshape(name::String, declared::Type, source,
             "Parquet scalar type")
         return _nestedwriteleafshape(name, value_type, optional)
     elseif value_type <: StructValue
-        throw(ArgumentError(
-            "StructValue needs its owning StructVector to declare field names and types"))
+        # Rows of one column share their struct's children, which declare its fields.
+        row = source isa AbstractVector ? findfirst(!ismissing, source) : nothing
+        row === nothing && throw(ArgumentError("Parquet field $(repr(path)) holds " *
+            "StructValue rows but no present row declares their fields"))
+        sample = source[row]
+        return _nestedwritestructshape(name, value_type, optional, copy(sample.names),
+            Type[eltype(child) for child in sample.children], copy(sample.children),
+            limits, depth, path, nullable)
     elseif value_type <: NamedTuple
         _nestedwritecheckconcrete(value_type, "Parquet struct type")
         names = String[String(field) for field in fieldnames(value_type)]
@@ -932,7 +931,7 @@ function _provenancenode(plan::_NestedPlan)
             _provenancevaluetype(_logicaleltype(element, _physicaleltype(element.type_))),
             _NestedWriteNode[])
     elseif plan isa _NestedStructPlan
-        return _NestedWriteNode(plan, StructValue,
+        return _NestedWriteNode(plan, Union{NamedTuple,StructValue},
             _NestedWriteNode[_provenancenode(child) for child in plan.children])
     elseif plan isa _NestedListPlan
         return _NestedWriteNode(plan, ListValue,

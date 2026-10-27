@@ -411,6 +411,10 @@ end
     end
 end
 
+# The first field of a struct row: a NamedTuple, or Pair rows past the typed depth.
+wpfield(row::NamedTuple) = first(row)
+wpfield(row::Parquet.StructValue) = first(row).second
+
 @testset "schema-bearing writer deep structs" begin
     depth = 4096
     for rows in (0, 1)
@@ -442,7 +446,7 @@ end
         try
             value = Parquet.Tables.columns(rewritten).deep[1]
             for _ in 1:256
-                value = value[1]
+                value = wpfield(value)
             end
             @test value == Int32(7)
         finally
@@ -474,7 +478,7 @@ end
             @test ismissing(pair.second)
             value = pair.first
             for _ in 1:depth
-                value = value[1]
+                value = wpfield(value)
             end
             @test value == Int32(7)
         finally

@@ -319,10 +319,10 @@ end
         table = Parquet.Table(bytes)
         try
             @test Parquet.Tables.columns(table).s[1] === missing
-            @test Parquet.Tables.columns(table).s[2]["a"] == 1
-            @test Parquet.Tables.columns(table).s[2]["b"] === missing
-            @test Parquet.Tables.columns(table).s[3]["a"] == 2
-            @test Parquet.Tables.columns(table).s[3]["b"] == "x"
+            @test Parquet.Tables.columns(table).s[2][:a] == 1
+            @test Parquet.Tables.columns(table).s[2][:b] === missing
+            @test Parquet.Tables.columns(table).s[3][:a] == 2
+            @test Parquet.Tables.columns(table).s[3][:b] == "x"
         finally
             close(table)
         end
@@ -467,9 +467,9 @@ end
             @test column[1] === missing
             @test isempty(column[2])
             @test column[3][1] === missing
-            @test column[3][2]["id"] == 1
-            @test column[3][2]["label"] === missing
-            @test column[3][3]["label"] == "b"
+            @test column[3][2][:id] == 1
+            @test column[3][2][:label] === missing
+            @test column[3][3][:label] == "b"
         finally
             close(table)
         end
@@ -509,9 +509,9 @@ end
         try
             column = Parquet.Tables.columns(table).record
             @test column[1] === missing
-            @test column[2]["items"] === missing
-            @test isempty(column[3]["items"])
-            @test isequal(collect(column[4]["items"]), E[missing,7])
+            @test column[2][:items] === missing
+            @test isempty(column[3][:items])
+            @test isequal(collect(column[4][:items]), E[missing,7])
         finally
             close(table)
         end
@@ -565,8 +565,8 @@ end
 @testset "recursive writer MAP of optional structs" begin
     structs = Parquet.StructVector(
         ["x","y"],
-        (Int32[1,2], Union{Missing,String}[missing,"z"]);
-        ranks=Int32[0,0,1,2],
+        (Int32[0,1,2], Union{Missing,String}[missing,missing,"z"]);
+        validity=Bool[false,true,true],
     )
     values = Parquet.MapVector(
         Int32[0,0,0,3], String["a","b","c"], structs;
@@ -597,9 +597,9 @@ end
             @test column[1] === missing
             @test isempty(column[2])
             @test column[3][1].second === missing
-            @test column[3][2].second["x"] == 1
-            @test column[3][2].second["y"] === missing
-            @test column[3][3].second["y"] == "z"
+            @test column[3][2].second.x == 1
+            @test column[3][2].second.y === missing
+            @test column[3][3].second.y == "z"
         finally
             close(table)
         end
@@ -720,8 +720,9 @@ end
         max_repetition=0, max_definition=0)
     table = Parquet.Table(bytes)
     try
-        @test Parquet.Tables.columns(table).s[1][1] == 1
-        @test Parquet.Tables.columns(table).s[1][2] == "a"
+        # Duplicate field names read back as Pair rows.
+        @test Parquet.Tables.columns(table).s[1][1] == ("x" => 1)
+        @test Parquet.Tables.columns(table).s[1][2] == ("x" => "a")
         @test_throws ArgumentError Parquet.Tables.columns(table).s[1]["x"]
     finally
         close(table)
@@ -755,7 +756,6 @@ end
         value = Parquet.Tables.columns(table).m[1]
         @test collect(value) == ["k" => Int32(1), "k" => Int32(2),
             "z" => Int32(3)]
-        @test Parquet.maplookup(value, "k") == 2
         @test Dict(value)["k"] == 2
     finally
         close(table)
@@ -855,10 +855,10 @@ end
     table = Parquet.Table(Parquet._encodefile(present))
     try
         value = Parquet.Tables.columns(table).logicals[1][1]
-        @test value["enum"] == "alpha"
-        @test value["time"] == Time(0)
-        @test value["timestamp"] == pqstamp(7, :nanos, false)
-        @test value["decimal"] == decimalexpected(Parquet.Decimal(12345, 4))
+        @test value.enum == "alpha"
+        @test value.time == Time(0)
+        @test value.timestamp == pqstamp(7, :nanos, false)
+        @test value.decimal == decimalexpected(Parquet.Decimal(12345, 4))
     finally
         close(table)
     end
@@ -891,9 +891,9 @@ end
         try
             records = Parquet.Tables.columns(table).records[1]
             @test length(records) == length(entries)
-            @test records[1]["i32"] == entries[1].i32
-            @test records[64]["text"] == entries[64].text
-            @test records[end]["fixed"] == entries[end].fixed
+            @test records[1][:i32] == entries[1].i32
+            @test records[64][:text] == entries[64].text
+            @test records[end][:fixed] == entries[end].fixed
         finally
             close(table)
         end

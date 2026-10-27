@@ -57,1107 +57,354 @@ function Base.sizehint!(column::FixedByteArrayVector, size::Integer)
     return column
 end
 
-const _NestedIndex = Union{Int32,Int64}
+# Nested columns. A value type alone fixes the vector that stores such values
+# (`_columntype`), so nested columns keep their child vectors untyped and read them back
+# through that type: column types take only their element type as a parameter, however
+# deep the schema.
 
-function _nestedindextype(terminal::Integer)
-    terminal <= typemax(Int32) && return Int32
-    return Int64
-end
-
-function _nestedindexvalue(value::Integer, label::AbstractString)
-    value >= 0 || throw(ArgumentError("$label must be nonnegative"))
-    value <= typemax(Int) || throw(ArgumentError("$label exceeds the Julia index range"))
-    return Int(value)
-end
-
-function _nestedcheckedint(value, label::AbstractString)
-    value isa Int || throw(ArgumentError("$label is not an Int"))
-    value >= 0 || throw(ArgumentError("$label must be nonnegative"))
-    return value
-end
-
-function _nestedvectorcount(values::AbstractVector, label::AbstractString)
-    Base.@nospecialize values
-    sizecount = size(values, 1)
-    sizecount isa Int || throw(ArgumentError(
-        "$label size is not an Int"))
-    sizecount >= 0 || throw(ArgumentError(
-        "$label size must be nonnegative"))
-    count = length(values)
-    count isa Int || throw(ArgumentError("$label length is not an Int"))
-    count == sizecount || throw(ArgumentError(
-        "$label length differs from its size"))
-    return sizecount
-end
-
-function _nestedvectoraxisvalue(value, label::AbstractString)
-    value isa Int || throw(ArgumentError("$label is not an Int"))
-    return value
-end
-
-function _nestedvectoraxes(values::AbstractVector, label::AbstractString)
-    Base.@nospecialize values
-    first = _nestedvectoraxisvalue(firstindex(values), "$label first index")
-    last = _nestedvectoraxisvalue(lastindex(values), "$label last index")
-    return first, last
-end
-
-function _nestedviewcount(first::Int, last::Int, label::AbstractString)
-    first >= 1 || throw(ArgumentError("$label has an invalid first index"))
-    emptylast = try
-        Base.checked_sub(first, 1)
-    catch error
-        error isa OverflowError || rethrow()
-        throw(ArgumentError("$label has an invalid entry span"))
-    end
-    last >= emptylast || throw(ArgumentError("$label has an invalid entry span"))
-    last == emptylast && return 0
-    return try
-        Base.checked_add(Base.checked_sub(last, first), 1)
-    catch error
-        error isa OverflowError || rethrow()
-        throw(ArgumentError("$label entry span exceeds the Julia index range"))
-    end
-end
-
-function _nestedindices(indices::AbstractVector{<:Integer}, label::AbstractString)
-    isempty(indices) && throw(ArgumentError("$label must contain an initial zero"))
-    firstvalue = _nestedindexvalue(first(indices), "$label entry")
-    iszero(firstvalue) || throw(ArgumentError("$label must start at zero"))
-    previous = firstvalue
-    for value in Iterators.drop(indices, 1)
-        current = _nestedindexvalue(value, "$label entry")
-        current >= previous || throw(ArgumentError("$label must be nondecreasing"))
-        previous = current
-    end
-    T = _nestedindextype(previous)
-    output = Vector{T}(undef, length(indices))
-    for (index, value) in enumerate(indices)
-        output[index] = T(value)
-    end
-    return output
-end
-
-function _nestedvalidity(validity::Nothing, rows::Int, offsets::Vector{<:_NestedIndex})
-    return nothing
-end
-
-function _nestedvalidity(validity::AbstractVector{Bool}, rows::Int,
-        offsets::Vector{<:_NestedIndex})
-    length(validity) == rows || throw(ArgumentError(
-        "nested validity has $(length(validity)) entries for $rows rows"))
-    output = BitVector(validity)
-    for row in 1:rows
-        output[row] || offsets[row] == offsets[row + 1] || throw(ArgumentError(
-            "null nested row $row has a nonempty child span"))
-    end
-    return output
-end
-
-function _nestedspan(offsets::Vector{<:_NestedIndex}, row::Int)
-    firstindex = try
-        Base.checked_add(Int(offsets[row]), 1)
-    catch error
-        error isa OverflowError || rethrow()
-        throw(ArgumentError("nested offset exceeds the Julia index range"))
-    end
-    lastindex = Int(offsets[row + 1])
-    return firstindex, lastindex
-end
-
-function _validatenestedphysicalshape(values::AbstractVector, terminal::Int,
-        label::AbstractString)
-    Base.@nospecialize values
-    count = _nestedvectorcount(values, label)
-    count == terminal || throw(ArgumentError(
-        "$label length differs from its terminal offset"))
-    first, last = _nestedvectoraxes(values, label)
-    first == 1 && last == count || throw(ArgumentError(
-        "$label must use one-based contiguous axes"))
-    return
-end
-
-function _validatenestedphysicalspan(values::AbstractVector, terminal::Int,
-        label::AbstractString)
-    Base.@nospecialize values
-    _validatenestedphysicalshape(values, terminal, label)
-    iszero(terminal) && return
-    checkbounds(Bool, values, 1) && checkbounds(Bool, values, terminal) ||
-        throw(ArgumentError("$label axes do not contain its physical span"))
-    return
-end
-
+# A row of a list column: a read-only view of `values[first:last]`, where `values` is the
+# column's element vector (a `_columntype(T)`). `copy(row)` gives a `Vector{T}`.
 struct ListValue{T} <: AbstractVector{T}
-    values::AbstractVector{T}
+    values::Any
     first::Int
     last::Int
 end
 
-function _validatelistvalue(value::ListValue)
-    count = _nestedviewcount(value.first, value.last, "list view")
-    backing = _nestedvectorcount(value.values, "list view backing vector")
-    first, last = _nestedvectoraxes(value.values,
-        "list view backing vector")
-    first == 1 && last == backing || throw(ArgumentError(
-        "list view backing vector must use one-based contiguous axes"))
-    (value.first <= backing || (backing < typemax(Int) &&
-        value.first == backing + 1)) || throw(ArgumentError(
-        "list view insertion point exceeds its backing vector"))
-    if !iszero(count)
-        checkbounds(Bool, value.values, value.first) &&
-            checkbounds(Bool, value.values, value.last) || throw(
-                ArgumentError(
-                    "list view child span exceeds its backing vector axes"))
-    end
-    return
+# A row of a map column: its entries as ordered `key => value` pairs (duplicate keys are
+# kept; `Dict(row)` keeps the last). `keys` and `values` are the column's entry vectors.
+struct MapValue{K,V} <: AbstractVector{Pair{K,V}}
+    keys::Any
+    values::Any
+    first::Int
+    last::Int
 end
 
-function Base.IndexStyle(::Type{<:ListValue})
-    return IndexLinear()
-end
-
-function Base.size(value::ListValue)
-    return (_nestedviewcount(value.first, value.last, "list view"),)
-end
-
-function Base.getindex(value::ListValue, index::Int)
-    _validatelistvalue(value)
-    @boundscheck checkbounds(value, index)
-    item = value.values[value.first + index - 1]
-    _validatelistvalue(value)
-    return item
-end
-
-function _collectnestedview(value::AbstractVector{T}) where {T}
-    output = Vector{T}(undef, length(value))
-    for index in eachindex(value)
-        output[index] = value[index]
-    end
-    return output
-end
-
-function Base.collect(value::ListValue)
-    return _collectnestedview(value)
-end
-
-function Base.copy(value::ListValue)
-    return collect(value)
-end
-
-struct ListVector{T,E,O<:_NestedIndex,V<:Union{Nothing,BitVector}} <:
-        AbstractVector{T}
-    offsets::Vector{O}
-    validity::V
-    values::AbstractVector{E}
-end
-
-function ListVector(offsets::AbstractVector{<:Integer}, values::AbstractVector;
-        validity::Union{Nothing,AbstractVector{Bool}}=nothing)
-    Base.@nospecialize values
-    normalized = _nestedindices(offsets, "list offsets")
-    rows = length(normalized) - 1
-    _validatenestedphysicalshape(values, Int(last(normalized)), "list child")
-    valid = _nestedvalidity(validity, rows, normalized)
-    E = eltype(values)
-    V = ListValue{E}
-    T = valid === nothing ? V : Union{Missing,V}
-    return ListVector{T,E,eltype(normalized),typeof(valid)}(
-        normalized, valid, values)
-end
-
-function ListVector(offsets::AbstractVector{<:Integer}, validity::AbstractVector{Bool},
-        values::AbstractVector)
-    return ListVector(offsets, values; validity=validity)
-end
-
-function Base.IndexStyle(::Type{<:ListVector})
-    return IndexLinear()
-end
-
-function Base.size(column::ListVector)
-    return (length(column.offsets) - 1,)
-end
-
-function _validatelistlocal(column::ListVector)
-    offsets = column.offsets
-    isempty(offsets) && throw(ArgumentError(
-        "list offsets lost their initial zero"))
-    iszero(first(offsets)) || throw(ArgumentError(
-        "list offsets no longer start at zero"))
-    rows = length(offsets) - 1
-    column.validity === nothing || length(column.validity) == rows || throw(
-        ArgumentError("list validity length differs from its row count"))
-    previous = Int(first(offsets))
-    for row in 1:rows
-        current = Int(offsets[row + 1])
-        current >= previous || throw(ArgumentError(
-            "LIST offsets are no longer nondecreasing"))
-        column.validity === nothing || column.validity[row] ||
-            current == previous || throw(ArgumentError(
-                "null LIST row has a nonempty child span"))
-        previous = current
-    end
-    return previous
-end
-
-function _validatelistvector(column::ListVector)
-    terminal = _validatelistlocal(column)
-    _validatenestedphysicalspan(column.values, terminal, "LIST child")
-    _validatelistlocal(column)
-    return
-end
-
-function Base.getindex(column::ListVector, index::Int)
-    @boundscheck checkbounds(column, index)
-    column.validity === nothing || column.validity[index] || return missing
-    firstindex, lastindex = _nestedspan(column.offsets, index)
-    return ListValue(column.values, firstindex, lastindex)
-end
-
-struct StructValue
+# A row of a struct column whose field names repeat or number more than
+# `_MAX_NAMEDTUPLE_FIELDS`, or that holds more than `_MAX_ROW_DEPTH` levels of nested
+# values: its fields as `name => value` pairs. `row[name]` looks a field up by name.
+# Other struct rows are `NamedTuple`s.
+struct StructValue <: AbstractVector{Pair{String,Any}}
     names::Vector{String}
     children::Vector{AbstractVector}
     index::Int
 end
 
-function _validatestructvaluelocal(value::StructValue, names::Vector{String},
-        children::Vector{AbstractVector}, count::Int)
-    value.names === names && value.children === children || throw(
-        ArgumentError("struct backing identity changed during access"))
-    length(children) == count || throw(ArgumentError(
-        "struct child identity or order changed during access"))
-    length(names) == count || throw(ArgumentError(
-        "struct child identity or order changed during access"))
-    value.index >= 1 || throw(ArgumentError(
-        "struct view has an invalid row index"))
-    return
+const _MAX_NAMEDTUPLE_FIELDS = 64
+# A struct's rows are NamedTuples only up to this many levels of nested values (counting
+# itself), so a deep schema yields a bounded number of row types for code to compile.
+const _MAX_ROW_DEPTH = 32
+
+# Row `i` is `missing` where `validity[i]` is false, else the `ListValue` of
+# `values[(offsets[i] + 1):offsets[i + 1]]`. `validity` is empty when `T` excludes
+# `missing`.
+struct ListVector{T} <: AbstractVector{T}
+    offsets::Vector{Int}
+    validity::BitVector
+    values::Any
 end
 
-function _validatestructvalue(value::StructValue)
-    names = value.names
-    children = value.children
-    count = length(children)
-    _validatestructvaluelocal(value, names, children, count)
-    for (index, child) in enumerate(children)
-        childcount = _nestedvectorcount(child, "struct view child $index")
-        first, last = _nestedvectoraxes(child, "struct view child $index")
-        first == 1 && last == childcount || throw(ArgumentError(
-            "struct view child $index must use one-based contiguous axes"))
-        value.index <= childcount || throw(ArgumentError(
-            "struct view child $index does not contain its row index"))
-        checkbounds(Bool, child, value.index) || throw(ArgumentError(
-            "struct view child $index axes do not contain its row index"))
-    end
-    _validatestructvaluelocal(value, names, children, count)
-    return
-end
-
-function Base.length(value::StructValue)
-    return length(value.children)
-end
-
-function Base.eltype(::Type{<:StructValue})
-    return Pair{String,Any}
-end
-
-function _structvaluechild(value::StructValue, index::Int)
-    names = value.names
-    children = value.children
-    count = length(children)
-    _validatestructvaluelocal(value, names, children, count)
-    child = children[index]
-    childcount = _nestedvectorcount(child, "struct view child $index")
-    first, last = _nestedvectoraxes(child, "struct view child $index")
-    first == 1 && last == childcount || throw(ArgumentError(
-        "struct view child $index must use one-based contiguous axes"))
-    value.index <= childcount || throw(ArgumentError(
-        "struct view child $index does not contain its row index"))
-    checkbounds(Bool, child, value.index) || throw(ArgumentError(
-        "struct view child $index axes do not contain its row index"))
-    _validatestructvaluelocal(value, names, children, count)
-    children[index] === child || throw(ArgumentError(
-        "struct child identity or order changed during access"))
-    return child
-end
-
-function Base.getindex(value::StructValue, index::Int)
-    @boundscheck 1 <= index <= length(value) || throw(BoundsError(value, index))
-    child = _structvaluechild(value, index)
-    item = child[value.index]
-    _structvaluechild(value, index) === child || throw(ArgumentError(
-        "struct child identity or order changed during access"))
-    return item
-end
-
-function _structfieldindex(value::StructValue, name::AbstractString)
-    found = 0
-    for index in eachindex(value.names)
-        value.names[index] == name || continue
-        iszero(found) || throw(ArgumentError("struct field name $(repr(name)) is ambiguous"))
-        found = index
-    end
-    iszero(found) && throw(KeyError(name))
-    return found
-end
-
-function Base.getindex(value::StructValue, name::AbstractString)
-    return value[_structfieldindex(value, name)]
-end
-
-function Base.getindex(value::StructValue, name::Symbol)
-    return value[String(name)]
-end
-
-function Base.iterate(value::StructValue, index::Int=1)
-    index > length(value) && return nothing
-    return value.names[index] => value[index], index + 1
-end
-
-function Base.collect(value::StructValue)
-    output = Vector{Pair{String,Any}}(undef, length(value))
-    for index in eachindex(value.names)
-        output[index] = value.names[index] => value[index]
-    end
-    return output
-end
-
-function Base.copy(value::StructValue)
-    return collect(value)
-end
-
-function Base.:(==)(left::StructValue, right::StructValue)
-    length(left) == length(right) || return false
-    result = true
-    for index in 1:length(left)
-        left.names[index] == right.names[index] || return false
-        equal = left[index] == right[index]
-        equal === false && return false
-        equal === missing && (result = missing)
-    end
-    return result
-end
-
-function Base.isequal(left::StructValue, right::StructValue)
-    length(left) == length(right) || return false
-    for index in 1:length(left)
-        isequal(left.names[index], right.names[index]) || return false
-        isequal(left[index], right[index]) || return false
-    end
-    return true
-end
-
-function Base.hash(value::StructValue, seed::UInt)
-    output = hash(:ParquetStructValue, seed)
-    output = hash(length(value), output)
-    for index in 1:length(value)
-        output = hash(value.names[index], output)
-        output = hash(value[index], output)
-    end
-    return output
-end
-
-# Shown like a NamedTuple: `(a = 1, b = "x")`.
-function Base.show(io::IO, value::StructValue)
-    print(io, "(")
-    for index in 1:length(value)
-        index > 1 && print(io, ", ")
-        print(io, value.names[index], " = ")
-        show(io, value[index])
-    end
-    length(value) == 1 && print(io, ",")
-    print(io, ")")
-    return
-end
-
-function (::Type{NamedTuple})(value::StructValue)
-    length(unique(value.names)) == length(value.names) || throw(ArgumentError(
-        "cannot convert a struct with duplicate field names to NamedTuple"))
-    names = try
-        Tuple(Symbol(name) for name in value.names)
-    catch err
-        err isa ArgumentError || rethrow()
-        throw(ArgumentError("cannot convert a struct with an invalid field name to NamedTuple"))
-    end
-    values = ntuple(index -> value[index], length(value))
-    return NamedTuple{names}(values)
-end
-
-struct StructVector{T,R<:Union{Nothing,Vector{Int32},Vector{Int64}}} <: AbstractVector{T}
+# Row `i` is `missing` where `validity[i]` is false, else the row built from element `i`
+# of each child (one vector per field, `length` long).
+struct StructVector{T} <: AbstractVector{T}
     names::Vector{String}
-    ranks::R
     children::Vector{AbstractVector}
-    rows::Int
+    validity::BitVector
+    length::Int
 end
 
-function _structchildren(children::Union{Tuple,AbstractVector})
-    output = Vector{AbstractVector}(undef, length(children))
-    for (index, child) in enumerate(children)
-        child isa AbstractVector || throw(ArgumentError("struct child $index is not a vector"))
-        output[index] = child
-    end
-    return output
+# Row `i` is `missing` where `validity[i]` is false, else the `MapValue` of entries
+# `(offsets[i] + 1):offsets[i + 1]` of `keys` and `values`.
+struct MapVector{T} <: AbstractVector{T}
+    offsets::Vector{Int}
+    validity::BitVector
+    keys::Any
+    values::Any
 end
 
-function _structrows(children::Vector{AbstractVector}, rows)
-    if isempty(children)
-        rows === nothing && throw(ArgumentError(
-            "a zero-field required struct needs an explicit row count"))
-        return _nestedindexvalue(rows, "struct row count")
-    end
-    expected = _nestedvectorcount(first(children), "struct child 1")
-    _validatenestedphysicalshape(first(children), expected, "struct child 1")
-    rows === nothing || _nestedindexvalue(rows, "struct row count") == expected ||
-        throw(ArgumentError("struct row count differs from its child length"))
-    return expected
+_columntype(::Type{T}) where {T} = _columntype(T, Base.nonmissingtype(T))
+_columntype(::Type{Missing}) = Vector{Missing}
+_columntype(::Type{T}, ::Type) where {T} = Vector{T}
+_columntype(::Type{T}, ::Type{DataStrings.DataString}) where {T} = DataStrings.StringVector{T}
+_columntype(::Type{T}, ::Type{DataStrings.DataBytes}) where {T} = DataStrings.BytesVector{T}
+_columntype(::Type{T}, ::Type{<:ListValue}) where {T} = ListVector{T}
+_columntype(::Type{T}, ::Type{<:MapValue}) where {T} = MapVector{T}
+_columntype(::Type{T}, ::Type{<:NamedTuple}) where {T} = StructVector{T}
+_columntype(::Type{T}, ::Type{StructValue}) where {T} = StructVector{T}
+
+# The row type of a struct with these field names and field types, `depth` levels of
+# nested values deep.
+function _structrowtype(names::AbstractVector{String}, types, depth::Int)
+    length(names) <= _MAX_NAMEDTUPLE_FIELDS && allunique(names) &&
+        depth <= _MAX_ROW_DEPTH || return StructValue
+    return NamedTuple{Tuple(Symbol(name) for name in names),Tuple{types...}}
 end
 
-function _validatechildren(names::Vector{String}, children::Vector{AbstractVector}, expected::Int)
-    length(names) == length(children) || throw(ArgumentError(
-        "struct has $(length(names)) names for $(length(children)) children"))
-    for (index, child) in enumerate(children)
-        _validatenestedphysicalshape(child, expected, "struct child $index")
-    end
-    return
+# Levels of nested lists, maps, and structs in a column's values, counted up to `limit`.
+_nesteddepth(::AbstractVector, ::Int) = 0
+_nesteddepth(column::ListVector, limit::Int) =
+    limit <= 0 ? 1 : 1 + _nesteddepth(column.values, limit - 1)
+_nesteddepth(column::MapVector, limit::Int) = limit <= 0 ? 1 :
+    1 + max(_nesteddepth(column.keys, limit - 1), _nesteddepth(column.values, limit - 1))
+_nesteddepth(column::StructVector, limit::Int) = limit <= 0 ? 1 :
+    1 + maximum(child -> _nesteddepth(child, limit - 1), column.children; init=0)
+
+Base.IndexStyle(::Type{<:Union{ListValue,MapValue,StructValue}}) = IndexLinear()
+Base.IndexStyle(::Type{<:Union{ListVector,StructVector,MapVector}}) = IndexLinear()
+
+Base.size(row::Union{ListValue,MapValue}) = (row.last - row.first + 1,)
+Base.size(row::StructValue) = (length(row.names),)
+Base.size(column::Union{ListVector,MapVector}) = (length(column.offsets) - 1,)
+Base.size(column::StructVector) = (column.length,)
+
+# Element `index` of `values`, a vector of `T` values: read through its `_columntype` (as
+# every read column is), or dynamically for another vector (hand-built writer inputs).
+Base.@propagate_inbounds function _childvalue(::Type{T}, values, index::Int) where {T}
+    C = _columntype(T)
+    values isa C && return (values::C)[index]
+    return values[index]::T
 end
 
-function _structranks(ranks::AbstractVector{<:Integer})
-    normalized = _nestedindices(ranks, "struct ranks")
-    for index in 1:(length(normalized) - 1)
-        difference = normalized[index + 1] - normalized[index]
-        difference <= 1 || throw(ArgumentError(
-            "struct rank difference at row $index exceeds one"))
-    end
-    return normalized
+Base.@propagate_inbounds function Base.getindex(row::ListValue{T}, index::Int) where {T}
+    @boundscheck checkbounds(row, index)
+    return @inbounds _childvalue(T, row.values, row.first + index - 1)
 end
 
-function StructVector(names::AbstractVector{<:AbstractString},
-        children::Union{Tuple,AbstractVector};
-        ranks::Union{Nothing,AbstractVector{<:Integer}}=nothing, rows=nothing)
-    normalizednames = String[String(name) for name in names]
-    normalizedchildren = _structchildren(children)
-    if ranks === nothing
-        rowcount = _structrows(normalizedchildren, rows)
-        _validatechildren(normalizednames, normalizedchildren, rowcount)
-        return StructVector{StructValue,Nothing}(
-            normalizednames, nothing, normalizedchildren, rowcount)
-    end
-    isempty(normalizedchildren) && throw(ArgumentError(
-        "an optional zero-field struct has unobservable presence"))
-    normalizedranks = _structranks(ranks)
-    rowcount = length(normalizedranks) - 1
-    rows === nothing || _nestedindexvalue(rows, "struct row count") == rowcount ||
-        throw(ArgumentError("struct row count differs from its rank length"))
-    _validatechildren(normalizednames, normalizedchildren, Int(last(normalizedranks)))
-    T = Union{Missing,StructValue}
-    return StructVector{T,typeof(normalizedranks)}(
-        normalizednames, normalizedranks, normalizedchildren, rowcount)
+Base.@propagate_inbounds function Base.getindex(row::MapValue{K,V}, index::Int) where {K,V}
+    @boundscheck checkbounds(row, index)
+    entry = row.first + index - 1
+    return @inbounds Pair{K,V}(_childvalue(K, row.keys, entry), _childvalue(V, row.values, entry))
 end
 
-function StructVector(names::AbstractVector{<:AbstractString},
-        ranks::AbstractVector{<:Integer}, children::Union{Tuple,AbstractVector}; rows=nothing)
-    return StructVector(names, children; ranks=ranks, rows=rows)
+Base.@propagate_inbounds function Base.getindex(row::StructValue, index::Int)
+    @boundscheck checkbounds(row, index)
+    return row.names[index] => row.children[index][row.index]
 end
 
-function Base.IndexStyle(::Type{<:StructVector})
-    return IndexLinear()
+function Base.getindex(row::StructValue, name::Union{AbstractString,Symbol})
+    key = String(name)
+    found = findfirst(==(key), row.names)
+    found === nothing && throw(KeyError(name))
+    findnext(==(key), row.names, found + 1) === nothing || throw(ArgumentError(
+        "struct field name $(repr(key)) is ambiguous"))
+    return row.children[found][row.index]
 end
 
-function Base.size(column::StructVector)
-    return (column.rows,)
-end
-
-function _validatestructlocal(column::StructVector)
-    names = column.names
-    children = column.children
-    count = length(children)
-    length(names) == count || throw(ArgumentError(
-        "struct child identity or order changed: vector has a different " *
-        "number of names and children"))
-    column.rows >= 0 || throw(ArgumentError(
-        "struct vector has a negative row count"))
-    if column.ranks === nothing
-        return column.rows
-    end
-    isempty(children) && throw(ArgumentError(
-        "optional zero-field struct has unobservable presence"))
-    ranks = column.ranks
-    length(ranks) == column.rows + 1 || throw(ArgumentError(
-        "struct rank length differs from its row count"))
-    isempty(ranks) && throw(ArgumentError(
-        "struct ranks lost their initial zero"))
-    iszero(first(ranks)) || throw(ArgumentError(
-        "struct ranks no longer start at zero"))
-    previous = Int(first(ranks))
-    for row in 1:column.rows
-        current = Int(ranks[row + 1])
-        current >= previous || throw(ArgumentError(
-            "struct ranks are no longer nondecreasing"))
-        current - previous <= 1 || throw(ArgumentError(
-            "struct rank difference exceeds one"))
-        previous = current
-    end
-    return previous
-end
-
-function _validatestructvector(column::StructVector)
-    terminal = _validatestructlocal(column)
-    label = column.ranks === nothing ? "required" : "optional"
-    for (index, child) in enumerate(column.children)
-        _nestedvectorcount(child, "struct child $index") == terminal ||
-            throw(ArgumentError(
-                "$label struct child $index length differs from its " *
-                (label == "required" ? "row count" : "terminal rank")))
-        _validatenestedphysicalspan(child, terminal,
-            "$label struct child $index")
-    end
-    _validatestructlocal(column)
-    return
-end
-
-function Base.getindex(column::StructVector, index::Int)
+Base.@propagate_inbounds function Base.getindex(column::ListVector{T}, index::Int) where {T}
     @boundscheck checkbounds(column, index)
-    if column.ranks === nothing
-        return StructValue(column.names, column.children, index)
-    end
-    firstindex = Int(column.ranks[index])
-    lastindex = Int(column.ranks[index + 1])
-    firstindex == lastindex && return missing
-    return StructValue(column.names, column.children, lastindex)
+    R = Base.nonmissingtype(T)
+    T === R || @inbounds(column.validity[index]) || return missing
+    @inbounds return R(column.values, column.offsets[index] + 1, column.offsets[index + 1])
 end
 
-struct MapValue{K,V,HasValues} <: AbstractVector{Pair{K,V}}
-    keys::AbstractVector{K}
-    values::Union{Nothing,AbstractVector{V}}
-    first::Int
-    last::Int
+Base.@propagate_inbounds function Base.getindex(column::MapVector{T}, index::Int) where {T}
+    @boundscheck checkbounds(column, index)
+    R = Base.nonmissingtype(T)
+    T === R || @inbounds(column.validity[index]) || return missing
+    @inbounds return R(column.keys, column.values, column.offsets[index] + 1,
+        column.offsets[index + 1])
 end
 
-function _validatemapvaluekeys(value::MapValue, count::Int)
-    keycount = _nestedvectorcount(value.keys, "map view key vector")
-    keyfirst, keylast = _nestedvectoraxes(value.keys, "map view key vector")
-    keyfirst == 1 && keylast == keycount || throw(ArgumentError(
-        "map view key vector must use one-based contiguous axes"))
-    (value.first <= keycount || (keycount < typemax(Int) &&
-        value.first == keycount + 1)) || throw(ArgumentError(
-        "map view insertion point exceeds its key vector"))
-    if !iszero(count)
-        checkbounds(Bool, value.keys, value.first) &&
-            checkbounds(Bool, value.keys, value.last) || throw(ArgumentError(
-                "map view entry span exceeds its key-vector axes"))
-    end
-    return keycount
+Base.@propagate_inbounds function Base.getindex(column::StructVector{T}, index::Int) where {T}
+    @boundscheck checkbounds(column, index)
+    R = Base.nonmissingtype(T)
+    T === R || @inbounds(column.validity[index]) || return missing
+    return _structrow(R, column.names, column.children, index)
 end
 
-function _validatemapvaluevalues(value::MapValue{K,V,HasValues}, count::Int,
-        keycount::Int) where {K,V,HasValues}
-    if HasValues === true
-        values = value.values
-        values === nothing && throw(ArgumentError(
-            "map view lost its value vector"))
-        valuecount = _nestedvectorcount(values, "map view value vector")
-        valuefirst, valuelast = _nestedvectoraxes(values,
-            "map view value vector")
-        valuefirst == 1 && valuelast == valuecount || throw(ArgumentError(
-            "map view value vector must use one-based contiguous axes"))
-        valuecount == keycount || throw(ArgumentError(
-            "map view key and value lengths differ"))
-        (value.first <= valuecount || (valuecount < typemax(Int) &&
-            value.first == valuecount + 1)) || throw(ArgumentError(
-            "map view insertion point exceeds its value vector"))
-        if !iszero(count)
-            checkbounds(Bool, values, value.first) &&
-                checkbounds(Bool, values, value.last) || throw(ArgumentError(
-                    "map view entry span exceeds its value-vector axes"))
+_structrow(::Type{StructValue}, names, children, index::Int) =
+    StructValue(names, children, index)
+
+@inline function _structrow(::Type{R}, names, children::Vector{AbstractVector},
+        index::Int) where {R<:NamedTuple}
+    return R(ntuple(field -> (@inbounds _childvalue(fieldtype(R, field), children[field],
+        index)), Val(fieldcount(R))))
+end
+
+# Converting plain values to rows (as `push!` on a column of rows does) copies them into
+# vectors of their own.
+Base.convert(::Type{ListValue{T}}, row::ListValue{T}) where {T} = row
+Base.convert(::Type{MapValue{K,V}}, row::MapValue{K,V}) where {K,V} = row
+
+function Base.convert(::Type{ListValue{T}}, items::AbstractVector) where {T}
+    values = _fromrows(_columntype(T), items)
+    return ListValue{T}(values, 1, length(values))
+end
+
+function Base.convert(::Type{MapValue{K,V}},
+        entries::Union{AbstractDict,AbstractVector{<:Pair}}) where {K,V}
+    keys = _fromrows(_columntype(K), [entry.first for entry in entries])
+    values = _fromrows(_columntype(V), [entry.second for entry in entries])
+    return MapValue{K,V}(keys, values, 1, length(keys))
+end
+
+# The vector of type `C` (a `_columntype`) holding `rows`.
+_fromrows(::Type{Vector{T}}, rows::AbstractVector) where {T} = Vector{T}(rows)
+_fromrows(::Type{DataStrings.StringVector{T}}, rows::AbstractVector) where {T} =
+    DataStrings.StringVector{T}(rows)
+
+function _fromrows(::Type{DataStrings.BytesVector{T}}, rows::AbstractVector) where {T}
+    payloads = Vector{DataStrings.StringPayload}(undef, length(rows))
+    buffers = Vector{UInt8}[]
+    for (index, row) in enumerate(rows)
+        if row === missing
+            Missing <: T || throw(ArgumentError("a $T column cannot hold missing"))
+            payloads[index] = DataStrings.PAYLOAD_MISSING
+            continue
         end
-    else
-        value.values === nothing || throw(ArgumentError(
-            "key-only map view gained a value vector"))
+        bytes = collect(UInt8, row)
+        count = length(bytes)
+        payloads[index] = if count <= DataStrings.INLINE_MAX
+            DataStrings.inline_payload(bytes, 1, count)
+        else
+            push!(buffers, bytes)
+            DataStrings.view_payload(bytes, 1, count, length(buffers) - 1, 0)
+        end
     end
+    return DataStrings.BytesVector{T}(payloads, buffers, Val(:trusted))
+end
+
+_rowvalidity(::Type{T}, count::Int) where {T} =
+    Missing <: T ? trues(count) : BitVector()
+
+function _missingrow(::Type{T}, validity::BitVector, index::Int) where {T}
+    Missing <: T || throw(ArgumentError("a column of $T rows cannot hold missing"))
+    validity[index] = false
     return
 end
 
-function _validatemapvalue(value::MapValue{K,V,HasValues}) where {K,V,HasValues}
-    HasValues isa Bool || throw(ArgumentError(
-        "map view has a non-Boolean value-vector discriminator"))
-    Missing <: K && throw(ArgumentError(
-        "map view key type cannot include Missing"))
-    HasValues === false && V !== Missing && throw(ArgumentError(
-        "key-only map view must use Missing as its value type"))
-    count = _nestedviewcount(value.first, value.last, "map view")
-    keycount = _validatemapvaluekeys(value, count)
-    _validatemapvaluevalues(value, count, keycount)
-    keycount = _validatemapvaluekeys(value, count)
-    _validatemapvaluevalues(value, count, keycount)
-    return
+function _fromrows(::Type{ListVector{T}}, rows::AbstractVector) where {T}
+    E = eltype(Base.nonmissingtype(T))
+    offsets = zeros(Int, length(rows) + 1)
+    validity = _rowvalidity(T, length(rows))
+    items = E[]
+    for (index, row) in enumerate(rows)
+        row === missing ? _missingrow(T, validity, index) : append!(items, row)
+        offsets[index + 1] = length(items)
+    end
+    return ListVector{T}(offsets, validity, _fromrows(_columntype(E), items))
 end
 
-function Base.IndexStyle(::Type{<:MapValue})
-    return IndexLinear()
+function _fromrows(::Type{MapVector{T}}, rows::AbstractVector) where {T}
+    K, V = fieldtypes(eltype(Base.nonmissingtype(T)))
+    offsets = zeros(Int, length(rows) + 1)
+    validity = _rowvalidity(T, length(rows))
+    keys, values = K[], V[]
+    for (index, row) in enumerate(rows)
+        if row === missing
+            _missingrow(T, validity, index)
+        else
+            for entry in row
+                push!(keys, entry.first)
+                push!(values, entry.second)
+            end
+        end
+        offsets[index + 1] = length(keys)
+    end
+    return MapVector{T}(offsets, validity, _fromrows(_columntype(K), keys),
+        _fromrows(_columntype(V), values))
 end
 
-function Base.size(value::MapValue)
-    return (_nestedviewcount(value.first, value.last, "map view"),)
+function _fromrows(::Type{StructVector{T}}, rows::AbstractVector) where {T}
+    R = Base.nonmissingtype(T)
+    R <: NamedTuple || throw(ArgumentError("cannot build a column of $R rows"))
+    validity = _rowvalidity(T, length(rows))
+    for (index, row) in enumerate(rows)
+        row === missing && _missingrow(T, validity, index)
+    end
+    children = AbstractVector[_fromrows(_columntype(F),
+        F[row === missing ? _filler(F) : getfield(convert(R, row), field) for row in rows])
+        for (field, F) in enumerate(fieldtypes(R))]
+    return StructVector{T}(String[String(name) for name in fieldnames(R)], children,
+        validity, length(rows))
 end
 
-function Base.getindex(value::MapValue{K,V,true}, index::Int) where {K,V}
-    _validatemapvalue(value)
-    @boundscheck checkbounds(value, index)
-    physical = value.first + index - 1
-    keys = value.keys
-    values = something(value.values)
-    key = keys[physical]
-    value.keys === keys && value.values === values || throw(ArgumentError(
-        "map view changed its backing vectors during key access"))
-    _validatemapvalue(value)
-    item = values[physical]
-    _validatemapvalue(value)
-    return Pair{K,V}(key, item)
+# A value of type `T` for a slot no row can observe (a required field of a null struct).
+function _filler(::Type{T}) where {T}
+    Missing <: T && return missing
+    isbitstype(T) && return _zeroed(T)
+    return _nonbitsfiller(T)
 end
 
-function Base.getindex(value::MapValue{K,Missing,false}, index::Int) where {K}
-    _validatemapvalue(value)
-    @boundscheck checkbounds(value, index)
-    physical = value.first + index - 1
-    key = value.keys[physical]
-    _validatemapvalue(value)
-    return Pair{K,Missing}(key, missing)
+function _zeroed(::Type{T}) where {T}
+    bytes = zeros(UInt8, max(sizeof(T), 1))
+    return GC.@preserve bytes unsafe_load(Ptr{T}(pointer(bytes)))
 end
 
-function Base.getindex(value::MapValue{K,V,HasValues}, index::Int) where
-        {K,V,HasValues}
-    _validatemapvalue(value)
-    throw(ArgumentError("map view has invalid type parameters"))
+_nonbitsfiller(::Type{DataStrings.DataString}) = DataStrings.DataString("")
+_nonbitsfiller(::Type{DataStrings.DataBytes}) = DataStrings.DataBytes(UInt8[])
+_nonbitsfiller(::Type{ListValue{T}}) where {T} = convert(ListValue{T}, T[])
+_nonbitsfiller(::Type{MapValue{K,V}}) where {K,V} = convert(MapValue{K,V}, Pair{K,V}[])
+_nonbitsfiller(::Type{R}) where {R<:NamedTuple} = R(map(_filler, fieldtypes(R)))
+_nonbitsfiller(::Type{JSONValue}) = JSONValue(UInt8[], Val(:validated))
+_nonbitsfiller(::Type{BSONValue}) = BSONValue(UInt8[], Val(:validated))
+_nonbitsfiller(::Type{Decimal}) = Decimal(0, 0)
+_nonbitsfiller(::Type{T}) where {T} = throw(ArgumentError(
+    "no placeholder value of type $T for a null struct's required field"))
+
+# Validated constructors from plain vectors (tests and hand-built writer inputs). Null
+# rows of a list or map must be empty.
+
+function _checkoffsets(offsets::AbstractVector{<:Integer}, count::Integer, label::String)
+    !isempty(offsets) && first(offsets) == 0 || throw(ArgumentError(
+        "$label offsets must start with zero"))
+    issorted(offsets) || throw(ArgumentError("$label offsets must be nondecreasing"))
+    last(offsets) == count || throw(ArgumentError(
+        "$label offsets end at $(last(offsets)) for $count elements"))
+    return Vector{Int}(offsets)
 end
 
-function Base.collect(value::MapValue)
-    return _collectnestedview(value)
+function _checkvalidity(validity, offsets::Vector{Int}, label::String)
+    validity === nothing && return BitVector()
+    length(validity) == length(offsets) - 1 || throw(ArgumentError(
+        "$label validity has $(length(validity)) entries for $(length(offsets) - 1) rows"))
+    for (row, valid) in enumerate(validity)
+        valid || offsets[row] == offsets[row + 1] || throw(ArgumentError(
+            "null $label row $row has entries"))
+    end
+    return BitVector(validity)
 end
 
-function Base.copy(value::MapValue)
-    return collect(value)
-end
-
-struct MapVector{T,K,V,HasValues,O<:_NestedIndex,
-        Validity<:Union{Nothing,BitVector}} <: AbstractVector{T}
-    offsets::Vector{O}
-    validity::Validity
-    keys::AbstractVector{K}
-    values::Union{Nothing,AbstractVector{V}}
-end
-
-function _validatemapvalues(keys::AbstractVector, values::Nothing)
-    Base.@nospecialize keys
-    count = _nestedvectorcount(keys, "map key")
-    _validatenestedphysicalshape(keys, count, "map key")
-    return count
-end
-
-function _validatemapvalues(keys::AbstractVector, values::AbstractVector)
-    Base.@nospecialize keys values
-    count = _nestedvectorcount(keys, "map key")
-    _validatenestedphysicalshape(keys, count, "map key")
-    _validatenestedphysicalshape(values, count, "map value")
-    return count
+function ListVector(offsets::AbstractVector{<:Integer}, values::AbstractVector;
+        validity::Union{Nothing,AbstractVector{Bool}}=nothing)
+    normalized = _checkoffsets(offsets, length(values), "list")
+    R = ListValue{eltype(values)}
+    T = validity === nothing ? R : Union{Missing,R}
+    return ListVector{T}(normalized, _checkvalidity(validity, normalized, "list"), values)
 end
 
 function MapVector(offsets::AbstractVector{<:Integer}, keys::AbstractVector,
         values::Union{Nothing,AbstractVector}=nothing;
         validity::Union{Nothing,AbstractVector{Bool}}=nothing)
-    Base.@nospecialize keys values
-    Missing <: eltype(keys) && throw(ArgumentError("map key type cannot include Missing"))
-    count = _validatemapvalues(keys, values)
-    any(ismissing, keys) && throw(ArgumentError("map keys cannot be missing"))
-    _validatemapvalues(keys, values) == count || throw(ArgumentError(
-        "map key count changed during validation"))
-    normalized = _nestedindices(offsets, "map offsets")
-    rows = length(normalized) - 1
-    Int(last(normalized)) == count || throw(ArgumentError(
-        "map terminal offset $(last(normalized)) differs from key length $count"))
-    valid = _nestedvalidity(validity, rows, normalized)
-    K = eltype(keys)
-    hasvalues = values !== nothing
-    V = hasvalues ? eltype(values) : Missing
-    R = MapValue{K,V,hasvalues}
-    T = valid === nothing ? R : Union{Missing,R}
-    return MapVector{T,K,V,hasvalues,eltype(normalized),typeof(valid)}(
-        normalized, valid, keys, values)
-end
-
-function MapVector(offsets::AbstractVector{<:Integer}, validity::AbstractVector{Bool},
-        keys::AbstractVector, values::Union{Nothing,AbstractVector})
-    return MapVector(offsets, keys, values; validity=validity)
-end
-
-function Base.IndexStyle(::Type{<:MapVector})
-    return IndexLinear()
-end
-
-function Base.size(column::MapVector)
-    return (length(column.offsets) - 1,)
-end
-
-function _validatemaplocal(column::MapVector{T,K,V,HasValues}) where
-        {T,K,V,HasValues}
-    HasValues isa Bool || throw(ArgumentError(
-        "map vector has a non-Boolean value-vector discriminator"))
-    Missing <: K && throw(ArgumentError(
-        "map vector key type cannot include Missing"))
-    HasValues === false && V !== Missing && throw(ArgumentError(
-        "key-only map vector must use Missing as its value type"))
-    offsets = column.offsets
-    isempty(offsets) && throw(ArgumentError(
-        "map offsets lost their initial zero"))
-    iszero(first(offsets)) || throw(ArgumentError(
-        "map offsets no longer start at zero"))
-    rows = length(offsets) - 1
-    column.validity === nothing || length(column.validity) == rows || throw(
-        ArgumentError("map validity length differs from its row count"))
-    previous = Int(first(offsets))
-    for row in 1:rows
-        current = Int(offsets[row + 1])
-        current >= previous || throw(ArgumentError(
-            "MAP offsets are no longer nondecreasing"))
-        column.validity === nothing || column.validity[row] ||
-            current == previous || throw(ArgumentError(
-                "null MAP row has a nonempty entry span"))
-        previous = current
-    end
-    return previous
-end
-
-function _validatemapvector(column::MapVector{T,K,V,HasValues}) where
-        {T,K,V,HasValues}
-    terminal = _validatemaplocal(column)
-    _validatenestedphysicalspan(column.keys, terminal, "MAP key")
-    if HasValues === true
-        values = column.values
-        values === nothing && throw(ArgumentError(
-            "map vector lost its values"))
-        _validatenestedphysicalspan(values, terminal, "MAP value")
-    else
-        column.values === nothing || throw(ArgumentError(
-            "key-only map vector gained values"))
-    end
-    _validatemaplocal(column)
-    return
-end
-
-function Base.getindex(column::MapVector{T,K,V,HasValues}, index::Int) where
-        {T,K,V,HasValues}
-    HasValues isa Bool || throw(ArgumentError(
-        "map vector has a non-Boolean value-vector discriminator"))
-    Missing <: K && throw(ArgumentError(
-        "map vector key type cannot include Missing"))
-    HasValues === false && V !== Missing && throw(ArgumentError(
-        "key-only map vector must use Missing as its value type"))
-    @boundscheck checkbounds(column, index)
-    column.validity === nothing || column.validity[index] || return missing
-    firstindex, lastindex = _nestedspan(column.offsets, index)
-    return MapValue{K,V,HasValues}(
-        column.keys, column.values, firstindex, lastindex)
-end
-
-function maplookup(value::MapValue, key)
-    for index in length(value):-1:1
-        pair = value[index]
-        isequal(pair.first, key) && return pair.second
-    end
-    throw(KeyError(key))
-end
-
-function maplookup(value::MapValue, key, default)
-    for index in length(value):-1:1
-        pair = value[index]
-        isequal(pair.first, key) && return pair.second
-    end
-    return default
-end
-
-struct _StableByteKey <: AbstractVector{UInt8}
-    bytes::String
-end
-
-function Base.IndexStyle(::Type{_StableByteKey})
-    return IndexLinear()
-end
-
-function Base.size(value::_StableByteKey)
-    return (ncodeunits(value.bytes),)
-end
-
-function Base.getindex(value::_StableByteKey, index::Int)
-    @boundscheck checkbounds(value, index)
-    return codeunit(value.bytes, index)
-end
-
-struct _StableListKey <: AbstractVector{Any}
-    values::Core.SimpleVector
-end
-
-function Base.IndexStyle(::Type{_StableListKey})
-    return IndexLinear()
-end
-
-function Base.size(value::_StableListKey)
-    return (length(value.values),)
-end
-
-function Base.getindex(value::_StableListKey, index::Int)
-    @boundscheck checkbounds(value, index)
-    return value.values[index]
-end
-
-struct _StableStructKey
-    names::Core.SimpleVector
-    values::Core.SimpleVector
-end
-
-function _structkeylength(value::StructValue)
-    return length(value)
-end
-
-function _structkeylength(value::_StableStructKey)
-    return length(value.names)
-end
-
-function _structkeyname(value::StructValue, index::Int)
-    return value.names[index]
-end
-
-function _structkeyname(value::_StableStructKey, index::Int)
-    return value.names[index]
-end
-
-function _structkeyvalue(value::StructValue, index::Int)
-    return value[index]
-end
-
-function _structkeyvalue(value::_StableStructKey, index::Int)
-    return value.values[index]
-end
-
-function _structkeyisequal(left, right)
-    length = _structkeylength(left)
-    length == _structkeylength(right) || return false
-    for index in 1:length
-        isequal(_structkeyname(left, index), _structkeyname(right, index)) || return false
-        isequal(_structkeyvalue(left, index), _structkeyvalue(right, index)) || return false
-    end
-    return true
-end
-
-function Base.isequal(left::_StableStructKey, right::_StableStructKey)
-    return _structkeyisequal(left, right)
-end
-
-function Base.isequal(left::_StableStructKey, right::StructValue)
-    return _structkeyisequal(left, right)
-end
-
-function Base.isequal(left::StructValue, right::_StableStructKey)
-    return _structkeyisequal(left, right)
-end
-
-function Base.hash(value::_StableStructKey, seed::UInt)
-    output = hash(:ParquetStructValue, seed)
-    output = hash(_structkeylength(value), output)
-    for index in 1:_structkeylength(value)
-        output = hash(_structkeyname(value, index), output)
-        output = hash(_structkeyvalue(value, index), output)
-    end
-    return output
-end
-
-function _stablekeyerror(value)
-    throw(ArgumentError(
-        "map key type $(typeof(value)) does not have stable content hash semantics"))
-end
-
-function _stablekeysimplevector(value)
-    output = []
-    sizehint!(output, length(value))
-    for item in value
-        push!(output, _snapshotmapkey(item))
-    end
-    return Core.svec(output...)
-end
-
-function _snapshotmapkey(value::ListValue)
-    return _StableListKey(_stablekeysimplevector(value))
-end
-
-function _snapshotmapkey(value::StructValue)
-    names = Core.svec(value.names...)
-    output = []
-    sizehint!(output, length(value))
-    for index in 1:length(value)
-        push!(output, _snapshotmapkey(value[index]))
-    end
-    return _StableStructKey(names, Core.svec(output...))
-end
-
-function _snapshotmapkey(value::MapValue)
-    return _stablekeyerror(value)
-end
-
-function _snapshotmapkey(value::Tuple)
-    return map(_snapshotmapkey, value)
-end
-
-function _snapshotmapkey(value::NamedTuple)
-    mapped = map(_snapshotmapkey, values(value))
-    return NamedTuple{keys(value)}(mapped)
-end
-
-function _snapshotmapkey(value::AbstractString)
-    return String(value)
-end
-
-function _snapshotmapkey(value::Symbol)
-    return value
-end
-
-function _snapshotmapkey(value::AbstractVector{UInt8})
-    return _StableByteKey(String(collect(value)))
-end
-
-function _snapshotmapkey(value::AbstractArray)
-    return _stablekeyerror(value)
-end
-
-function _snapshotmapkey(value::Missing)
-    return missing
-end
-
-function _snapshotmapkey(value::Decimal)
-    return copy(value)
-end
-
-function _snapshotmapkey(value::JSONValue)
-    return copy(value)
-end
-
-function _snapshotmapkey(value::BSONValue)
-    return copy(value)
-end
-
-function _snapshotmapkey(value::_StableByteKey)
-    return value
-end
-
-function _snapshotmapkey(value::_StableListKey)
-    return value
-end
-
-function _snapshotmapkey(value::_StableStructKey)
-    return value
-end
-
-function _snapshotmapkey(value)
-    value === nothing && return _stablekeyerror(value)
-    type = typeof(value)
-    Base.ismutabletype(type) && return _stablekeyerror(value)
-    (isbitstype(type) || fieldcount(type) == 0) && return value
-    return _stablekeyerror(value)
-end
-
-function (::Type{Dict})(value::MapValue{K,V}) where {K,V}
-    keys = []
-    values = Vector{V}(undef, length(value))
-    sizehint!(keys, length(value))
-    Key = Union{}
-    for (index, pair) in enumerate(value)
-        ismissing(pair.first) && throw(ArgumentError("map keys cannot be missing"))
-        key = _snapshotmapkey(pair.first)
-        push!(keys, key)
-        values[index] = pair.second
-        Key = typejoin(Key, typeof(key))
-    end
-    isempty(keys) && (Key = Any)
-    output = Dict{Key,V}()
-    sizehint!(output, length(value))
-    for index in eachindex(keys, values)
-        output[keys[index]] = values[index]
-    end
-    return output
-end
-
-# Row subsets and copies keep the columnar layout. A StructVector, ListVector, or
-# MapVector carries the child schema the writer needs, which a plain Vector of its
-# row values does not, so `copy(column)`, `column[rows]`, and `column[mask]` (what
-# DataFrames uses to copy, subset, filter, and sort) stay writable.
-function _rowselection(column::AbstractVector, rows::AbstractVector{<:Integer})
-    @boundscheck checkbounds(column, rows)
-    return Int[Int(row) for row in rows]
-end
-
-function _childspans(offsets::Vector{O}, rows::Vector{Int}) where {O}
-    selected = Vector{O}(undef, length(rows) + 1)
-    selected[1] = zero(O)
-    spans = Int[]
-    for (index, row) in enumerate(rows)
-        firstindex, lastindex = _nestedspan(offsets, row)
-        append!(spans, firstindex:lastindex)
-        selected[index + 1] = selected[index] + O(lastindex - firstindex + 1)
-    end
-    return selected, spans
-end
-
-function _subsetrows(column::FixedByteArrayVector{T}, rows::Vector{Int}) where {T}
-    return FixedByteArrayVector{T}(column.values[rows], column.width)
-end
-
-function _subsetrows(column::ListVector{T,E,O,V}, rows::Vector{Int}) where {T,E,O,V}
-    offsets, spans = _childspans(column.offsets, rows)
-    validity = column.validity === nothing ? nothing : column.validity[rows]
-    return ListVector{T,E,O,V}(offsets, validity, column.values[spans])
-end
-
-function _subsetrows(column::MapVector{T,K,V,H,O,Validity},
-        rows::Vector{Int}) where {T,K,V,H,O,Validity}
-    offsets, spans = _childspans(column.offsets, rows)
-    validity = column.validity === nothing ? nothing : column.validity[rows]
-    values = column.values === nothing ? nothing : column.values[spans]
-    return MapVector{T,K,V,H,O,Validity}(offsets, validity, column.keys[spans],
+    Missing <: eltype(keys) && throw(ArgumentError("map keys cannot be missing"))
+    values === nothing && (values = Vector{Missing}(undef, length(keys)))
+    length(values) == length(keys) || throw(ArgumentError(
+        "map has $(length(keys)) keys and $(length(values)) values"))
+    normalized = _checkoffsets(offsets, length(keys), "map")
+    R = MapValue{eltype(keys),eltype(values)}
+    T = validity === nothing ? R : Union{Missing,R}
+    return MapVector{T}(normalized, _checkvalidity(validity, normalized, "map"), keys,
         values)
 end
 
-function _subsetrows(column::StructVector{T,Nothing}, rows::Vector{Int}) where {T}
-    children = AbstractVector[child[rows] for child in column.children]
-    return StructVector{T,Nothing}(copy(column.names), nothing, children,
-        length(rows))
-end
-
-function _subsetrows(column::StructVector{T,R}, rows::Vector{Int}) where {T,R}
-    ranks = column.ranks
-    I = eltype(ranks)
-    selected = Vector{I}(undef, length(rows) + 1)
-    selected[1] = zero(I)
-    dense = Int[]
-    for (index, row) in enumerate(rows)
-        present = ranks[row + 1] > ranks[row]
-        present && push!(dense, Int(ranks[row + 1]))
-        selected[index + 1] = selected[index] + I(present)
+function StructVector(names::AbstractVector{<:AbstractString},
+        children::Union{Tuple,AbstractVector};
+        validity::Union{Nothing,AbstractVector{Bool}}=nothing, rows=nothing)
+    length(names) == length(children) || throw(ArgumentError(
+        "struct has $(length(names)) names for $(length(children)) children"))
+    count = rows !== nothing ? Int(rows) : validity !== nothing ? length(validity) :
+        isempty(children) ? throw(ArgumentError(
+            "a struct with no fields needs an explicit row count")) : length(first(children))
+    columns = AbstractVector[child for child in children]
+    for (index, child) in enumerate(columns)
+        length(child) == count || throw(ArgumentError(
+            "struct child $index has $(length(child)) values for $count rows"))
     end
-    children = AbstractVector[child[dense] for child in column.children]
-    return StructVector{T,R}(copy(column.names), selected, children, length(rows))
-end
-
-const _ColumnarVector = Union{FixedByteArrayVector,ListVector,MapVector,StructVector}
-
-function Base.getindex(column::_ColumnarVector, rows::AbstractVector{<:Integer})
-    return _subsetrows(column, _rowselection(column, rows))
-end
-
-function Base.getindex(column::_ColumnarVector, mask::AbstractVector{Bool})
-    length(mask) == length(column) || throw(BoundsError(column, mask))
-    return _subsetrows(column, findall(mask))
-end
-
-function Base.getindex(column::_ColumnarVector, ::Colon)
-    return copy(column)
-end
-
-function Base.copy(column::_ColumnarVector)
-    return _subsetrows(column, collect(1:length(column)))
+    validity === nothing || length(validity) == count || throw(ArgumentError(
+        "struct validity has $(length(validity)) entries for $count rows"))
+    depth = 1 + maximum(child -> _nesteddepth(child, _MAX_ROW_DEPTH), columns; init=0)
+    R = _structrowtype(String[String(name) for name in names],
+        Type[eltype(child) for child in columns], depth)
+    T = validity === nothing ? R : Union{Missing,R}
+    return StructVector{T}(String[String(name) for name in names], columns,
+        validity === nothing ? BitVector() : BitVector(validity), count)
 end

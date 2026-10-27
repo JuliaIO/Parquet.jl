@@ -192,7 +192,10 @@ end
 
 function n5normalizeread(value)
     value === missing && return missing
-    if value isa Parquet.StructValue
+    if value isa NamedTuple
+        return (:struct, Pair{String,Any}[String(name) => n5normalizeread(item)
+            for (name, item) in pairs(value)])
+    elseif value isa Parquet.StructValue
         return (:struct, Pair{String,Any}[String(pair.first) =>
             n5normalizeread(pair.second) for pair in value])
     elseif value isa Parquet.MapValue

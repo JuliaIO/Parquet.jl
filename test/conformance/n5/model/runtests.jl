@@ -504,8 +504,8 @@ end
         table = Parquet.Table(bytes)
         try
             duplicated = Parquet.Tables.columns(table).attrs[4]
-            @test Parquet.maplookup(duplicated, "a") == Int32(2)
-            @test_throws KeyError Parquet.maplookup(duplicated, "absent")
+            @test Dict(duplicated)["a"] == Int32(2)
+            @test_throws KeyError Dict(duplicated)["absent"]
         finally
             close(table)
         end

@@ -8,12 +8,7 @@ function _n5normalize(node::N5Struct, value)
     values = Any[]
     sizehint!(values, length(node.fields))
     for (index, child) in enumerate(node.fields)
-        childvalue = try
-            value[child.name]
-        catch error
-            error isa MethodError || error isa KeyError || rethrow()
-            value[index]
-        end
+        childvalue = value isa Parquet.StructValue ? value[index].second : value[index]
         push!(values, _n5normalize(child, childvalue))
     end
     return N5Record(values)
@@ -56,15 +51,6 @@ function n5normalizetable(node::N5Node, table)
     return output
 end
 
-function _n5samevalidity(expected::Nothing, actual)
-    return actual === nothing
-end
-
-function _n5samevalidity(expected::BitVector, actual)
-    actual === nothing && return false
-    return expected == BitVector(actual)
-end
-
 # The element type a leaf reads as; unannotated FIXED_LEN_BYTE_ARRAY values are
 # NTuples of the leaf's width, taken from a present value.
 function _n5expectedleafbase(expected::N5ExpectedLeafVector)
@@ -85,7 +71,10 @@ end
 _n5bytes(value) = value
 _n5bytes(value::Tuple) = collect(value)
 
-function n5comparevectortree(expected::N5ExpectedLeafVector, actual)
+# The model's vectors hold only the present rows of a struct's children; a read struct's
+# children have one entry per struct row. `rows` are the entries of `actual` that the
+# model's entries stand for.
+function n5comparevectortree(expected::N5ExpectedLeafVector, actual, rows)
     actual isa Union{Vector,Parquet.DataStrings.StringVector,
         Parquet.DataStrings.BytesVector} || return false
     base = _n5expectedleafbase(expected)
@@ -93,44 +82,66 @@ function n5comparevectortree(expected::N5ExpectedLeafVector, actual)
         expectedtype = expected.nullable ? Union{Missing,base} : base
         eltype(actual) === expectedtype || return false
     end
-    return isequal(expected.values, Any[_n5bytes(value) for value in actual])
+    return isequal(expected.values, Any[_n5bytes(actual[row]) for row in rows])
 end
 
-function n5comparevectortree(expected::N5ExpectedStructVector, actual)
+function n5comparevectortree(expected::N5ExpectedStructVector, actual, rows)
     actual isa Parquet.StructVector || return false
     expected.names == actual.names || return false
-    expected.rows == actual.rows || return false
+    expected.rows == length(rows) || return false
+    present = rows
     if expected.ranks === nothing
-        actual.ranks === nothing || return false
+        Missing <: eltype(actual) && return false
     else
-        actual.ranks === nothing && return false
-        expected.ranks == Int[actual.ranks...] || return false
+        Missing <: eltype(actual) || return false
+        expected.ranks == cumsum([0; [Int(actual.validity[row]) for row in rows]]) ||
+            return false
+        present = [row for row in rows if actual.validity[row]]
     end
     length(expected.children) == length(actual.children) || return false
     for index in eachindex(expected.children, actual.children)
-        n5comparevectortree(expected.children[index], actual.children[index]) ||
-            return false
+        n5comparevectortree(expected.children[index], actual.children[index],
+            present) || return false
     end
     return true
 end
 
-function n5comparevectortree(expected::N5ExpectedListVector, actual)
-    actual isa Parquet.ListVector || return false
-    expected.offsets == Int[actual.offsets...] || return false
-    _n5samevalidity(expected.validity, actual.validity) || return false
-    return n5comparevectortree(expected.values, actual.values)
+# The offsets, validity, and entries of `actual` restricted to `rows`.
+function _n5spans(actual, rows)
+    offsets = Int[0]
+    validity = BitVector()
+    entries = Int[]
+    for row in rows
+        push!(validity, !(Missing <: eltype(actual)) || actual.validity[row])
+        append!(entries, (actual.offsets[row] + 1):actual.offsets[row + 1])
+        push!(offsets, length(entries))
+    end
+    return offsets, validity, entries
 end
 
-function n5comparevectortree(expected::N5ExpectedMapVector, actual)
+function _n5samevalidity(expected, validity::BitVector, actual)
+    expected === nothing && return !(Missing <: eltype(actual))
+    return Missing <: eltype(actual) && expected == validity
+end
+
+function n5comparevectortree(expected::N5ExpectedListVector, actual, rows)
+    actual isa Parquet.ListVector || return false
+    offsets, validity, entries = _n5spans(actual, rows)
+    expected.offsets == offsets || return false
+    _n5samevalidity(expected.validity, validity, actual) || return false
+    return n5comparevectortree(expected.values, actual.values, entries)
+end
+
+function n5comparevectortree(expected::N5ExpectedMapVector, actual, rows)
     actual isa Parquet.MapVector || return false
-    expected.offsets == Int[actual.offsets...] || return false
-    _n5samevalidity(expected.validity, actual.validity) || return false
-    n5comparevectortree(expected.keys, actual.keys) || return false
+    offsets, validity, entries = _n5spans(actual, rows)
+    expected.offsets == offsets || return false
+    _n5samevalidity(expected.validity, validity, actual) || return false
+    n5comparevectortree(expected.keys, actual.keys, entries) || return false
     if expected.values === nothing
-        return actual.values === nothing
+        return eltype(actual.values) === Missing
     end
-    actual.values === nothing && return false
-    return n5comparevectortree(expected.values, actual.values)
+    return n5comparevectortree(expected.values, actual.values, entries)
 end
 
 function n5comparevectortree(expected::N5ExpectedTableVector, columns)
@@ -140,8 +151,8 @@ function n5comparevectortree(expected::N5ExpectedTableVector, columns)
     length(actual) == length(expected.children) || return false
     for index in eachindex(expected.children)
         length(actual[index]) == expected.rows || return false
-        n5comparevectortree(expected.children[index], actual[index]) ||
-            return false
+        n5comparevectortree(expected.children[index], actual[index],
+            1:expected.rows) || return false
     end
     return true
 end
