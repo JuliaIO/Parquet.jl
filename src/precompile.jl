@@ -51,7 +51,8 @@ using PrecompileTools: @compile_workload, @setup_workload
             # Writing what a read returns covers the reader's column types.
             write(IOBuffer(), Tables.columntable(read); option...)
             close(read)
-            path = write(joinpath(dir, "workload.parquet"), table; option...)
+            # A fresh name each time: Windows cannot reopen a file a read still maps.
+            path = write(tempname(dir) * ".parquet", table; option...)
             read = Table(path)
             Tables.columns(read)
             Tables.schema(read)
