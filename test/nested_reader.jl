@@ -106,7 +106,6 @@ end
     result = Parquet._assemblenested(plan, streams, 1)
     @test [result[1][index] for index in 1:5] == Any[true, 2, 3, 4, 5]
     @test result[1][6] == UInt8[0x06]
-    @test result.children[7] isa Parquet.FixedByteArrayVector
     @test result[1][7] == UInt8[0x07, 0x08]
 
     wrongtype = copy(streams)

@@ -206,13 +206,19 @@ function _temporaljuliatype(::_TimeLogicalKind)
     return Dates.Time
 end
 
+function _temporalperiod(unit::UInt8)
+    unit == _TEMPORAL_MILLIS && return Dates.Millisecond
+    unit == _TEMPORAL_MICROS && return Dates.Microsecond
+    return Dates.Nanosecond
+end
+
+# TIMESTAMP reads as a `Durations.Timestamp` of its unit, or as a UTC
+# `Durations.ZonedTimestamp` when it is adjusted to UTC (as legacy TIMESTAMP_MILLIS and
+# TIMESTAMP_MICROS columns are).
 function _temporaljuliatype(kind::_TimestampLogicalKind)
-    if kind.unit == _TEMPORAL_MILLIS
-        kind.is_adjusted_to_utc || return Dates.DateTime
-        return Timestamp{:millis}
-    end
-    kind.unit == _TEMPORAL_MICROS && return Timestamp{:micros}
-    return Timestamp{:nanos}
+    P = _temporalperiod(kind.unit)
+    kind.is_adjusted_to_utc && return Durations.ZonedTimestamp{P,:UTC}
+    return Durations.Timestamp{P}
 end
 
 function _temporaljuliatype(kind::_IntegerLogicalKind)
@@ -258,16 +264,6 @@ function _toparquettime(kind::_TimeLogicalKind, value, element::Metadata.SchemaE
     return kind.unit == _TEMPORAL_MILLIS ? Int32(ticks) : Int64(ticks)
 end
 
-function _fromparquetdatetime(value::Int64)
-    ordinal = try
-        Base.checked_add(_PARQUET_DATETIME_EPOCH, value)
-    catch err
-        err isa OverflowError || rethrow()
-        throw(FormatError("millisecond TIMESTAMP $value overflows Dates.DateTime"))
-    end
-    return Dates.DateTime(Dates.UTM(ordinal))
-end
-
 function _toparquetdatetime(value::Dates.DateTime)
     ticks = try
         Base.checked_sub(Dates.value(value), _PARQUET_DATETIME_EPOCH)
@@ -278,38 +274,65 @@ function _toparquetdatetime(value::Dates.DateTime)
     return ticks
 end
 
+# A timestamp of type `T` from its stored count of `T`'s unit since the Unix epoch (in
+# UTC for a zoned type). Every Int64 count is a valid value.
+function _timestampvalue(::Type{Durations.Timestamp{P}}, ticks::Int64) where {P}
+    return Durations.Timestamp{P}(Dates.UTInstant(P(ticks)))
+end
+
+function _timestampvalue(::Type{Durations.ZonedTimestamp{P,Z}}, ticks::Int64) where {P,Z}
+    return Durations.ZonedTimestamp{P,Z}(_timestampvalue(Durations.Timestamp{P}, ticks),
+        Dates.UTC)
+end
+
+const _INT96_UNIX_EPOCH_DAY = 2_440_588
+const _INT96_RESOLUTIONS = Union{Dates.Nanosecond,Dates.Microsecond,Dates.Millisecond}
+
 # INT96 (Impala, Hive, Spark) stores 8 little-endian bytes of nanoseconds within the
-# day, then 4 bytes of Julian day number. Like pyarrow, read it as a nanosecond
-# timestamp that is not adjusted to UTC.
-function _fromint96(value, element::Metadata.SchemaElement)
+# day, then a 4-byte signed Julian day number. It reads as a local `Timestamp{P}`, as
+# pyarrow reads it. Microseconds follow Spark, whose own decoding wraps in Int64: Spark
+# stores dates past year 294247 by that wraparound, and this recovers them.
+function _fromint96(value, element::Metadata.SchemaElement,
+        ::Type{P}=Dates.Nanosecond) where {P<:_INT96_RESOLUTIONS}
     value isa AbstractVector{UInt8} && length(value) == 12 || throw(FormatError(
         "INT96 column $(repr(element.name)) contains a value that is not 12 bytes"))
     nanoseconds = Int64(0)
     for index in 8:-1:1
         nanoseconds = (nanoseconds << 8) | Int64(value[index])
     end
-    day = UInt32(0)
+    raw = UInt32(0)
     for index in 12:-1:9
-        day = (day << 8) | UInt32(value[index])
+        raw = (raw << 8) | UInt32(value[index])
     end
-    ticks = try
-        Base.checked_add(Base.checked_mul(Int64(day) - 2_440_588,
-            Int64(86_400_000_000_000)), nanoseconds)
-    catch err
-        err isa OverflowError || rethrow()
-        throw(FormatError("INT96 timestamp in $(repr(element.name)) (Julian day " *
-            "$day) is outside the range of Parquet.Timestamp{:nanos}"))
+    days = Int64(reinterpret(Int32, raw)) - _INT96_UNIX_EPOCH_DAY
+    sparkmicros = days * 86_400_000_000 + div(nanoseconds, 1000)
+    if P === Dates.Nanosecond
+        ticks = Int128(days) * _NANOS_PER_DAY + nanoseconds
+        typemin(Int64) <= ticks <= typemax(Int64) || throw(UnsupportedFeatureError(
+            "INT96 column $(repr(element.name)) holds $(_int96date(sparkmicros)), " *
+            "outside the range of Timestamp{Nanosecond} (1677-09-21 to 2262-04-11); " *
+            "read INT96 columns with int96=Dates.Microsecond"))
+        return Durations.Timestamp{P}(Dates.UTInstant(P(Int64(ticks))))
     end
-    return Timestamp(ticks, :nanos, false)
+    scale = Dates.tons(oneunit(P)) ÷ 1000
+    finer = rem(nanoseconds, 1000) != 0 ? Dates.Nanosecond : Dates.Microsecond
+    finer === Dates.Microsecond && rem(sparkmicros, scale) == 0 ||
+        throw(UnsupportedFeatureError("INT96 column $(repr(element.name)) holds a " *
+            "timestamp finer than $(nameof(P)); read INT96 columns with " *
+            "int96=Dates.$(nameof(finer))"))
+    return Durations.Timestamp{P}(Dates.UTInstant(P(div(sparkmicros, scale))))
+end
+
+function _int96date(micros::Int64)
+    days = fld(micros, Int64(86_400_000_000))
+    return string(Dates.Date(Dates.UTD(days + _PARQUET_DATE_EPOCH)))
 end
 
 function _fromparquettimestamp(kind::_TimestampLogicalKind, value,
     element::Metadata.SchemaElement)
     value isa Int64 ||
         throw(FormatError("TIMESTAMP column $(repr(element.name)) contains a non-Int64 value"))
-    kind.unit == _TEMPORAL_MILLIS && !kind.is_adjusted_to_utc &&
-        return _fromparquetdatetime(value)
-    return Timestamp(value, _temporalunitname(kind.unit), kind.is_adjusted_to_utc)
+    return _timestampvalue(_temporaljuliatype(kind), value)
 end
 
 function _toparquettimestamp(kind::_TimestampLogicalKind, value,

@@ -187,16 +187,12 @@ function (::_DateValue)(value::Int32)
     return _fromparquetdate(value)
 end
 
-struct _TimestampValue{L}
-    adjusted::Bool
-end
+# TIMESTAMP values are their stored Int64 counts, so PLAIN pages copy straight into a
+# column of them (`_bitcopy`).
+struct _TimestampValue{L} end
 
-function (::_TimestampValue{Dates.DateTime})(value::Int64)
-    return _fromparquetdatetime(value)
-end
-
-function (convert::_TimestampValue{Timestamp{U}})(value::Int64) where {U}
-    return Timestamp(value, U, convert.adjusted)::Timestamp{U}
+function (::_TimestampValue{L})(value::Int64) where {L}
+    return _timestampvalue(L, value)
 end
 
 struct _IntegerValue{L}
@@ -218,12 +214,40 @@ function (convert::_TimeValue)(value::Union{Int32,Int64})
     return _fromparquettime(convert.kind, value, convert.element)
 end
 
-struct _Int96Value
+struct _Int96Value{P}
     element::Metadata.SchemaElement
 end
 
-function (convert::_Int96Value)(bytes::AbstractVector{UInt8})
-    return _fromint96(bytes, convert.element)::Timestamp{:nanos}
+function (convert::_Int96Value{P})(bytes::AbstractVector{UInt8}) where {P}
+    return _fromint96(bytes, convert.element, P)::Durations.Timestamp{P}
+end
+
+# FIXED_LEN_BYTE_ARRAY values without an annotation read as `NTuple{N,UInt8}`, whose
+# bytes PLAIN pages hold back to back.
+struct _FixedBytesValue{N} end
+
+function (::_FixedBytesValue{N})(bytes::Union{_ByteView,Vector{UInt8}}) where {N}
+    length(bytes) == N || throw(FormatError(
+        "fixed byte-array value has $(length(bytes)) bytes, expected $N"))
+    return GC.@preserve bytes unsafe_load(Ptr{NTuple{N,UInt8}}(pointer(bytes)))
+end
+
+# Whether a conversion only reinterprets the bits of each physical value, so PLAIN
+# values copy in bulk.
+_bitcopy(convert) = false
+_bitcopy(::_TimestampValue) = true
+
+# Element types a read produces where the file leaves a choice: `int96` is the
+# resolution of INT96 timestamps.
+struct _ReadOptions
+    int96::DataType
+end
+
+function _ReadOptions(; int96::Type=Dates.Nanosecond)
+    int96 in (Dates.Nanosecond, Dates.Microsecond, Dates.Millisecond) ||
+        throw(ArgumentError("int96 must be Dates.Nanosecond, Dates.Microsecond, or " *
+            "Dates.Millisecond, got $int96"))
+    return _ReadOptions(int96)
 end
 
 # Decimal, binary, and other annotations go through the general per-value conversion.
@@ -239,17 +263,28 @@ function (logical::_LogicalValue{L})(value) where {L}
 end
 
 # The conversion of `element`'s physical values and the type it produces. STRING and
-# ENUM values become DataStrings payloads (`_StringPayloads`).
-function _valueconverter(element::Metadata.SchemaElement, limits::Limits)
+# ENUM values become DataStrings payloads, as do BYTE_ARRAY values without an
+# annotation (`_StringPayloads`, whose column is a StringVector or BytesVector).
+function _valueconverter(element::Metadata.SchemaElement, limits::Limits,
+        options::_ReadOptions=_ReadOptions())
     physical = _physicaleltype(element.type_)
     kind = _logicalkind(element)
-    kind === nothing && return identity, physical
+    if kind === nothing
+        L = _logicaleltype(element, physical)
+        L === DataStrings.DataBytes &&
+            return _StringPayloads{false}(limits), DataStrings.StringPayload
+        L <: NTuple && return _FixedBytesValue{fieldcount(L)}(), L
+        return identity, physical
+    end
     L = _logicaleltype(element, physical)
-    kind in (:string, :enum) && return _StringPayloads(limits), DataStrings.StringPayload
+    kind in (:string, :enum) &&
+        return _StringPayloads{true}(limits), DataStrings.StringPayload
     kind === :date && return _DateValue(), L
-    kind === :int96 && return _Int96Value(element), L
-    kind isa _TimestampLogicalKind &&
-        return _TimestampValue{L}(kind.is_adjusted_to_utc), L
+    if kind === :int96
+        P = options.int96
+        return _Int96Value{P}(element), Durations.Timestamp{P}
+    end
+    kind isa _TimestampLogicalKind && return _TimestampValue{L}(), L
     kind isa _IntegerLogicalKind && return _IntegerValue{L}(element), L
     kind isa _TimeLogicalKind && return _TimeValue(kind, element), L
     kind === :decimal && _preflightdecimalconversion(element, limits)
@@ -276,19 +311,19 @@ function _scratch(vectors::IdDict{Type,Vector}, ::Type{L}) where {L}
     return get!(() -> L[], vectors, L)::Vector{L}
 end
 
-# STRING values of a flat table column as DataStrings payloads: up to 12 bytes inline,
-# longer ones as views into a copy of the page they were decoded from, which `buffers`
-# keeps. `page` is the current page's bytes; `kept` is the 0-based index of its copy in
-# `buffers`, or -1 before a value needed one.
-mutable struct _StringPayloads
+# BYTE_ARRAY values as DataStrings payloads: up to 12 bytes inline, longer ones as views
+# into a copy of the page they were decoded from, which `buffers` keeps. `page` is the
+# current page's bytes; `kept` is the 0-based index of its copy in `buffers`, or -1
+# before a value needed one. `V` is whether values must be UTF-8 (STRING and ENUM).
+mutable struct _StringPayloads{V}
     limits::Limits
     buffers::Vector{Vector{UInt8}}
     page::_ByteView
     kept::Int
 end
 
-function _StringPayloads(limits::Limits)
-    return _StringPayloads(limits, Vector{UInt8}[], _byteview(UInt8[]), -1)
+function _StringPayloads{V}(limits::Limits) where {V}
+    return _StringPayloads{V}(limits, Vector{UInt8}[], _byteview(UInt8[]), -1)
 end
 
 function _isasciibytes(bytes::_ByteView)
@@ -316,9 +351,16 @@ function _checkstringvalue(bytes::AbstractVector{UInt8}, limits::Limits)
     return
 end
 
+function _checkpayloadvalue(strings::_StringPayloads{V},
+        bytes::AbstractVector{UInt8}) where {V}
+    V && return _checkstringvalue(bytes, strings.limits)
+    _checklimit(:string_bytes, length(bytes), strings.limits.max_string_bytes)
+    return
+end
+
 # A value inside the current page.
 function (strings::_StringPayloads)(bytes::_ByteView)
-    _checkstringvalue(bytes, strings.limits)
+    _checkpayloadvalue(strings, bytes)
     count = length(bytes)
     source = first(parentindices(bytes)[1])
     count <= DataStrings.INLINE_MAX &&
@@ -337,7 +379,7 @@ end
 
 # A value decoded into its own vector (DELTA_LENGTH_BYTE_ARRAY, DELTA_BYTE_ARRAY).
 function (strings::_StringPayloads)(bytes::Vector{UInt8})
-    _checkstringvalue(bytes, strings.limits)
+    _checkpayloadvalue(strings, bytes)
     count = length(bytes)
     count <= DataStrings.INLINE_MAX && return DataStrings.inline_payload(bytes, 1, count)
     push!(strings.buffers, bytes)

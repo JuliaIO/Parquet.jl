@@ -49,12 +49,15 @@ function _logicalkind(node::SchemaNode)
     return _logicalkind(node.element)
 end
 
+# The element type a column reads as, with default read options. Unannotated
+# BYTE_ARRAY values read as `DataBytes`, unannotated FIXED_LEN_BYTE_ARRAY values as
+# `NTuple{N,UInt8}` (or `DataBytes` past `_MAX_FIXED_TUPLE_BYTES`).
 function _logicaleltype(element::Metadata.SchemaElement, physical::Type)
     kind = _logicalkind(element)
-    kind === nothing && return physical
+    kind === nothing && return _unannotatedeltype(element, physical)
     kind === :string && return DataStrings.DataString
     kind === :date && return Dates.Date
-    kind === :int96 && return Timestamp{:nanos}
+    kind === :int96 && return Durations.Timestamp{Dates.Nanosecond}
     kind isa Union{_TimeLogicalKind,_TimestampLogicalKind,_IntegerLogicalKind} &&
         return _temporaljuliatype(kind)
     logical = _binarylogicaleltype(kind, physical)
@@ -66,6 +69,18 @@ end
 
 function _logicaleltype(node::SchemaNode, physical::Type)
     return _logicaleltype(node.element, physical)
+end
+
+# Widest FIXED_LEN_BYTE_ARRAY read as an `NTuple`; wider ones read as `DataBytes`, so a
+# file cannot force a huge tuple type.
+const _MAX_FIXED_TUPLE_BYTES = 1024
+
+function _unannotatedeltype(element::Metadata.SchemaElement, physical::Type)
+    element.type_ == Metadata.Type.BYTE_ARRAY && return DataStrings.DataBytes
+    element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY || return physical
+    width = element.type_length
+    width !== nothing && 0 < width <= _MAX_FIXED_TUPLE_BYTES || return DataStrings.DataBytes
+    return NTuple{Int(width),UInt8}
 end
 
 function _fromparquetdate(value::Int32)

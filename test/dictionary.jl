@@ -186,10 +186,9 @@ end
     @test reinterpret(UInt64, Parquet.Tables.columns(table).floats) == reinterpret(UInt64, input.floats)
     @test Parquet.Tables.columns(table).strings == input.strings
     @test Parquet.Tables.columns(table).raw == input.raw
+    @test Parquet.Tables.columns(table).raw isa Parquet.DataStrings.BytesVector
     @test isequal(Parquet.Tables.columns(table).optional, input.optional)
     @test Parquet.Tables.columns(table).flags == input.flags
-    Parquet.Tables.columns(table).raw[1][1] = 0xaa
-    @test Parquet.Tables.columns(table).raw[2] == rawvalue
     close(table)
     boolean = Parquet._encodefile((value=fill(true, 2000),); dictionary=true)
     booleanfile = Parquet.File(boolean)

@@ -51,7 +51,7 @@ end
     @test Parquet._binarylogicaleltype(uuid, Vector{UInt8}) === UUID
     @test Parquet._binarylogicaleltype(float16, Vector{UInt8}) === Float16
     @test Parquet._binarylogicaleltype(unknown, Int64) === Missing
-    @test Parquet._binarylogicaleltype(interval, Vector{UInt8}) === Parquet.Interval
+    @test Parquet._binarylogicaleltype(interval, Vector{UInt8}) === Parquet.Durations.Duration
 
     node = Parquet.SchemaNode(uuid, ["uuid"], Int16(1), Int16(0), Int32(1),
         Parquet.SchemaNode[])
@@ -253,24 +253,29 @@ end
 end
 
 @testset "legacy INTERVAL little-endian inverse" begin
+    Duration = Parquet.Durations.Duration
     element = binarylogicalelement("interval", MD.Type.FIXED_LEN_BYTE_ARRAY;
         width=12, converted=MD.ConvertedType.INTERVAL)
-    expected = Parquet.Interval(UInt32(1), UInt32(0x01020304), typemax(UInt32))
-    bytes = vcat(littleuint32(expected.months), littleuint32(expected.days),
-        littleuint32(expected.milliseconds))
+    bytes = vcat(littleuint32(UInt32(1)), littleuint32(UInt32(0x01020304)),
+        littleuint32(typemax(UInt32)))
+    expected = Duration(1, 0x01020304, Int64(typemax(UInt32)) * 1_000_000)
     @test Parquet._binarylogicalvalue(element, bytes) == expected
     @test Parquet._binaryphysicalvalue(element, expected) == bytes
-    @test isequal(copy(expected), expected)
-    @test hash(copy(expected)) == hash(expected)
     values = Union{Missing,Vector{UInt8}}[bytes, missing, zeros(UInt8, 12)]
     decoded = Parquet._binarylogicalvalues(element, values)
-    @test decoded isa Vector{Union{Missing,Parquet.Interval}}
-    @test isequal(decoded, Union{Missing,Parquet.Interval}[
-        expected, missing, Parquet.Interval(0, 0, 0)])
+    @test decoded isa Vector{Union{Missing,Duration}}
+    @test isequal(decoded, Union{Missing,Duration}[expected, missing, Duration(0, 0, 0)])
     @test isequal(Parquet._binaryphysicalvalues(element, decoded), values)
+    # Months or days above Int32 do not fit a Duration.
+    wide = vcat(littleuint32(typemax(UInt32)), littleuint32(UInt32(0)), littleuint32(UInt32(0)))
+    @test_throws Parquet.UnsupportedFeatureError Parquet._binarylogicalvalue(element, wide)
     @test_throws Parquet.FormatError Parquet._binarylogicalvalue(element, bytes[1:11])
     @test_throws Parquet.FormatError Parquet._binarylogicalvalue(element, bytes[1:1])
     @test_throws ArgumentError Parquet._binaryphysicalvalue(element, (1, 2, 3))
+    # Parquet.Interval values are still written.
+    interval = Parquet.Interval(UInt32(1), UInt32(0x01020304), typemax(UInt32))
+    @test Parquet._binaryphysicalvalue(element, interval) == bytes
+    @test isequal(copy(interval), interval) && hash(copy(interval)) == hash(interval)
     @test_throws ArgumentError Parquet.Interval(-1, 0, 0)
     @test_throws ArgumentError Parquet.Interval(0, typemax(UInt32) + UInt64(1), 0)
 end

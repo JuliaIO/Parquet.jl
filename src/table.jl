@@ -1,4 +1,4 @@
-import DataAPI, Tables
+import DataAPI, Dates, Tables
 
 # `Table <: Tables.AbstractColumns`, so `table.x` is column `x`; the package reads the
 # fields below through `getfield` (the `_table*` accessors).
@@ -168,8 +168,9 @@ function _flatchunksbacked(metadata::Metadata.FileMetaData, node::SchemaNode)
     return true
 end
 
-function _flatcolumnvector(node::SchemaNode, rows::Int, limits::Limits)
-    _, L = _valueconverter(node.element, limits)
+function _flatcolumnvector(node::SchemaNode, rows::Int, limits::Limits,
+        options::_ReadOptions)
+    _, L = _valueconverter(node.element, limits, options)
     return Vector{_flatoutputtype(L, node)}(undef, rows)
 end
 
@@ -177,22 +178,23 @@ end
 # the page buffers a STRING chunk's payloads point into, or `nothing`.
 function _readtablechunk!(column::Vector, offset::Int, file::File,
         metadata::Metadata.FileMetaData, rowindex::Int, node::SchemaNode,
-        limits::Limits, budget::_ByteBudget, buffers::_PageBuffers)
+        limits::Limits, budget::_ByteBudget, buffers::_PageBuffers, options::_ReadOptions)
     group = metadata.row_groups[rowindex]
     md = _chunkmetadata(group.columns[Int(node.column_index)], node)
     md.num_values == group.num_rows || throw(FormatError(
         "flat column $(node.column_index) has $(md.num_values) values for " *
         "$(group.num_rows) rows"))
     start, stop = _chunkrange(md, file.footer.offset)
-    convert, _ = _valueconverter(node.element, limits)
+    convert, _ = _valueconverter(node.element, limits, options)
     _readflatchunk!(column, offset, _physicaleltype(md.type_), convert, file.source, md,
         node, start, stop, limits, budget, buffers)
     return convert isa _StringPayloads ? convert.buffers : nothing
 end
 
-# A STRING column from its payloads and each row group's page buffers. Payload buffer
-# indices count from the row group's first buffer, so later row groups are rebased.
-function _stringcolumn(payloads::Vector{DataStrings.StringPayload}, node::SchemaNode,
+# A STRING (or binary) column from its payloads and each row group's page buffers.
+# Payload buffer indices count from the row group's first buffer, so later row groups
+# are rebased.
+function _payloadcolumn(payloads::Vector{DataStrings.StringPayload}, node::SchemaNode,
         chunks::Vector{Vector{Vector{UInt8}}}, starts::Vector{Int})
     pages = Vector{UInt8}[]
     for (rowindex, chunk) in enumerate(chunks)
@@ -209,24 +211,31 @@ function _stringcolumn(payloads::Vector{DataStrings.StringPayload}, node::Schema
         end
         append!(pages, chunk)
     end
-    T = node.max_definition_level == 0 ? DataStrings.DataString :
-        Union{Missing,DataStrings.DataString}
-    return DataStrings.StringVector{T}(payloads, pages, Val(:trusted))
+    return _payloadvector(node, node.max_definition_level > 0, payloads, pages)
+end
+
+# A StringVector for STRING and ENUM values, a BytesVector for other byte arrays.
+function _payloadvector(node::SchemaNode, optional::Bool,
+        payloads::Vector{DataStrings.StringPayload}, pages::Vector{Vector{UInt8}})
+    if _logicalkind(node) in (:string, :enum)
+        T = optional ? Union{Missing,DataStrings.DataString} : DataStrings.DataString
+        return DataStrings.StringVector{T}(payloads, pages, Val(:trusted))
+    end
+    T = optional ? Union{Missing,DataStrings.DataBytes} : DataStrings.DataBytes
+    return DataStrings.BytesVector{T}(payloads, pages, Val(:trusted))
 end
 
 function _finishflatcolumn(column::Vector, node::SchemaNode, chunks, starts::Vector{Int})
-    column isa Vector{DataStrings.StringPayload} &&
-        return _stringcolumn(column, node, chunks, starts)
-    node.element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
-        _logicalkind(node) === nothing || return column
-    return FixedByteArrayVector{eltype(column)}(column, node.element.type_length)
+    column isa Vector{DataStrings.StringPayload} || return column
+    return _payloadcolumn(column, node, chunks, starts)
 end
 
 # Columns of a table whose fields are all flat leaves. Each chunk decodes straight into
 # its column, one task per chunk; a column whose chunks are not all backed by their
 # bytes grows as its chunks decode in order, on one task.
 function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Schema,
-        rows::Int, limits::Limits, budget::_ByteBudget, ntasks::Int=Threads.nthreads())
+        rows::Int, limits::Limits, budget::_ByteBudget, ntasks::Int=Threads.nthreads(),
+        options::_ReadOptions=_ReadOptions())
     fields = schema.root.children
     starts = _rowgroupstarts(metadata, rows)
     columns = AbstractVector[]
@@ -237,7 +246,7 @@ function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Sch
         node.max_definition_level in (0, 1) ||
             throw(FormatError("nested definition levels are not supported yet"))
         backed = _flatchunksbacked(metadata, node)
-        column = _flatcolumnvector(node, backed ? rows : 0, limits)
+        column = _flatcolumnvector(node, backed ? rows : 0, limits, options)
         backed || sizehint!(column, _claimcapacity(rows, _checkedsourcelength(file.source)))
         push!(columns, column)
         if backed
@@ -252,7 +261,7 @@ function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Sch
         for index in (rowindex == 0 ? eachindex(starts) : (rowindex:rowindex))
             offset = rowindex == 0 ? length(column) : starts[index]
             kept = _readtablechunk!(column, offset, file, metadata, index, node, limits,
-                budget, buffers)
+                budget, buffers, options)
             kept === nothing || (pages[fieldindex][index] = kept)
         end
         return nothing
@@ -335,7 +344,8 @@ function _isflattableplan(plan::_NestedSchemaPlan)
 end
 
 """
-    Parquet.Table(source; scan=nothing, ntasks=Threads.nthreads(), limits=Parquet.Limits())
+    Parquet.Table(source; scan=nothing, ntasks=Threads.nthreads(), int96=Dates.Nanosecond,
+                  limits=Parquet.Limits())
 
 Read a Parquet file from a path, a byte vector, or an `IO` into Tables.jl columns.
 
@@ -347,10 +357,16 @@ annotations. Type overrides are not supported.
 
 Column chunks decode on up to `ntasks` tasks; `ntasks=1` reads on the calling task.
 The result does not depend on `ntasks`.
+
+INT96 timestamps (written by Spark, Hive, and Impala) read as
+`Durations.Timestamp{int96}`. Spark's `9999-12-31` placeholder values are outside the
+nanosecond range (1677 to 2262); read such files with `int96=Dates.Microsecond`.
 """
 function Table(input; scan::Union{Nothing,Tables.Scan}=nothing,
-        ntasks::Integer=Threads.nthreads(), limits::Limits=Limits())
+        ntasks::Integer=Threads.nthreads(), int96::Type=Dates.Nanosecond,
+        limits::Limits=Limits())
     ntasks >= 1 || throw(ArgumentError("ntasks must be at least 1, got $ntasks"))
+    options = _ReadOptions(; int96=int96)
     budget = _ByteBudget(limits)
     file = File(input; limits=limits, budget=budget)
     try
@@ -381,10 +397,10 @@ function Table(input; scan::Union{Nothing,Tables.Scan}=nothing,
         names = _tablenames(schema, limits)
         if _isflattableplan(nested)
             columns = _readflattable(file, metadata, schema, rows, limits, budget,
-                Int(ntasks))
+                Int(ntasks), options)
         else
             root = _readnestedroot(file, metadata, schema, nested, limits,
-                budget, Int(ntasks))
+                budget, Int(ntasks), options)
             columns = root.children
         end
         length(columns) == length(names) || throw(AssertionError(

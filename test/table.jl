@@ -414,22 +414,12 @@ end
     required = NTuple{3,UInt8}[(0x01, 0x02, 0x03), (0x04, 0x05, 0x06)]
     optional = Union{Missing,NTuple{2,UInt8}}[(0x07, 0x08), missing]
     input = (required=required, optional=optional)
-    expected_required = Vector{UInt8}[UInt8[1, 2, 3], UInt8[4, 5, 6]]
-    expected_optional = Union{Missing,Vector{UInt8}}[UInt8[7, 8], missing]
     table = Parquet.Table(Parquet._encodefile(input))
-    @test Parquet.Tables.columns(table).required == expected_required
-    @test isequal(Parquet.Tables.columns(table).optional, expected_optional)
-    @test Parquet.Tables.columns(table).required isa Parquet.FixedByteArrayVector
-    @test Parquet.Tables.columns(table).required.width == 3
-    @test Parquet.Tables.columns(table).optional.width == 2
-    @test collect(Parquet.Tables.columns(table).required) == expected_required
-    @test copy(Parquet.Tables.columns(table).required) == expected_required
-    Parquet.Tables.columns(table).required[1] = UInt8[9, 9, 9]
-    @test Parquet.Tables.columns(table).required[1] == UInt8[9, 9, 9]
-    Parquet.Tables.columns(table).required[1] = expected_required[1]
-    @test_throws ArgumentError setindex!(Parquet.Tables.columns(table).required, UInt8[1], 1)
-    @test Tables.schema(table).types ==
-        (Vector{UInt8}, Union{Missing,Vector{UInt8}})
+    # FIXED_LEN_BYTE_ARRAY without an annotation reads back as the NTuples written.
+    @test table.required isa Vector{NTuple{3,UInt8}}
+    @test table.required == required
+    @test isequal(table.optional, optional)
+    @test Tables.schema(table).types == (NTuple{3,UInt8}, Union{Missing,NTuple{2,UInt8}})
     rewritten = Parquet._encodefile(table)
     close(table)
 
@@ -440,18 +430,46 @@ end
     @test [element.type_length for element in metadata.schema[2:end]] == [3, 2]
     close(file)
     table = Parquet.Table(rewritten)
-    @test Parquet.Tables.columns(table).required == expected_required
-    @test isequal(Parquet.Tables.columns(table).optional, expected_optional)
+    @test table.required == required
+    @test isequal(table.optional, optional)
     close(table)
 
-    short = Parquet.Table(Parquet._encodefile(input))
-    pop!(Parquet.Tables.columns(short).required[1])
-    @test_throws ArgumentError Parquet._encodefile(short)
-    close(short)
-    long = Parquet.Table(Parquet._encodefile(input))
-    push!(Parquet.Tables.columns(long).required[1], 0xff)
-    @test_throws ArgumentError Parquet._encodefile(long)
-    close(long)
+    # Past 1024 bytes a fixed width reads as DataBytes.
+    wide = [Tuple(fill(UInt8(i), 1025)) for i in 1:2]
+    widetable = Parquet.Table(Parquet._encodefile((wide=wide,)))
+    @test widetable.wide isa Parquet.DataStrings.BytesVector
+    @test [collect(value) for value in widetable.wide] == [collect(value) for value in wide]
+    close(widetable)
+end
+
+@testset "ecosystem element types" begin
+    DT = Parquet.Durations
+    MD = Parquet.Metadata
+    stamps = [DT.Timestamp{Dates.Microsecond}(Dates.UTInstant(Dates.Microsecond(
+        Dates.value(DateTime(2025, 1, day) - DateTime(1970)) * 1000))) for day in 1:4]
+    # The writer stores these as TIMESTAMP(MICROS) through an explicit annotation.
+    column = Parquet.LogicalColumn([Parquet.Timestamp(Dates.value(stamp), :micros, false)
+        for stamp in stamps], :timestamp; unit=:micros, adjusted=false)
+    bytes = Parquet._encodefile((ts=column, raw=[UInt8[i, i] for i in 1:4],
+        long=[fill(UInt8(i), 20) for i in 1:4]))
+    table = Parquet.Table(bytes)
+    @test table.ts == stamps
+    @test table.raw isa Parquet.DataStrings.BytesVector{Parquet.DataStrings.DataBytes}
+    @test table.raw == [UInt8[i, i] for i in 1:4]
+    @test table.long == [fill(UInt8(i), 20) for i in 1:4]
+    close(table)
+    # A DateTime literal filters a local timestamp column.
+    filtered = Parquet.Table(bytes; scan=Tables.Scan(
+        filter=Tables.colcmp(>=, Tables.col(:ts), DateTime(2025, 1, 3))))
+    @test filtered.ts == stamps[3:4]
+    close(filtered)
+
+    # Nested binary leaves are BytesVectors too.
+    nested = Parquet.Table(Parquet._encodefile((lists=[[UInt8[1], fill(UInt8(2), 30)],
+        Vector{UInt8}[]],)))
+    @test nested.lists[1] == [UInt8[1], fill(UInt8(2), 30)]
+    @test nested.lists.values isa Parquet.DataStrings.BytesVector
+    close(nested)
 end
 
 @testset "fixed-width Tables schema limit" begin

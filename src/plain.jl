@@ -124,8 +124,8 @@ function _plain!(dest::Vector{L}, offset::Int, count::Int, ::Type{P}, convert::C
     _growto!(dest, offset + count)
     GC.@preserve bytes dest begin
         source = Ptr{P}(pointer(bytes, position))
-        if L === P && convert === identity
-            unsafe_copyto!(pointer(dest, offset + 1), source, count)
+        if (L === P && convert === identity) || (_bitcopy(convert) && sizeof(L) == sizeof(P))
+            unsafe_copyto!(Ptr{P}(pointer(dest, offset + 1)), source, count)
         else
             @inbounds for index in 1:count
                 dest[offset + index] = convert(ltoh(unsafe_load(source, index)))
@@ -163,6 +163,11 @@ function _plainbytes!(dest::Vector{L}, offset::Int, count::Int, convert::C,
     total = Base.checked_mul(count, width)
     _requirebytes(bytes, position, total)
     _growto!(dest, offset + count)
+    if convert isa _FixedBytesValue && sizeof(L) == width
+        GC.@preserve bytes dest unsafe_copyto!(Ptr{UInt8}(pointer(dest, offset + 1)),
+            pointer(bytes, position), total)
+        return position + total
+    end
     for index in 1:count
         dest[offset + index] = _bytevalue(convert, view(bytes, position:(position + width - 1)))
         position += width

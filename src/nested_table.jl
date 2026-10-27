@@ -70,10 +70,10 @@ end
 # leaf's logical conversion applied, and the page buffers of a STRING leaf's payloads.
 function _readnestedstream(file::File, metadata::Metadata.FileMetaData,
     schema::Schema, leaf::_NestedLeafPlan, rows::Int, limits::Limits,
-    budget::_ByteBudget, entries::Int, buffers::_PageBuffers)
+    budget::_ByteBudget, entries::Int, buffers::_PageBuffers, options::_ReadOptions)
     node = leaf.source
     T = _physicaleltype(node.element.type_)
-    convert, L = _valueconverter(node.element, limits)
+    convert, L = _valueconverter(node.element, limits, options)
     capacity = _claimcapacity(entries, _checkedsourcelength(file.source))
     sink = _StreamSink(sizehint!(UInt16[], capacity), sizehint!(UInt16[], capacity),
         sizehint!(L[], capacity))
@@ -101,16 +101,16 @@ end
 
 function _readnestedroot(file::File, metadata::Metadata.FileMetaData,
     schema::Schema, plan::_NestedSchemaPlan, limits::Limits, budget::_ByteBudget,
-    ntasks::Int=Threads.nthreads())
+    ntasks::Int=Threads.nthreads(), options::_ReadOptions=_ReadOptions())
     rows = _validatetablerowgroups(metadata, schema, limits)
     entries = Int[_nestedstreamentrycount(metadata, leaf, limits) for leaf in plan.leaves]
     tasks = _readtasks(file, ntasks, length(plan.leaves))
     results = _readmap(eachindex(plan.leaves), tasks) do index, buffers
         return _readnestedstream(file, metadata, schema, plan.leaves[index], rows,
-            limits, budget, entries[index], buffers)
+            limits, budget, entries[index], buffers, options)
     end
     streams = LeafStream[first(result) for result in results]
     pages = Union{Nothing,Vector{Vector{UInt8}}}[last(result) for result in results]
     return _assemblenested(plan, streams, rows; limits=limits, budget=budget,
-        strings=pages)
+        strings=pages, converted=true)
 end

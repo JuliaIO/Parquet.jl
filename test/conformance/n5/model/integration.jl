@@ -65,6 +65,8 @@ function _n5samevalidity(expected::BitVector, actual)
     return expected == BitVector(actual)
 end
 
+# The element type a leaf reads as; unannotated FIXED_LEN_BYTE_ARRAY values are
+# NTuples of the leaf's width, taken from a present value.
 function _n5expectedleafbase(expected::N5ExpectedLeafVector)
     expected.logical === :string && return Parquet.DataStrings.DataString
     expected.physical == MD.Type.BOOLEAN && return Bool
@@ -72,21 +74,26 @@ function _n5expectedleafbase(expected::N5ExpectedLeafVector)
     expected.physical == MD.Type.INT64 && return Int64
     expected.physical == MD.Type.FLOAT && return Float32
     expected.physical == MD.Type.DOUBLE && return Float64
-    expected.physical == MD.Type.BYTE_ARRAY && return Vector{UInt8}
-    expected.physical == MD.Type.FIXED_LEN_BYTE_ARRAY && return Vector{UInt8}
+    expected.physical == MD.Type.BYTE_ARRAY && return Parquet.DataStrings.DataBytes
+    if expected.physical == MD.Type.FIXED_LEN_BYTE_ARRAY
+        present = filter(!ismissing, expected.values)
+        return isempty(present) ? nothing : NTuple{length(first(present)),UInt8}
+    end
     throw(ArgumentError("unsupported N5 expected leaf type $(expected.physical)"))
 end
 
+_n5bytes(value) = value
+_n5bytes(value::Tuple) = collect(value)
+
 function n5comparevectortree(expected::N5ExpectedLeafVector, actual)
-    if expected.physical == MD.Type.FIXED_LEN_BYTE_ARRAY
-        actual isa Parquet.FixedByteArrayVector || return false
-    else
-        actual isa Union{Vector,Parquet.DataStrings.StringVector} || return false
-    end
+    actual isa Union{Vector,Parquet.DataStrings.StringVector,
+        Parquet.DataStrings.BytesVector} || return false
     base = _n5expectedleafbase(expected)
-    expectedtype = expected.nullable ? Union{Missing,base} : base
-    eltype(actual) === expectedtype || return false
-    return isequal(expected.values, Any[actual...])
+    if base !== nothing
+        expectedtype = expected.nullable ? Union{Missing,base} : base
+        eltype(actual) === expectedtype || return false
+    end
+    return isequal(expected.values, Any[_n5bytes(value) for value in actual])
 end
 
 function n5comparevectortree(expected::N5ExpectedStructVector, actual)

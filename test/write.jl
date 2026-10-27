@@ -753,16 +753,6 @@ end
     @test_throws ArgumentError Parquet._encodefile(input; pageversion=2)
 end
 
-function expectedtablevalues(values::AbstractVector{<:NTuple{N,UInt8}}) where {N}
-    return Vector{UInt8}[collect(value) for value in values]
-end
-
-function expectedtablevalues(
-    values::AbstractVector{Union{Missing,NTuple{N,UInt8}}}) where {N}
-    return Union{Missing,Vector{UInt8}}[
-        ismissing(value) ? missing : collect(value) for value in values]
-end
-
 function expectedtablevalues(values::AbstractVector)
     return values
 end

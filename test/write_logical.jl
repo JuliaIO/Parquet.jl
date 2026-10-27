@@ -2,6 +2,16 @@ using Dates
 using Test
 using UUIDs
 
+# The value a written timestamp reads back as.
+wlreadback(value) = value
+function wlreadback(value::Parquet.Timestamp{U}) where {U}
+    P = U === :millis ? Dates.Millisecond : U === :micros ? Dates.Microsecond :
+        Dates.Nanosecond
+    local_ = Parquet.Durations.Timestamp{P}(Dates.UTInstant(P(value.ticks)))
+    value.is_adjusted_to_utc || return local_
+    return Parquet.Durations.ZonedTimestamp{P,:UTC}(local_, Dates.UTC)
+end
+
 function rewritelogicalschema(replacement::Function, bytes::Vector{UInt8},
     index::Int=2)
     file = Parquet.File(bytes)
@@ -88,7 +98,8 @@ end
             encoding=:delta_binary_packed)
         table = Parquet.Table(bytes)
         for name in keys(input)
-            @test isequal(getproperty(Parquet.Tables.columns(table), name), getproperty(input, name))
+            @test isequal(getproperty(Parquet.Tables.columns(table), name),
+                map(wlreadback, getproperty(input, name)))
         end
         close(table)
 
@@ -147,8 +158,11 @@ end
     intervals = Union{Missing,Parquet.Interval}[
         Parquet.Interval(1, 2, 3),
         missing,
-        Parquet.Interval(typemax(UInt32), 0, 86_400_000),
+        Parquet.Interval(typemax(Int32), 0, 86_400_000),
     ]
+    readintervals = Union{Missing,Parquet.Durations.Duration}[
+        Parquet.Durations.Duration(1, 2, 3_000_000), missing,
+        Parquet.Durations.Duration(typemax(Int32), 0, 86_400_000_000_000)]
     nulls = Missing[missing, missing, missing]
     input = (; uuids, halves, json, bson, intervals, nulls)
     for pageversion in (:v1, :v2)
@@ -159,7 +173,7 @@ end
             reinterpret(UInt16, collect(skipmissing(halves)))
         @test isequal(Parquet.Tables.columns(table).json, json)
         @test isequal(Parquet.Tables.columns(table).bson, bson)
-        @test isequal(Parquet.Tables.columns(table).intervals, intervals)
+        @test isequal(Parquet.Tables.columns(table).intervals, readintervals)
         @test isequal(Parquet.Tables.columns(table).nulls, nulls)
         close(table)
 

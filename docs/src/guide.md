@@ -19,6 +19,28 @@ Column chunks decode on `Threads.nthreads()` tasks; pass `ntasks=1` to read on t
 calling task. Use `Parquet.File(path)` when you need file metadata without reading
 column data.
 
+### Column types
+
+| Parquet type | Julia element type |
+|:--|:--|
+| BOOLEAN, INT32, INT64, FLOAT, DOUBLE, INT(8-64), FLOAT16 | `Bool`, `Int32`, `Int64`, `Float32`, `Float64`, `Int8`-`UInt64`, `Float16` |
+| STRING, ENUM | `DataStrings.DataString` (the column is a `DataStrings.StringVector`) |
+| BYTE_ARRAY | `DataStrings.DataBytes` (the column is a `DataStrings.BytesVector`) |
+| FIXED_LEN_BYTE_ARRAY(N) | `NTuple{N,UInt8}`; `DataStrings.DataBytes` when N > 1024 |
+| UUID | `UUIDs.UUID` |
+| DECIMAL(p, s) | `DataDecimals.Decimal{p,s}`; `Parquet.Decimal` when p > 76 |
+| DATE, TIME | `Dates.Date`, `Dates.Time` |
+| TIMESTAMP(unit) | `Durations.Timestamp{unit}` (`Millisecond`, `Microsecond`, `Nanosecond`) |
+| TIMESTAMP(unit), adjusted to UTC | `Durations.ZonedTimestamp{unit,:UTC}` |
+| INT96 | `Durations.Timestamp{Nanosecond}`, or the resolution given by `int96` |
+| INTERVAL | `Durations.Duration` |
+| JSON, BSON | `Parquet.JSONValue`, `Parquet.BSONValue` |
+
+An optional column's elements are `Union{Missing,T}`. A local `Durations.Timestamp`
+compares with `Dates.DateTime`, so a scan filter such as
+`Tables.colcmp(>=, Tables.col(:pickup), DateTime(2025, 1, 1))` works on it; compare a
+UTC timestamp with a `Durations.ZonedTimestamp`.
+
 ### Read some columns
 
 Pass a `Tables.Scan` request to read only the columns it needs. The column chunks of
@@ -128,11 +150,13 @@ out. Reading one of them reports an unsupported feature rather than an invalid f
 - LZO compression, in either direction. Every available implementation is GPL-2 and
   this package is MIT.
 - Writing INT96. The type is deprecated in the format. INT96 columns, which Spark,
-  Hive, and Impala still write by default, are read as `Parquet.Timestamp{:nanos}`
+  Hive, and Impala still write by default, are read as `Durations.Timestamp{Nanosecond}`
   values that are not adjusted to UTC, as pyarrow reads them. A value outside that
-  range (years 1677 to 2262) is a `FormatError`. Rewriting a `Parquet.Table` that has
-  an INT96 column reports an unsupported feature; write its columns instead to store
-  them as INT64 nanosecond timestamps.
+  range (years 1677 to 2262), such as Spark's `9999-12-31` placeholder, throws
+  `Parquet.UnsupportedFeatureError`; pass `int96=Dates.Microsecond` (Spark's own
+  precision, which reads every value Spark writes) to read it. Rewriting a
+  `Parquet.Table` that has an INT96 column reports an unsupported feature; write its
+  columns instead to store them as INT64 timestamps.
 - Writing the deprecated LZ4 codec or the deprecated BIT_PACKED encoding. Both are
   still read, because files in the wild use them. New files use `:lz4_raw` and RLE.
 
@@ -167,9 +191,8 @@ supplies a schema for empty and all-null columns. Without it, such a column of
 finer units, and a column of `Parquet.Decimal` values as DECIMAL(1, 0).
 
 `Parquet.JSONValue` and `Parquet.BSONValue` preserve encoded documents. They validate
-their input without building an object tree. `Parquet.Decimal`, `Parquet.Timestamp`,
-and `Parquet.Interval` preserve exact Parquet values that have no single matching
-Julia standard-library type.
+their input without building an object tree; `string(value)` is the document text.
+`Parquet.Decimal` holds DECIMAL values wider than 76 digits.
 
 ### Preserve annotations when rewriting a table
 
@@ -178,9 +201,6 @@ metadata. Extracting its columns into a new Tables.jl source loses that stored s
 A Julia element type cannot always carry the complete annotation, so such columns
 may be written with a different annotation even though their values remain exact.
 
-- A millisecond `TIMESTAMP` reads as `Parquet.Timestamp{:millis}` when
-  `isAdjustedToUTC` is true, and as `Dates.DateTime` when it is false. Microsecond
-  and nanosecond timestamps always read as `Parquet.Timestamp`.
 - An `ENUM` column reads as strings and is written back as `STRING`.
 - A millisecond or microsecond `TIME` column reads as `Dates.Time` and is written
   back as `TIME` with nanosecond units.
@@ -242,6 +262,5 @@ for empty and all-null columns too.
 
 `Durations.Duration` can be written as INTERVAL when its components are nonnegative,
 its time component is an exact number of milliseconds, and each wire component
-fits UInt32. Read results retain `Parquet.Interval` because its unsigned range
-exceeds Durations' signed month/day range. Convert with `Durations.Duration(x)`;
-values outside the shared range throw instead of wrapping.
+fits UInt32. INTERVAL columns read as `Durations.Duration`; a value with more than
+2^31 - 1 months or days throws `Parquet.UnsupportedFeatureError`.

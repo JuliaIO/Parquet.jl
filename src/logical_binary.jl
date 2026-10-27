@@ -194,7 +194,7 @@ function _binarylogicaleltype(kind::Symbol, physical::Type)
     kind === :float16 && return Float16
     kind === :json && return JSONValue
     kind === :bson && return BSONValue
-    kind === :interval && return Interval
+    kind === :interval && return Durations.Duration
     kind === :unknown && return Missing
     return nothing
 end
@@ -259,9 +259,15 @@ function _readuint32le(bytes::AbstractVector{UInt8}, offset::Int)
         (UInt32(bytes[offset + 3]) << 24)
 end
 
-function _intervalfrombytes(bytes::AbstractVector{UInt8})
-    return Interval(_readuint32le(bytes, 1), _readuint32le(bytes, 5),
-        _readuint32le(bytes, 9))
+# INTERVAL holds unsigned months, days, and milliseconds; it reads as a
+# `Durations.Duration`, whose months and days are Int32.
+function _intervalfrombytes(bytes::AbstractVector{UInt8}, element::Metadata.SchemaElement)
+    months = _readuint32le(bytes, 1)
+    days = _readuint32le(bytes, 5)
+    months <= typemax(Int32) && days <= typemax(Int32) || throw(UnsupportedFeatureError(
+        "INTERVAL column $(repr(element.name)) holds $months months and $days days; " *
+        "Durations.Duration holds at most $(typemax(Int32)) of each"))
+    return Durations.Duration(months, days, Int64(_readuint32le(bytes, 9)) * 1_000_000)
 end
 
 function _appenduint32le!(bytes::Vector{UInt8}, value::UInt32)
@@ -314,7 +320,8 @@ function _binarylogicalvalue(kind::Symbol, element::Metadata.SchemaElement, valu
     elseif kind === :bson
         return _taggedlogicalvalue(BSONValue, value, element, limits)
     elseif kind === :interval
-        return _intervalfrombytes(_fixedlogicalbytes(value, element, 12, :INTERVAL))
+        return _intervalfrombytes(_fixedlogicalbytes(value, element, 12, :INTERVAL),
+            element)
     end
     return nothing
 end

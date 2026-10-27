@@ -51,8 +51,9 @@ end
         @test timekind.is_adjusted_to_utc == adjusted
         @test timestampkind.is_adjusted_to_utc == adjusted
         @test Parquet._temporallogicaleltype(time, Int64) === Time
-        expected = unit === :millis ? (adjusted ? Parquet.Timestamp{:millis} : DateTime) :
-            unit === :micros ? Parquet.Timestamp{:micros} : Parquet.Timestamp{:nanos}
+        P = unit === :millis ? Millisecond : unit === :micros ? Microsecond : Nanosecond
+        expected = adjusted ? Parquet.Durations.ZonedTimestamp{P,:UTC} :
+            Parquet.Durations.Timestamp{P}
         @test Parquet._temporallogicaleltype(timestamp, Int64) === expected
     end
 
@@ -77,9 +78,9 @@ end
         (MD.ConvertedType.TIME_MILLIS, MD.Type.INT32, Time),
         (MD.ConvertedType.TIME_MICROS, MD.Type.INT64, Time),
         (MD.ConvertedType.TIMESTAMP_MILLIS, MD.Type.INT64,
-            Parquet.Timestamp{:millis}),
+            Parquet.Durations.ZonedTimestamp{Millisecond,:UTC}),
         (MD.ConvertedType.TIMESTAMP_MICROS, MD.Type.INT64,
-            Parquet.Timestamp{:micros}),
+            Parquet.Durations.ZonedTimestamp{Microsecond,:UTC}),
         (MD.ConvertedType.INT_8, MD.Type.INT32, Int8),
         (MD.ConvertedType.INT_16, MD.Type.INT32, Int16),
         (MD.ConvertedType.INT_32, MD.Type.INT32, Int32),
@@ -237,6 +238,7 @@ end
 end
 
 @testset "TIMESTAMP conversions" begin
+    DT = Parquet.Durations
     millis = temporaltesttimestamp(:millis, false)
     values = (
         (Int64(-1), DateTime(1969, 12, 31, 23, 59, 59, 999)),
@@ -244,35 +246,42 @@ end
         (Int64(951_827_696_789), DateTime(2000, 2, 29, 12, 34, 56, 789)),
     )
     for (physical, expected) in values
-        @test Parquet._temporallogicalvalue(millis, physical) == expected
+        value = Parquet._temporallogicalvalue(millis, physical)
+        @test value isa DT.Timestamp{Millisecond}
+        @test value == expected
+        @test Parquet._temporalphysicalvalue(millis, value) == physical
         @test Parquet._temporalphysicalvalue(millis, expected) == physical
     end
-
-    epoch = Dates.value(DateTime(1970, 1, 1))
-    upper = typemax(Int64) - epoch
-    for physical in (typemin(Int64), upper)
-        logical = Parquet._temporallogicalvalue(millis, physical)
-        @test Parquet._temporalphysicalvalue(millis, logical) == physical
-    end
-    @test_throws Parquet.FormatError Parquet._temporallogicalvalue(millis, upper + 1)
     @test_throws ArgumentError Parquet._temporalphysicalvalue(
         millis, DateTime(Dates.UTM(typemin(Int64))))
     @test_throws Parquet.FormatError Parquet._temporallogicalvalue(millis, Int32(0))
     @test_throws ArgumentError Parquet._temporalphysicalvalue(millis, Int64(0))
 
+    # Every stored count is a valid timestamp of its unit, local or UTC.
     for unit in (:millis, :micros, :nanos), adjusted in (false, true),
         ticks in (typemin(Int64), Int64(-1), Int64(0), typemax(Int64))
-        unit === :millis && !adjusted && continue
         element = temporaltesttimestamp(unit, adjusted)
         value = Parquet._temporallogicalvalue(element, ticks)
-        expectedtype = unit === :millis ? Parquet.Timestamp{:millis} :
-            unit === :micros ? Parquet.Timestamp{:micros} : Parquet.Timestamp{:nanos}
-        @test value isa expectedtype
-        @test value.ticks == ticks
-        @test value.is_adjusted_to_utc == adjusted
-        @test Parquet._timestampunit(value) === unit
+        P = unit === :millis ? Millisecond : unit === :micros ? Microsecond : Nanosecond
+        @test value isa (adjusted ? DT.ZonedTimestamp{P,:UTC} : DT.Timestamp{P})
+        @test Dates.value(value) == ticks
         @test Parquet._temporalphysicalvalue(element, value) == ticks
     end
+
+    # Writing converts another resolution exactly; lossy or mismatched values throw.
+    micros = temporaltesttimestamp(:micros, false)
+    microsutc = temporaltesttimestamp(:micros, true)
+    second = DT.Timestamp{Millisecond}(Dates.UTInstant(Millisecond(1000)))
+    @test Parquet._temporalphysicalvalue(micros, second) == 1_000_000
+    @test_throws ArgumentError Parquet._temporalphysicalvalue(micros,
+        DT.Timestamp{Nanosecond}(Dates.UTInstant(Nanosecond(1))))
+    zoned = DT.ZonedTimestamp{Microsecond,:UTC}(DT.Timestamp{Microsecond}(
+        Dates.UTInstant(Microsecond(5))), Dates.UTC)
+    @test Parquet._temporalphysicalvalue(microsutc, zoned) == 5
+    @test_throws ArgumentError Parquet._temporalphysicalvalue(micros, zoned)
+    @test_throws ArgumentError Parquet._temporalphysicalvalue(microsutc, zoned.utc)
+    @test_throws ArgumentError Parquet._temporalphysicalvalue(micros,
+        DT.Timestamp{Millisecond}(Dates.UTInstant(Millisecond(typemax(Int64)))))
 
     @test isbitstype(Parquet.Timestamp{:millis})
     @test isbitstype(Parquet.Timestamp{:micros})
@@ -299,7 +308,7 @@ end
     optionalphysical = Union{Missing,Int64}[missing, typemin(Int64), typemax(Int64)]
     nanos = temporaltesttimestamp(:nanos, true)
     optional = Parquet._temporallogicalvalues(nanos, optionalphysical)
-    @test optional isa Vector{Union{Missing,Parquet.Timestamp{:nanos}}}
+    @test optional isa Vector{Union{Missing,DT.ZonedTimestamp{Nanosecond,:UTC}}}
     @test isequal(Parquet._temporalphysicalvalues(nanos, optional), optionalphysical)
 end
 

@@ -59,6 +59,12 @@ function logicalcolumntimestamptype(unit::Symbol, adjusted::Bool)
     return Parquet.Timestamp{:nanos}
 end
 
+# The element type a TIMESTAMP column of `unit` reads as.
+function logicalcolumnreadtype(unit::Symbol, adjusted::Bool)
+    P = unit === :millis ? Millisecond : unit === :micros ? Microsecond : Nanosecond
+    return adjusted ? Parquet.Durations.ZonedTimestamp{P,:UTC} : Parquet.Durations.Timestamp{P}
+end
+
 @testset "LogicalColumn vector contract" begin
     values = ["alpha", "beta"]
     column = Parquet.LogicalColumn(values, :enum)
@@ -143,7 +149,7 @@ end
             adjusted=adjusted)
         bytes = Parquet._encodefile((value=column,); pageversion=pageversion,
             encoding=:plain)
-        @test logicalcolumnvalues(bytes) == expected
+        @test logicalcolumnvalues(bytes) == map(wlreadback, expected)
         element = logicalcolumnmetadata(bytes).schema[2]
         @test element.type_ == LCMD.Type.INT64
         @test element.repetition_type == LCMD.FieldRepetitionType.REQUIRED
@@ -163,7 +169,7 @@ end
             pageversion=pageversion, encoding=:plain)
         emptyvalues = logicalcolumnvalues(emptybytes)
         @test isempty(emptyvalues)
-        @test eltype(emptyvalues) === T
+        @test eltype(emptyvalues) === logicalcolumnreadtype(unit, adjusted)
         emptyelement = logicalcolumnmetadata(emptybytes).schema[2]
         @test emptyelement.repetition_type == LCMD.FieldRepetitionType.REQUIRED
         @test emptyelement.logicalType.TIMESTAMP.isAdjustedToUTC == adjusted
@@ -174,8 +180,9 @@ end
         nullbytes = Parquet._encodefile((value=nullcolumn,);
             pageversion=pageversion, encoding=:plain)
         nullvalues = logicalcolumnvalues(nullbytes)
-        @test isequal(nullvalues, Union{Missing,T}[missing, missing])
-        @test eltype(nullvalues) === Union{Missing,T}
+        R = logicalcolumnreadtype(unit, adjusted)
+        @test isequal(nullvalues, Union{Missing,R}[missing, missing])
+        @test eltype(nullvalues) === Union{Missing,R}
         nullelement = logicalcolumnmetadata(nullbytes).schema[2]
         @test nullelement.repetition_type == LCMD.FieldRepetitionType.OPTIONAL
         @test nullelement.logicalType.TIMESTAMP.isAdjustedToUTC == adjusted
@@ -270,7 +277,8 @@ end
         bytes = Parquet._encodefile(input; pageversion=pageversion,
             encoding=policy)
         for name in keys(input)
-            @test logicalcolumnvalues(bytes, name) == decimalexpected(collect(getproperty(input, name)))
+            @test logicalcolumnvalues(bytes, name) ==
+                map(wlreadback, decimalexpected(collect(getproperty(input, name))))
         end
         chunks = logicalcolumnmetadata(bytes).row_groups[1].columns
         @test LCMD.Encoding.RLE_DICTIONARY in chunks[1].meta_data.encodings

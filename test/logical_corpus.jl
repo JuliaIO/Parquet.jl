@@ -1,6 +1,6 @@
 using Test
 using UUIDs
-import Tables
+import Dates, Tables
 
 @testset "Apache logical-type corpus" begin
     corpus = get(ENV, "PARQUET_TESTING_DIR", joinpath(@__DIR__, "parquet-testing"))
@@ -79,11 +79,25 @@ end
             (epoch - 1, 86_400_000_000_000 - 1, -1),
             (epoch + 19_000, 1_000, 19_000 * 86_400_000_000_000 + 1_000))
         value = Parquet._logicalvalue(element, int96(day, nanoseconds))
-        @test value isa Parquet.Timestamp{:nanos}
-        @test value.ticks == ticks && !value.is_adjusted_to_utc
+        @test value isa Parquet.Durations.Timestamp{Dates.Nanosecond}
+        @test Dates.value(value) == ticks
     end
-    @test_throws Parquet.FormatError Parquet._logicalvalue(element,
-        int96(5_373_484, 0))
+    # Spark writes 9999-12-31 placeholders, outside the nanosecond range; the error
+    # names the keyword that reads them.
+    error = try
+        Parquet._logicalvalue(element, int96(5_373_484, 0))
+    catch err
+        err
+    end
+    @test error isa Parquet.UnsupportedFeatureError
+    @test occursin("9999-12-31", error.message) && occursin("int96=Dates.Microsecond", error.message)
+    @test Parquet._fromint96(int96(5_373_484, 1_000), element, Dates.Microsecond) ==
+        Parquet.Durations.Timestamp{Dates.Microsecond}(Dates.UTInstant(
+            Dates.Microsecond((5_373_484 - epoch) * 86_400_000_000 + 1)))
+    @test_throws Parquet.UnsupportedFeatureError Parquet._fromint96(int96(epoch, 1),
+        element, Dates.Microsecond)
+    @test_throws Parquet.UnsupportedFeatureError Parquet._fromint96(int96(epoch, 1_000),
+        element, Dates.Millisecond)
     @test_throws Parquet.FormatError Parquet._logicalvalue(element, UInt8[1, 2, 3])
 
     corpus = get(ENV, "PARQUET_TESTING_DIR", joinpath(@__DIR__, "parquet-testing"))
@@ -102,9 +116,9 @@ end
             table = Parquet.Table(joinpath(data, name))
             try
                 values = getproperty(Parquet.Tables.columns(table), column)
-                @test all(value -> value isa Parquet.Timestamp{:nanos} &&
-                    !value.is_adjusted_to_utc, values)
-                @test [value.ticks for value in values] == expected
+                @test all(value -> value isa Parquet.Durations.Timestamp{Dates.Nanosecond},
+                    values)
+                @test [Dates.value(value) for value in values] == expected
                 @test_throws Parquet.UnsupportedFeatureError Parquet.write(
                     IOBuffer(), table)
                 io = IOBuffer()
@@ -119,9 +133,17 @@ end
                 close(table)
             end
         end
-        # Spark wrote years 9999 and 290000, beyond the nanosecond range.
-        @test_throws Parquet.FormatError Parquet.Table(
-            joinpath(data, "int96_from_spark.parquet"))
+        # Spark wrote years 9999 and 290000, beyond the nanosecond range; at Spark's
+        # microsecond precision they read as Spark reads them.
+        spark = joinpath(data, "int96_from_spark.parquet")
+        @test_throws Parquet.UnsupportedFeatureError Parquet.Table(spark)
+        table = Parquet.Table(spark; int96=Dates.Microsecond)
+        @test eltype(table.a) == Union{Missing,Parquet.Durations.Timestamp{Dates.Microsecond}}
+        @test isequal([ismissing(value) ? missing : Dates.value(value) for value in table.a],
+            [1704141296123456, 1704070800000000, 253402225200000000, 1735599600000000,
+                missing, 9089380393200000000])
+        close(table)
+        @test_throws ArgumentError Parquet.Table(spark; int96=Dates.Second)
     else
         @info "parquet-testing corpus not found; skipping INT96 fixtures" corpus
     end

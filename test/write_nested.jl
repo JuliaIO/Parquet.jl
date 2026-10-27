@@ -852,7 +852,7 @@ end
         value = Parquet.Tables.columns(table).logicals[1][1]
         @test value["enum"] == "alpha"
         @test value["time"] == Time(0)
-        @test value["timestamp"] == Parquet.Timestamp(7, :nanos, false)
+        @test value["timestamp"] == wlreadback(Parquet.Timestamp(7, :nanos, false))
         @test value["decimal"] == decimalexpected(Parquet.Decimal(12345, 4))
     finally
         close(table)
@@ -888,7 +888,7 @@ end
             @test length(records) == length(entries)
             @test records[1]["i32"] == entries[1].i32
             @test records[64]["text"] == entries[64].text
-            @test records[end]["fixed"] == collect(entries[end].fixed)
+            @test records[end]["fixed"] == entries[end].fixed
         finally
             close(table)
         end
@@ -1110,7 +1110,7 @@ end
             @test isequal(
                 [plain(pair.first) => plain(pair.second)
                     for pair in only(Parquet.Tables.columns(table).m)],
-                collect(only(source)))
+                [pair.first => wlreadback(pair.second) for pair in only(source)])
         finally
             close(table)
         end
