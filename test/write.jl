@@ -1126,3 +1126,81 @@ end
     @test_throws Parquet.LimitError Parquet._encodefile(fixed;
         limits=Parquet.Limits(max_page_bytes=2))
 end
+
+@testset "write returns its sink and has a curried form" begin
+    table = (a=Int32[1, 2], b=["x", "y"])
+    io = IOBuffer()
+    @test Parquet.write(io, table) === io
+    bytes = take!(io)
+    @test (table |> Parquet.write(io)) === io
+    @test take!(io) == bytes
+    path = tempname() * ".parquet"
+    try
+        @test Parquet.write(path, table) == path
+        @test read(path) == bytes
+        @test (table |> Parquet.write(path)) == path
+        @test read(path) == bytes
+    finally
+        rm(path; force=true)
+    end
+    written = Parquet.Table(bytes)
+    try
+        @test written.metadata.created_by == "Parquet.jl version $(pkgversion(Parquet))"
+    finally
+        close(written)
+    end
+end
+
+@testset "write takes every partition's rows" begin
+    parts = Tables.partitioner([(a=[1, 2], b=["x", "y"]), (a=[3, 4, 5], b=["z", "w", "v"])])
+    bytes = take!(Parquet.write(IOBuffer(), parts))
+    table = Parquet.Table(bytes)
+    try
+        @test table.columns.a == [1, 2, 3, 4, 5]
+        @test table.columns.b == ["x", "y", "z", "w", "v"]
+        @test [group.num_rows for group in table.metadata.row_groups] == [2, 3]
+    finally
+        close(table)
+    end
+    # Each partition is split by rowgroupsize on its own.
+    bytes = take!(Parquet.write(IOBuffer(), parts; rowgroupsize=2))
+    table = Parquet.Table(bytes)
+    try
+        @test table.columns.a == [1, 2, 3, 4, 5]
+        @test [group.num_rows for group in table.metadata.row_groups] == [2, 2, 1]
+    finally
+        close(table)
+    end
+    mismatched = Tables.partitioner([(a=[1, 2],), (a=[1.5, 2.5],)])
+    err = try
+        Parquet.write(IOBuffer(), mismatched)
+        nothing
+    catch error
+        error
+    end
+    @test err isa ArgumentError
+    @test occursin("column \"a\" of partition 2", err.msg)
+    renamed = Tables.partitioner([(a=[1],), (c=[2],)])
+    @test_throws "partition 2 has column \"c\"" Parquet.write(IOBuffer(), renamed)
+    @test_throws "at least one partition" Parquet.write(IOBuffer(),
+        Tables.partitioner(NamedTuple[]))
+end
+
+@testset "unsupported column types name the column" begin
+    err = try
+        Parquet.write(IOBuffer(), (id=Int32[1], big=Int128[1]))
+        nothing
+    catch error
+        error
+    end
+    @test err isa ArgumentError
+    @test occursin("\"big\"", err.msg)
+    @test !occursin("nested", err.msg)
+    err = try
+        Parquet.write(IOBuffer(), (lists=[Any[1], Any[2]],))
+        nothing
+    catch error
+        error
+    end
+    @test occursin("\"lists.element\"", err.msg)
+end

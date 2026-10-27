@@ -54,11 +54,12 @@ function _nestedwritedepthadd(depth::Int, increment::Int, limits::Limits)
     return requested
 end
 
-function _nestedwritesplittype(declared::Type; key::Bool=false)
+function _nestedwritesplittype(declared::Type; key::Bool=false, path::String="")
     declared === Any && throw(ArgumentError(
-        "nested Parquet writer types cannot be Any"))
+        "Parquet field $(repr(path)) has element type Any; write a column with one " *
+        "concrete element type"))
     declared === Union{} && throw(ArgumentError(
-        "nested Parquet writer types cannot be Union{}"))
+        "Parquet field $(repr(path)) has element type Union{}"))
     members = Base.uniontypes(declared)
     if length(members) == 1
         value_type = only(members)
@@ -71,7 +72,8 @@ function _nestedwritesplittype(declared::Type; key::Bool=false)
         return value_type, false
     end
     length(members) == 2 && Missing in members || throw(ArgumentError(
-        "nested Parquet writer types must be T or Union{Missing,T}, got $declared"))
+        "Parquet field $(repr(path)) has element type $declared; Parquet fields " *
+        "need one type T or Union{Missing,T}"))
     key && throw(ArgumentError("Parquet MAP key types cannot include Missing"))
     value_type = members[1] === Missing ? members[2] : members[1]
     value_type === Nothing && throw(ArgumentError(
@@ -120,28 +122,26 @@ function _nestedwritecheckconcrete(value_type::Type, label::AbstractString)
 end
 
 function _nestedwritelistshape(name::String, value_type::Type, optional::Bool,
-        elementtype::Type, source, limits::Limits, depth::Int)
-    elementtype === Any && throw(ArgumentError(
-        "Parquet list element types cannot be Any"))
+        elementtype::Type, source, limits::Limits, depth::Int, path::String)
     element = _nestedwriteshape("element", elementtype, source, limits;
-        depth=_nestedwritedepthadd(depth, 2, limits))
+        depth=_nestedwritedepthadd(depth, 2, limits), path="$path.element")
     return _NestedWriteListShape(name, value_type, optional, element)
 end
 
 function _nestedwritemapshape(name::String, value_type::Type, optional::Bool,
         keytype::Type, valuetype::Type, keysource, valuesource, limits::Limits,
-        depth::Int)
+        depth::Int, path::String)
     childdepth = _nestedwritedepthadd(depth, 2, limits)
     key = _nestedwriteshape("key", keytype, keysource, limits; key=true,
-        depth=childdepth)
+        depth=childdepth, path="$path.key")
     value = _nestedwriteshape("value", valuetype, valuesource, limits;
-        depth=childdepth)
+        depth=childdepth, path="$path.value")
     return _NestedWriteMapShape(name, value_type, optional, key, value)
 end
 
 function _nestedwritestructshape(name::String, value_type::Type,
         optional::Bool, names::Vector{String}, types, sources, limits::Limits,
-        depth::Int)
+        depth::Int, path::String)
     isempty(names) && throw(ArgumentError(
         "zero-field structs cannot be written to Parquet"))
     _checklimit(:container_elements, length(names),
@@ -152,24 +152,24 @@ function _nestedwritestructshape(name::String, value_type::Type,
     for index in eachindex(names)
         source = sources === nothing ? nothing : sources[index]
         push!(children, _nestedwriteshape(names[index], types[index], source,
-            limits; depth=childdepth))
+            limits; depth=childdepth, path="$path.$(names[index])"))
     end
     return _NestedWriteStructShape(name, value_type, optional, names, children)
 end
 
 """
-    _nestedwriteshape(name, declared, source, limits; key=false, depth=2)
+    _nestedwriteshape(name, declared, source, limits; key=false, depth=2, path=name)
 
 Return the writer shape for a field of declared type `declared`. `source` is the vector
 that holds the field's values when it is a package vector (`StructVector`, `ListVector`,
 `MapVector`, `LogicalColumn`, `FixedByteArrayVector`), whose layout then decides the shape;
-otherwise `nothing`.
+otherwise `nothing`. `path` names the field in error messages.
 """
 function _nestedwriteshape(name::String, declared::Type, source,
-        limits::Limits; key::Bool=false, depth::Int=2)
+        limits::Limits; key::Bool=false, depth::Int=2, path::String=name)
     Base.@nospecialize declared source
     _checklimit(:metadata_depth, depth, limits.max_metadata_depth)
-    value_type, optional = _nestedwritesplittype(declared; key=key)
+    value_type, optional = _nestedwritesplittype(declared; key=key, path=path)
     if source isa LogicalColumn
         key && optional && throw(ArgumentError(
             "Parquet MAP key types cannot include Missing"))
@@ -185,23 +185,23 @@ function _nestedwriteshape(name::String, declared::Type, source,
             "StructVector validity does not match its declared element type"))
         types = Type[eltype(child) for child in source.children]
         return _nestedwritestructshape(name, StructValue, optional,
-            copy(source.names), types, copy(source.children), limits, depth)
+            copy(source.names), types, copy(source.children), limits, depth, path)
     elseif source isa ListVector
         (source.validity !== nothing) == optional || throw(ArgumentError(
             "ListVector validity does not match its declared element type"))
         return _nestedwritelistshape(name, value_type, optional,
-            eltype(source.values), source.values, limits, depth)
+            eltype(source.values), source.values, limits, depth, path)
     elseif source isa MapVector
         (source.validity !== nothing) == optional || throw(ArgumentError(
             "MapVector validity does not match its declared element type"))
         values = source.values
         return _nestedwritemapshape(name, value_type, optional,
             eltype(source.keys), values === nothing ? Missing : eltype(values),
-            source.keys, values, limits, depth)
+            source.keys, values, limits, depth, path)
     elseif value_type <: ListValue
         _nestedwritecheckconcrete(value_type, "Parquet list view type")
         return _nestedwritelistshape(name, value_type, optional,
-            eltype(value_type), nothing, limits, depth)
+            eltype(value_type), nothing, limits, depth, path)
     elseif _nestedwriteisscalar(value_type)
         value_type === Missing || _nestedwritecheckconcrete(value_type,
             "Parquet scalar type")
@@ -213,7 +213,7 @@ function _nestedwriteshape(name::String, declared::Type, source,
         _nestedwritecheckconcrete(value_type, "Parquet struct type")
         names = String[String(field) for field in fieldnames(value_type)]
         return _nestedwritestructshape(name, value_type, optional, names,
-            fieldtypes(value_type), nothing, limits, depth)
+            fieldtypes(value_type), nothing, limits, depth, path)
     elseif value_type <: MapValue
         _nestedwritecheckconcrete(value_type, "Parquet map view type")
         pairtype = eltype(value_type)
@@ -221,18 +221,18 @@ function _nestedwriteshape(name::String, declared::Type, source,
             "MapValue has no concrete key and value types"))
         return _nestedwritemapshape(name, value_type, optional,
             pairtype.parameters[1], pairtype.parameters[2], nothing, nothing,
-            limits, depth)
+            limits, depth, path)
     elseif value_type <: AbstractDict
         _nestedwritecheckconcrete(value_type, "Parquet map type")
         return _nestedwritemapshape(name, value_type, optional,
             Base.keytype(value_type), Base.valtype(value_type), nothing,
-            nothing, limits, depth)
+            nothing, limits, depth, path)
     elseif value_type <: AbstractVector
         _nestedwritecheckconcrete(value_type, "Parquet list type")
         return _nestedwritelistshape(name, value_type, optional,
-            eltype(value_type), nothing, limits, depth)
+            eltype(value_type), nothing, limits, depth, path)
     end
-    throw(ArgumentError("unsupported nested Parquet writer type $value_type"))
+    throw(ArgumentError("Parquet cannot write field $(repr(path)) of type $value_type"))
 end
 
 # Value access shared by the aggregate scan and the shredder. Package views are read

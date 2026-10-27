@@ -29,7 +29,11 @@ table = Parquet.Table("input.parquet";
 
 ## Write a table
 
-`Parquet.write` accepts a Tables.jl source and a path or `IO` sink.
+`Parquet.write` accepts a Tables.jl source and a path or `IO` sink, and returns the
+sink. `Parquet.write(sink)` returns a function, so a table can be piped into it:
+`CSV.File("in.csv") |> Parquet.write("out.parquet")`. Each partition of a
+`Tables.partitions` source becomes one or more row groups; every partition must have
+the first partition's column types and nullability.
 
 ```julia
 Parquet.write("output.parquet", table;

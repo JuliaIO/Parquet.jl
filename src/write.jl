@@ -1428,6 +1428,40 @@ function _rewritekeyvaluemetadata(entries::Vector{Metadata.KeyValue}, limits::Li
     return isempty(kept) ? nothing : kept
 end
 
+function _createdby()
+    return "Parquet.jl version $(pkgversion(@__MODULE__))"
+end
+
+# The flattened schema elements of each top-level field.
+function _writetopfields(elements::Vector{Metadata.SchemaElement})
+    fields = Vector{Metadata.SchemaElement}[]
+    index = 2
+    while index <= length(elements)
+        start = index
+        pending = 1
+        while pending > 0
+            pending += something(elements[index].num_children, Int32(0)) - 1
+            index += 1
+        end
+        push!(fields, elements[start:(index - 1)])
+    end
+    return fields
+end
+
+function _writepartitionmismatch(expected::Vector{Metadata.SchemaElement},
+        actual::Vector{Metadata.SchemaElement}, index::Int)
+    for (left, right) in zip(_writetopfields(expected), _writetopfields(actual))
+        name = first(left).name
+        first(right).name == name || throw(ArgumentError(
+            "partition $index has column $(repr(first(right).name)) where the " *
+            "first partition has $(repr(name))"))
+        left == right || throw(ArgumentError("column $(repr(name)) of partition " *
+            "$index does not have the type or nullability of the first partition"))
+    end
+    throw(ArgumentError("partition $index has $(length(_writetopfields(actual))) " *
+        "columns; the first partition has $(length(_writetopfields(expected)))"))
+end
+
 function _encodefile(table; checksum::Bool=true, dictionary::Bool=false,
     codec=:uncompressed, compressionlevel::Union{Nothing,Integer}=nothing,
     pageversion=:v1, encoding=nothing, rowgroupsize=1_048_576,
@@ -1439,15 +1473,38 @@ function _encodefile(table; checksum::Bool=true, dictionary::Bool=false,
     version = _writepageversion(pageversion)
     target = _writepagesize(pagesize)
     _writerowgroupsize(rowgroupsize, 0)
-    fields, rows = _writefieldsencoded(table, limits, encoding, dictionary)
+    # Every partition of the source becomes one or more row groups.
+    partitions = Tables.partitions(table)
+    state = iterate(partitions)
+    state === nothing && throw(ArgumentError(
+        "Parquet.write needs a table with at least one partition"))
+    part, partstate = state
+    fields, rows = _writefieldsencoded(part, limits, encoding, dictionary)
     initialplan = _writeplan(fields, rows, limits)
     leaves = isempty(initialplan.rowgroups) ?
         _writeplanleaves(fields, initialplan.schema, rows, limits) :
         only(initialplan.rowgroups).leaves
     choices = _writeencodingchoices(leaves, encoding, dictionary)
-    plan = _splitwriteplan(initialplan, rowgroupsize, limits)
+    schemaplan = initialplan
+    totalrows = rows
+    groups = WriteRowGroupPlan[]
+    append!(groups, _splitwriteplan(initialplan, rowgroupsize, limits).rowgroups)
     leaves = nothing
     initialplan = nothing
+    index = 1
+    next = iterate(partitions, partstate)
+    while next !== nothing
+        part, partstate = next
+        index += 1
+        fields, rows = _writefieldsencoded(part, limits, encoding, dictionary)
+        partplan = _writeplan(fields, rows, limits)
+        partplan.elements == schemaplan.elements ||
+            _writepartitionmismatch(schemaplan.elements, partplan.elements, index)
+        totalrows = Base.checked_add(totalrows, rows)
+        append!(groups, _splitwriteplan(partplan, rowgroupsize, limits).rowgroups)
+        next = iterate(partitions, partstate)
+    end
+    plan = WritePlan(schemaplan.elements, schemaplan.schema, totalrows, groups)
     columnorders = statistics ? _writecolumnorders(plan.schema) : nothing
     output = copy(PARQUET_MAGIC)
     rowgroups = Metadata.RowGroup[]
@@ -1512,7 +1569,7 @@ function _encodefile(table; checksum::Bool=true, dictionary::Bool=false,
         num_rows=Int64(plan.rows),
         row_groups=rowgroups,
         key_value_metadata=_writekeyvaluemetadata(table, limits),
-        created_by="Parquet.jl version 1.0.0-DEV",
+        created_by=_createdby(),
         column_orders=columnorders,
     )
     footer = _writeencodefooter(metadata, limits)
@@ -1523,44 +1580,37 @@ function _encodefile(table; checksum::Bool=true, dictionary::Bool=false,
 end
 
 """
-    Parquet.write(sink, table; encoding=nothing, dictionary=false,
-        rowgroupsize=1_048_576, pagesize=1024 * 1024, pageindex=true,
-        statistics=true,
-        kwargs...)
+    Parquet.write(sink, table; kwargs...) -> sink
+    Parquet.write(sink; kwargs...) -> table -> Parquet.write(sink, table; kwargs...)
 
-Write a Tables.jl source to a path or `IO`. An encoding Symbol or string applies to
-every column. A `Pair`, `NamedTuple`, or dictionary overrides exact column names.
-Unlisted columns use PLAIN, or adaptive dictionary encoding when `dictionary=true`.
-Use `:dictionary` to request adaptive dictionary encoding for one selected column.
-Footer statistics and a complete column-order declaration are emitted by default.
-Set `statistics=false` to omit them. `limits.max_statistics_value_bytes` limits
-each emitted bound.
+Write a Tables.jl source to `sink`, a path or `IO`, and return `sink`. Every partition
+of a `Tables.partitions` source becomes one or more row groups; all partitions must
+have the first one's column types. The one-argument form returns a function, so a
+table can be piped: `CSV.File(path) |> Parquet.write("out.parquet")`.
+
+An encoding Symbol or string applies to every column. A `Pair`, `NamedTuple`, or
+dictionary overrides exact column names. Unlisted columns use PLAIN, or adaptive
+dictionary encoding when `dictionary=true`. Use `:dictionary` to request adaptive
+dictionary encoding for one selected column. Footer statistics and a complete
+column-order declaration are emitted by default. Set `statistics=false` to omit them.
+`limits.max_statistics_value_bytes` limits each emitted bound.
+
+Writing a `Parquet.Table` keeps its file key-value metadata, except the entries that
+describe the source's schema (`ARROW:schema`, `pandas`, and Spark's row metadata).
 """
-function write(io::IO, table; checksum::Bool=true, dictionary::Bool=false,
-    encoding=nothing, codec=:uncompressed,
-    compressionlevel::Union{Nothing,Integer}=nothing, pageversion=:v1,
-    rowgroupsize=1_048_576, pagesize=1024 * 1024, pageindex::Bool=true,
-    statistics::Bool=true, limits::Limits=Limits())
-    _statisticlimit(limits)
-    bytes = _encodefile(table; checksum=checksum, dictionary=dictionary, codec=codec,
-        compressionlevel=compressionlevel, pageversion=pageversion,
-        encoding=encoding, rowgroupsize=rowgroupsize, pagesize=pagesize,
-        pageindex=pageindex, statistics=statistics, limits=limits)
-    Base.write(io, bytes)
-    return
+function write(io::IO, table; kwargs...)
+    Base.write(io, _encodefile(table; kwargs...))
+    return io
 end
 
-function write(path::AbstractString, table; checksum::Bool=true, dictionary::Bool=false,
-    encoding=nothing, codec=:uncompressed, compressionlevel::Union{Nothing,Integer}=nothing,
-    pageversion=:v1, rowgroupsize=1_048_576, pagesize=1024 * 1024,
-    pageindex::Bool=true, statistics::Bool=true, limits::Limits=Limits())
-    _statisticlimit(limits)
-    bytes = _encodefile(table; checksum=checksum, dictionary=dictionary, codec=codec,
-        compressionlevel=compressionlevel, pageversion=pageversion,
-        encoding=encoding, rowgroupsize=rowgroupsize, pagesize=pagesize,
-        pageindex=pageindex, statistics=statistics, limits=limits)
+function write(path::AbstractString, table; kwargs...)
+    bytes = _encodefile(table; kwargs...)
     open(path, "w") do io
         Base.write(io, bytes)
     end
-    return
+    return path
+end
+
+function write(sink::Union{IO,AbstractString}; kwargs...)
+    return table -> write(sink, table; kwargs...)
 end
