@@ -218,62 +218,90 @@ function _nestedwriteshape(name::String, declared::Type, source,
         return _nestedwritemapshape(name, value_type, optional,
             Base.keytype(value_type), Base.valtype(value_type), nothing,
             nothing, limits, depth, path, nullable)
+    elseif value_type <: AbstractVector{<:Pair}
+        _nestedwritecheckconcrete(value_type, "Parquet map type")
+        entry = eltype(value_type)
+        _nestedwritecheckconcrete(entry, "Parquet map entry type")
+        return _nestedwritemapshape(name, value_type, optional, fieldtype(entry, 1),
+            fieldtype(entry, 2), nothing, nothing, limits, depth, path, nullable)
     elseif value_type <: AbstractVector
         _nestedwritecheckconcrete(value_type, "Parquet list type")
         return _nestedwritelistshape(name, value_type, optional,
             eltype(value_type), nothing, limits, depth, path, nullable)
+    elseif value_type <: Tuple
+        return _nestedwritelistshape(name, value_type, optional,
+            _tupleelementtype(value_type, path), nothing, limits, depth, path, nullable)
     end
     throw(_writeunsupported(value_type, path))
 end
 
-# Value access shared by the aggregate scan and the shredder. Package views are read
-# through their backing vectors directly.
-function _nestedwritefield(value::NamedTuple, index::Int)
-    return getfield(value, index)
+# Tuples write as lists, so their fields need one element type: types that are equal up
+# to missing, also inside nested tuples (a tuple value belongs to the wider tuple type).
+function _tupleelementtype(T::Type, path::String)
+    fields = fieldtypes(T)
+    !isempty(fields) && !Base.isvarargtype(T.parameters[end]) || throw(ArgumentError(
+        "Parquet field $(repr(path)) has tuple type $T; tuples write as lists and need " *
+        "a fixed, nonzero number of elements"))
+    element = Union{}
+    for F in fields
+        element = _tupleunify(element, F)
+        element === nothing && throw(ArgumentError(
+            "Parquet field $(repr(path)) has tuple type $T; tuples write as lists and " *
+            "need one element type, or use a NamedTuple for a struct"))
+    end
+    return element
 end
 
-function _nestedwritefield(value::StructValue, index::Int)
-    return value.children[index][value.index]
+function _tupleunify(A::Type, B::Type)
+    A === Union{} && return B
+    A == B && return A
+    if Missing <: A || Missing <: B
+        S = _tupleunify(Base.nonmissingtype(A), Base.nonmissingtype(B))
+        return S === nothing ? nothing : Union{Missing,S}
+    end
+    A <: Tuple && B <: Tuple && A isa DataType && B isa DataType &&
+        !isempty(A.parameters) && !Base.isvarargtype(A.parameters[end]) &&
+        !isempty(B.parameters) && !Base.isvarargtype(B.parameters[end]) &&
+        fieldcount(A) == fieldcount(B) || return nothing
+    fields = map(_tupleunify, fieldtypes(A), fieldtypes(B))
+    any(isnothing, fields) && return nothing
+    return Tuple{fields...}
 end
 
-function _nestedwritefield(value, ::Int)
-    throw(ArgumentError(
-        "Parquet struct fields require NamedTuple or StructValue rows, got $(typeof(value))"))
+# Value access shared by the decimal scan and the shredder.
+_structfield(value::NamedTuple, ::Val{K}) where {K} = getfield(value, K)
+_structfield(value::StructValue, ::Val{K}) where {K} = value.children[K][value.index]
+_structfield(value, ::Val) = throw(ArgumentError(
+    "Parquet struct fields require NamedTuple or StructValue rows, got $(typeof(value))"))
+
+# A row of a read struct column (NamedTuple rows), read field by field from the column's
+# children instead of being built as a row.
+struct _StructRef{V<:StructVector}
+    column::V
+    index::Int
 end
 
-function _nestedwritefieldcount(value::NamedTuple)
-    return nfields(value)
-end
+# Element `index` of `items` for the shredder.
+@inline _element(items, index) = @inbounds items[index]
+@inline _element(items::StructVector{<:Union{Missing,NamedTuple}}, index::Int) =
+    _StructRef(items, index)
 
-function _nestedwritefieldcount(value::StructValue)
-    return length(value.children)
-end
+@inline _structfield(ref::_StructRef{<:StructVector{T}}, ::Val{K}) where {T,K} =
+    (@inbounds ref.column.children[K])[ref.index]::fieldtype(Base.nonmissingtype(T), K)
 
-function _nestedwritefieldcount(value)
-    return -1
-end
+_structfieldcount(value::NamedTuple) = nfields(value)
+_structfieldcount(ref::_StructRef) = length(ref.column.children)
+_structfieldcount(value::StructValue) = length(value.children)
+_structfieldcount(value) = -1
 
-# A list value as (backing vector, indices); package views skip their per-access checks.
-function _nestedwriteitems(value::ListValue)
-    return value.values, value.first:value.last
-end
+# A list value as (items, indices). Tuples write as lists too.
+_listentries(value::Union{AbstractVector,Tuple}) = (value, eachindex(value))
+_listentries(value) = throw(ArgumentError(
+    "Parquet LIST values must be vectors or tuples, got $(typeof(value))"))
 
-function _nestedwriteitems(value::AbstractVector)
-    return value, eachindex(value)
-end
-
-function _nestedwriteitems(value)
-    throw(ArgumentError("Parquet LIST values must be vectors, got $(typeof(value))"))
-end
-
-function _nestedwritepairs(value::AbstractDict)
-    return value
-end
-
-function _nestedwritepairs(value)
-    throw(ArgumentError(
-        "Parquet MAP values must be dictionaries or MapValue views, got $(typeof(value))"))
-end
+_mappairs(value::Union{AbstractDict,AbstractVector{<:Pair}}) = value
+_mappairs(value) = throw(ArgumentError("Parquet MAP values must be dictionaries or " *
+    "vectors of pairs, got $(typeof(value))"))
 
 function _nestedwriteneedsscan(shape::_NestedWriteLeafShape)
     shape.explicit === nothing || return false
@@ -317,14 +345,14 @@ function _nestedwritescan!(shape::_NestedWriteStructShape, value)
     ismissing(value) && return
     for (index, child) in enumerate(shape.children)
         _nestedwriteneedsscan(child) &&
-            _nestedwritescan!(child, _nestedwritefield(value, index))
+            _nestedwritescan!(child, _structfield(value, Val(index)))
     end
     return
 end
 
 function _nestedwritescan!(shape::_NestedWriteListShape, value)
     ismissing(value) && return
-    items, indices = _nestedwriteitems(value)
+    items, indices = _listentries(value)
     for index in indices
         _nestedwritescan!(shape.element, items[index])
     end
@@ -335,17 +363,9 @@ function _nestedwritescan!(shape::_NestedWriteMapShape, value)
     ismissing(value) && return
     scankey = _nestedwriteneedsscan(shape.key)
     scanvalue = _nestedwriteneedsscan(shape.value)
-    if value isa MapValue
-        for index in value.first:value.last
-            scankey && _nestedwritescan!(shape.key, value.keys[index])
-            scanvalue && value.values !== nothing &&
-                _nestedwritescan!(shape.value, value.values[index])
-        end
-    else
-        for pair in _nestedwritepairs(value)
-            scankey && _nestedwritescan!(shape.key, pair.first)
-            scanvalue && _nestedwritescan!(shape.value, pair.second)
-        end
+    for pair in _mappairs(value)
+        scankey && _nestedwritescan!(shape.key, pair.first)
+        scanvalue && _nestedwritescan!(shape.value, pair.second)
     end
     return
 end
@@ -566,19 +586,6 @@ function _nestedwritephysical(kind, element::Metadata.SchemaElement, value,
     return UInt8[byte for byte in bytes]
 end
 
-# One leaf's level streams and dense values, in schema leaf order. `K` is the leaf's
-# logical kind and `V` the type its present values must have. STRING and ENUM values
-# are kept as strings; other BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY values are copied.
-struct _NestedWriteLeaf{T,K,V,M}
-    repetition::Vector{UInt16}
-    definition::Vector{UInt16}
-    values::Vector{T}
-    element::Metadata.SchemaElement
-    kind::K
-    limits::Limits
-    map::M
-end
-
 # A leaf whose element is exactly what `_writemap(V)` writes converts with that map;
 # others (schema-bearing rewrites) convert by their stored annotation.
 function _nestedwriteleafmap(element::Metadata.SchemaElement, value_type::Type)
@@ -591,64 +598,9 @@ function _nestedwriteleafmap(element::Metadata.SchemaElement, value_type::Type)
     return map
 end
 
-function _nestedwriteleaf(plan::_NestedLeafPlan, value_type::Type,
-        limits::Limits)
-    element = plan.source.element
-    element.type_ == Metadata.Type.INT96 && throw(UnsupportedFeatureError(
-        "writing INT96 is not supported; write the table's columns (for example " *
-        "Tables.columntable(table)) to store $(repr(element.name)) as an INT64 " *
-        "nanosecond TIMESTAMP"))
-    kind = _logicalkind(element)
-    map = _nestedwriteleafmap(element, value_type)
-    T = map !== nothing ? _writephysicaltype(map) :
-        kind in (:string, :enum) && value_type <: AbstractString &&
-        isconcretetype(value_type) ? value_type : _physicaleltype(element.type_)
-    return _NestedWriteLeaf{T,typeof(kind),value_type,typeof(map)}(UInt16[], UInt16[],
-        T[], element, kind, limits, map)
-end
-
-function _nestedwritephysical(leaf::_NestedWriteLeaf{T,K,V,<:_WriteMap}, value) where {T,K,V}
-    physical = try
-        leaf.map.convert(value)
-    catch err
-        err isa Union{ArgumentError,InexactError,OverflowError} || rethrow()
-        throw(_writevalueerror(leaf.element.name, err))
-    end
-    physical isa AbstractString && _nestedwritevalidutf8(leaf, physical)
-    # Byte vectors are copied so later changes to the source do not reach the file.
-    physical isa Vector{UInt8} && return copy(physical)
-    return physical
-end
-
-function _nestedwritevalidutf8(leaf::_NestedWriteLeaf, value::AbstractString)
-    bytes = codeunits(value)
-    _checklimit(:string_bytes, length(bytes), leaf.limits.max_string_bytes)
-    isvalid(String, bytes) || throw(ArgumentError(
-        "STRING field $(repr(leaf.element.name)) contains invalid UTF-8"))
-    return
-end
-
-function _nestedwritephysical(leaf::_NestedWriteLeaf{T}, value) where {T}
-    if T <: AbstractString
-        bytes = codeunits(value)
-        _checklimit(:string_bytes, length(bytes), leaf.limits.max_string_bytes)
-        isvalid(String, bytes) || throw(ArgumentError(
-            "$(uppercase(String(leaf.kind))) field $(repr(leaf.element.name)) " *
-            "contains invalid UTF-8"))
-        return value
-    end
-    return _nestedwritephysical(leaf.kind, leaf.element, value, leaf.limits)
-end
-
-function _nestedwritemarker!(leaf::_NestedWriteLeaf, repetition::UInt16,
-        definition::UInt16)
-    push!(leaf.repetition, repetition)
-    push!(leaf.definition, definition)
-    return
-end
-
-# Shredding node: a compiled plan and the declared type its values must have, with the
-# plan's leaf range and definition levels copied into concrete fields for the hot path.
+# A field's schema plan bound to the type its values must have at each node, with the
+# plan's leaf range and definition levels; `_shredtree` turns it into the typed tree the
+# shredder walks.
 struct _NestedWriteNode
     plan::_NestedPlan
     value_type::Type
@@ -665,231 +617,476 @@ function _NestedWriteNode(plan::_NestedPlan, value_type::Type,
         UInt16(getfield(plan, :present_definition)))
 end
 
-function _nestedwritemissing!(leaves::Vector{Any}, node::_NestedWriteNode,
-        repetition::UInt16)
-    node.absent == node.present && _nestedwriterequirederror(node)
-    for index in node.leaves
-        _nestedwritemarker!(leaves[Int(index)], repetition, node.absent)
-    end
-    return
+## Shredding
+
+# A field's values are shredded in one pass over its rows (each row is read once) into
+# level streams and present values per leaf. The walk follows a tree whose node types
+# carry the field's structure, so for one column type every step compiles to direct
+# calls: leaves index a tuple of typed value vectors, struct fields are type parameters.
+# Fields wider than these limits use untyped vectors instead of tuples, and nodes deeper
+# than _SHRED_TYPED_DEPTH hold their children untyped, so node types stay small.
+const _SHRED_TUPLE_LEAVES = 64
+const _SHRED_TUPLE_FIELDS = 32
+const _SHRED_TYPED_DEPTH = 8
+
+struct _ShredLeaf{I,V}
+    absent::UInt16
+    present::UInt16
+    name::String
 end
 
-function _nestedwritepresent!(leaves::Vector{Any}, node::_NestedWriteNode,
-        repetition::UInt16)
-    for index in node.leaves
-        _nestedwritemarker!(leaves[Int(index)], repetition, node.present)
-    end
-    return
+struct _ShredField{K,N}
+    node::N
 end
 
-function _nestedwriterequirederror(node::_NestedWriteNode)
-    throw(ArgumentError("required Parquet field " *
-        "$(repr(join(getfield(node.plan, :source).path, "."))) is missing"))
+struct _ShredStruct{T,C}
+    absent::UInt16
+    present::UInt16
+    leaves::UnitRange{Int}
+    name::String
+    fields::C
 end
 
-function _nestedwritepush!(leaf::_NestedWriteLeaf{T,K,V}, node::_NestedWriteNode,
-        value, repetition::UInt16) where {T,K,V}
-    if ismissing(value)
-        node.absent == node.present && _nestedwriterequirederror(node)
-        _nestedwritemarker!(leaf, repetition, node.absent)
-        return
-    end
-    value isa V || throw(ArgumentError(
-        "Parquet field $(repr(leaf.element.name)) contains $(typeof(value)); " *
-        "expected $V"))
-    physical = _nestedwritephysical(leaf, value)
-    push!(leaf.repetition, repetition)
-    push!(leaf.definition, node.present)
-    push!(leaf.values, physical)
-    return
+struct _ShredList{T,E}
+    absent::UInt16
+    present::UInt16
+    repeated::UInt16
+    leaves::UnitRange{Int}
+    name::String
+    element::E
 end
 
-function _nestedwriteleafof(leaves::Vector{Any}, node::_NestedWriteNode)
-    return leaves[Int(first(node.leaves))]
+# `value` is `nothing` for a map without a value field.
+struct _ShredMap{T,K,V}
+    absent::UInt16
+    present::UInt16
+    repeated::UInt16
+    leaves::UnitRange{Int}
+    name::String
+    key::K
+    value::V
 end
 
-function _nestedwriteshred!(leaves::Vector{Any}, node::_NestedWriteNode, value,
-        repetition::UInt16)
+# Level streams of every leaf (indexed at run time by null and empty markers), and the
+# present physical values of each leaf with the callables that convert them. `R` is false
+# when no leaf repeats, so no repetition levels are kept.
+struct _ShredState{R,V,C}
+    repetition::Vector{Vector{UInt16}}
+    definition::Vector{Vector{UInt16}}
+    values::V
+    converts::C
+end
+
+_ShredState{R}(repetition, definition, values::V, converts::C) where {R,V,C} =
+    _ShredState{R,V,C}(repetition, definition, values, converts)
+
+# One leaf's shredded rows.
+struct _ShreddedLeaf{V<:AbstractVector}
+    repetition::Vector{UInt16}
+    definition::Vector{UInt16}
+    values::V
+end
+
+function _shredtree(node::_NestedWriteNode, base::Int, depth::Int=0)
     plan = node.plan
+    leaves = (Int(first(node.leaves)) - base):(Int(last(node.leaves)) - base)
+    name = join(getfield(plan, :source).path, ".")
+    typed = depth < _SHRED_TYPED_DEPTH
+    T = typed ? node.value_type : Any
     if plan isa _NestedLeafPlan
-        _nestedwritepush!(_nestedwriteleafof(leaves, node), node, value,
-            repetition)
-        return
-    elseif ismissing(value)
-        _nestedwritemissing!(leaves, node, repetition)
-        return
-    end
-    value === nothing && throw(ArgumentError(
-        "nothing is not a Parquet null value; use missing"))
-    value isa node.value_type || throw(ArgumentError(
-        "Parquet field $(repr(join(getfield(plan, :source).path, "."))) contains " *
-        "$(typeof(value)); expected $(node.value_type)"))
-    if plan isa _NestedStructPlan
-        _nestedwritefieldcount(value) == length(node.children) || throw(ArgumentError(
-            "Parquet struct field $(repr(join(plan.source.path, "."))) " *
-            "has $(_nestedwritefieldcount(value)) fields; expected $(length(node.children))"))
-        for (index, child) in enumerate(node.children)
-            _nestedwriteshred!(leaves, child, _nestedwritefield(value, index),
-                repetition)
-        end
+        return _ShredLeaf{first(leaves),node.value_type}(node.absent, node.present, name)
+    elseif plan isa _NestedStructPlan
+        fields = Any[_shredfield(index, _shredtree(child, base, depth + 1), typed)
+            for (index, child) in enumerate(node.children)]
+        packed = typed && length(fields) <= _SHRED_TUPLE_FIELDS ? Tuple(fields) : fields
+        return _ShredStruct{T,typeof(packed)}(node.absent, node.present, leaves, name,
+            packed)
     elseif plan isa _NestedListPlan
-        items, indices = _nestedwriteitems(value)
-        if isempty(indices)
-            _nestedwritepresent!(leaves, node, repetition)
-            return
-        end
-        element = only(node.children)
-        repeated = UInt16(plan.repetition_level)
-        if element.plan isa _NestedLeafPlan
-            _nestedwritepushitems!(_nestedwriteleafof(leaves, element), element,
-                items, indices, repetition, repeated)
-        else
-            for index in indices
-                _nestedwriteshred!(leaves, element, items[index], repetition)
-                repetition = repeated
-            end
-        end
-    else
-        _nestedwriteshredmap!(leaves, node, plan::_NestedMapPlan, value,
-            repetition)
+        element = _shredtree(only(node.children), base, depth + 1)
+        return _ShredList{T,typed ? typeof(element) : Any}(node.absent, node.present,
+            UInt16(plan.repetition_level), leaves, name, element)
+    end
+    mapplan = plan::_NestedMapPlan
+    key = _shredtree(node.children[1], base, depth + 1)
+    value = length(node.children) == 2 ? _shredtree(node.children[2], base, depth + 1) :
+        nothing
+    return _ShredMap{T,typed ? typeof(key) : Any,typed ? typeof(value) : Any}(
+        node.absent, node.present, UInt16(mapplan.repetition_level), leaves, name, key,
+        value)
+end
+
+_shredfield(index::Int, node, typed::Bool) =
+    _ShredField{index,typed ? typeof(node) : Any}(node)
+
+@noinline function _shredrequired(name::String)
+    throw(ArgumentError("required Parquet field $(repr(name)) is missing"))
+end
+
+@noinline function _shredtypeerror(name::String, value, expected::Type)
+    throw(ArgumentError("Parquet field $(repr(name)) contains $(typeof(value)); " *
+        "expected $expected"))
+end
+
+@inline function _shredlevels!(state::_ShredState{R}, leaf::Int, repetition::UInt16,
+        definition::UInt16) where {R}
+    R && @inbounds push!(state.repetition[leaf], repetition)
+    @inbounds push!(state.definition[leaf], definition)
+    return
+end
+
+# Every leaf below a missing node gets the node's absent level, and every leaf below an
+# empty list or map its present level.
+function _shredmarker!(state::_ShredState, node, repetition::UInt16, definition::UInt16)
+    for leaf in node.leaves
+        _shredlevels!(state, leaf, repetition, definition)
     end
     return
 end
 
-# Consecutive entries of one repeated leaf: the first continues the parent's repetition
-# level, the rest repeat at the list's level.
-function _nestedwritepushitems!(leaf::_NestedWriteLeaf, node::_NestedWriteNode,
-        items, indices, repetition::UInt16, repeated::UInt16)
+function _shredabsent!(state::_ShredState, node, repetition::UInt16)
+    node.absent == node.present && _shredrequired(node.name)
+    _shredmarker!(state, node, repetition, node.absent)
+    return
+end
+
+@inline function _shred!(state::_ShredState, node::_ShredLeaf{I,V}, value,
+        repetition::UInt16) where {I,V}
+    if ismissing(value)
+        node.absent == node.present && _shredrequired(node.name)
+        _shredlevels!(state, I, repetition, node.absent)
+    else
+        value isa V || _shredtypeerror(node.name, value, V)
+        _shredlevels!(state, I, repetition, node.present)
+        _appendvalue!(state.values[I], state.converts[I](value))
+    end
+    return
+end
+
+_shredmissing(value) = ismissing(value)
+_shredmissing(ref::_StructRef{<:StructVector{T}}) where {T} =
+    Missing <: T && !@inbounds(ref.column.validity[ref.index])
+
+_shredrowtype(value) = typeof(value)
+_shredrowtype(::_StructRef{<:StructVector{T}}) where {T} = Base.nonmissingtype(T)
+
+function _shred!(state::_ShredState, node::_ShredStruct{T}, value,
+        repetition::UInt16) where {T}
+    _shredmissing(value) && return _shredabsent!(state, node, repetition)
+    _shredrowtype(value) <: T || _shredtypeerror(node.name, value, T)
+    count = _structfieldcount(value)
+    count == length(node.fields) || throw(ArgumentError("Parquet struct field " *
+        "$(repr(node.name)) has $count fields; expected $(length(node.fields))"))
+    _shredfields!(state, node.fields, value, repetition)
+    return
+end
+
+@inline _shredfields!(::_ShredState, ::Tuple{}, value, ::UInt16) = nothing
+@inline function _shredfields!(state::_ShredState, fields::Tuple, value,
+        repetition::UInt16)
+    _shredfield!(state, first(fields), value, repetition)
+    _shredfields!(state, Base.tail(fields), value, repetition)
+    return
+end
+function _shredfields!(state::_ShredState, fields::Vector{Any}, value,
+        repetition::UInt16)
+    for field in fields
+        _shredfield!(state, field, value, repetition)
+    end
+    return
+end
+
+@inline _shredfield!(state::_ShredState, field::_ShredField{K}, value,
+    repetition::UInt16) where {K} =
+    _shred!(state, field.node, _structfield(value, Val(K)), repetition)
+
+# A field of a read struct row comes straight from the child vector its type reads into.
+@inline function _shredfield!(state::_ShredState, field::_ShredField{K},
+        ref::_StructRef{<:StructVector{T}}, repetition::UInt16) where {K,T}
+    child = @inbounds ref.column.children[K]
+    C = _columntype(fieldtype(Base.nonmissingtype(T), K))
+    if child isa C
+        _shred!(state, field.node, _element(child::C, ref.index), repetition)
+    else
+        _shred!(state, field.node, _structfield(ref, Val(K)), repetition)
+    end
+    return
+end
+
+function _shred!(state::_ShredState, node::_ShredList{T}, value,
+        repetition::UInt16) where {T}
+    ismissing(value) && return _shredabsent!(state, node, repetition)
+    value isa T || _shredtypeerror(node.name, value, T)
+    _shredlist!(state, node, value, repetition)
+    return
+end
+
+# A read list row hands over its column's element vector when that is the vector its
+# element type reads into.
+function _shredlist!(state::_ShredState, node::_ShredList, row::ListValue{T},
+        repetition::UInt16) where {T}
+    items = row.values
+    C = _columntype(T)
+    if items isa C
+        _shreditems!(state, node, items::C, row.first:row.last, repetition)
+    else
+        _shreditems!(state, node, row, eachindex(row), repetition)
+    end
+    return
+end
+
+function _shredlist!(state::_ShredState, node::_ShredList, value, repetition::UInt16)
+    items, indices = _listentries(value)
+    _shreditems!(state, node, items, indices, repetition)
+    return
+end
+
+function _shreditems!(state::_ShredState, node::_ShredList, items, indices,
+        repetition::UInt16)
+    isempty(indices) && return _shredmarker!(state, node, repetition, node.present)
+    element = node.element
+    repeated = node.repeated
     for index in indices
-        _nestedwritepush!(leaf, node, items[index], repetition)
+        _shred!(state, element, _element(items, index), repetition)
         repetition = repeated
     end
     return
 end
 
-function _nestedwriteshredmap!(leaves::Vector{Any}, node::_NestedWriteNode,
-        plan::_NestedMapPlan, value, repetition::UInt16)
-    count = value isa MapValue ? value.last - value.first + 1 :
-        length(_nestedwritepairs(value))
-    if iszero(count)
-        _nestedwritepresent!(leaves, node, repetition)
-        return
-    end
-    key = node.children[1]
-    item = length(node.children) == 2 ? node.children[2] : nothing
-    repeated = UInt16(plan.repetition_level)
-    if key.plan isa _NestedLeafPlan && (item === nothing || item.plan isa _NestedLeafPlan)
-        # Leaf keys and values take one typed loop.
-        keyleaf = _nestedwriteleafof(leaves, key)
-        itemleaf = item === nothing ? nothing : _nestedwriteleafof(leaves, item)
-        if value isa MapValue
-            _nestedwritepushentries!(keyleaf, key, itemleaf, item, value.keys,
-                value.values, value.first:value.last, repetition, repeated)
-        else
-            _nestedwritepushentries!(keyleaf, key, itemleaf, item, value,
-                repetition, repeated)
-        end
-    elseif value isa MapValue
-        values = value.values
-        for index in value.first:value.last
-            _nestedwriteshredentry!(leaves, key, item, value.keys[index],
-                values === nothing ? missing : values[index], repetition)
-            repetition = repeated
-        end
+function _shred!(state::_ShredState, node::_ShredMap{T}, value,
+        repetition::UInt16) where {T}
+    ismissing(value) && return _shredabsent!(state, node, repetition)
+    value isa T || _shredtypeerror(node.name, value, T)
+    if isempty(_mappairs(value))
+        _shredmarker!(state, node, repetition, node.present)
     else
-        for pair in value
-            _nestedwriteshredentry!(leaves, key, item, pair.first, pair.second,
-                repetition)
-            repetition = repeated
-        end
+        _shredentries!(state, node, value, repetition)
     end
     return
 end
 
-function _nestedwritekeycheck(key, node::_NestedWriteNode)
-    ismissing(key) && throw(ArgumentError("Parquet MAP key " *
-        "$(repr(join(getfield(node.plan, :source).path, "."))) is missing"))
+function _shredentries!(state::_ShredState, node::_ShredMap, value::AbstractDict,
+        repetition::UInt16)
+    for (key, item) in value
+        _shredentry!(state, node, key, item, repetition)
+        repetition = node.repeated
+    end
     return
 end
 
-function _nestedwriteshredentry!(leaves::Vector{Any}, key::_NestedWriteNode,
-        item, entrykey, entryvalue, repetition::UInt16)
-    _nestedwritekeycheck(entrykey, key)
-    _nestedwriteshred!(leaves, key, entrykey, repetition)
-    item === nothing || _nestedwriteshred!(leaves, item, entryvalue, repetition)
+function _shredentries!(state::_ShredState, node::_ShredMap, row::MapValue{K,V},
+        repetition::UInt16) where {K,V}
+    keys = row.keys
+    values = row.values
+    CK = _columntype(K)
+    CV = _columntype(V)
+    keys isa CK && values isa CV || return _shredpairs!(state, node, row, repetition)
+    _shredentries!(state, node, keys::CK, values::CV, row.first:row.last, repetition)
     return
 end
 
-function _nestedwritepushentries!(keyleaf::_NestedWriteLeaf, key::_NestedWriteNode,
-        itemleaf, item, keys, values, indices, repetition::UInt16,
-        repeated::UInt16)
+function _shredentries!(state::_ShredState, node::_ShredMap, keys::AbstractVector,
+        values::AbstractVector, indices::UnitRange{Int}, repetition::UInt16)
     for index in indices
-        entrykey = keys[index]
-        _nestedwritekeycheck(entrykey, key)
-        _nestedwritepush!(keyleaf, key, entrykey, repetition)
-        itemleaf === nothing || _nestedwritepush!(itemleaf, item,
-            values === nothing ? missing : values[index], repetition)
-        repetition = repeated
-    end
-    return
-end
-
-function _nestedwritepushentries!(keyleaf::_NestedWriteLeaf, key::_NestedWriteNode,
-        itemleaf, item, pairs::AbstractDict, repetition::UInt16,
-        repeated::UInt16)
-    for pair in pairs
-        _nestedwritekeycheck(pair.first, key)
-        _nestedwritepush!(keyleaf, key, pair.first, repetition)
-        itemleaf === nothing || _nestedwritepush!(itemleaf, item, pair.second,
+        _shredentry!(state, node, _element(keys, index), _element(values, index),
             repetition)
-        repetition = repeated
+        repetition = node.repeated
     end
     return
 end
 
-# Shreds whole top-level columns. Leaf columns take a typed loop.
-function _nestedwriteshredcolumn!(leaves::Vector{Any}, node::_NestedWriteNode,
-        column::AbstractVector)
-    if node.plan isa _NestedLeafPlan
-        leaf = _nestedwriteleafof(leaves, node)
-        sizehint!(leaf.repetition, length(column))
-        sizehint!(leaf.definition, length(column))
-        _nestedwritepushitems!(leaf, node, column, eachindex(column),
-            UInt16(0), UInt16(0))
-        return
-    end
-    for value in column
-        _nestedwriteshred!(leaves, node, value, UInt16(0))
+_shredentries!(state::_ShredState, node::_ShredMap, value::AbstractVector,
+    repetition::UInt16) = _shredpairs!(state, node, value, repetition)
+
+function _shredpairs!(state::_ShredState, node::_ShredMap, value::AbstractVector,
+        repetition::UInt16)
+    for index in eachindex(value)
+        entry = @inbounds value[index]
+        _shredentry!(state, node, entry.first, entry.second, repetition)
+        repetition = node.repeated
     end
     return
 end
 
-function _nestedwriteleaftypes!(types::Vector{Type}, node::_NestedWriteNode)
+@inline function _shredentry!(state::_ShredState, node::_ShredMap, key, item,
+        repetition::UInt16)
+    ismissing(key) && throw(ArgumentError("Parquet MAP key $(repr(node.name)) is missing"))
+    _shred!(state, node.key, key, repetition)
+    node.value === nothing || _shred!(state, node.value, item, repetition)
+    return
+end
+
+function _shredcolumn!(state::_ShredState, tree, column::AbstractVector,
+        rows::AbstractUnitRange{Int})
+    for index in rows
+        _shred!(state, tree, _element(column, index), 0x0000)
+    end
+    return state
+end
+
+## Leaf values
+
+# STRING and ENUM values are checked for their byte limit and valid UTF-8.
+struct _CheckedString{F}
+    convert::F
+    limit::Int64
+    label::String
+end
+
+@inline function (check::_CheckedString)(value)
+    text = check.convert(value)
+    bytes = codeunits(text)
+    _checklimit(:string_bytes, length(bytes), check.limit)
+    isvalid(String, bytes) || _invalidutf8(check.label)
+    return text
+end
+
+@noinline _invalidutf8(label::String) = throw(ArgumentError("$label contains invalid UTF-8"))
+
+# Converts a value by its leaf's stored annotation (schema-bearing rewrites).
+struct _StoredConvert{K}
+    kind::K
+    element::Metadata.SchemaElement
+    limits::Limits
+end
+
+(convert::_StoredConvert)(value) =
+    _nestedwritephysical(convert.kind, convert.element, value, convert.limits)
+
+# The callable that turns a leaf's present values into physical values, and their type.
+function _leafconvert(plan::_NestedLeafPlan, value_type::Type, limits::Limits)
+    element = plan.source.element
+    element.type_ == Metadata.Type.INT96 && throw(UnsupportedFeatureError(
+        "writing INT96 is not supported; write the table's columns (for example " *
+        "Tables.columntable(table)) to store $(repr(element.name)) as an INT64 " *
+        "nanosecond TIMESTAMP"))
+    kind = _logicalkind(element)
+    map = _nestedwriteleafmap(element, value_type)
+    label = "$(uppercase(String(kind isa Symbol ? kind : :string))) field " *
+        repr(element.name)
+    if map !== nothing
+        P = _writephysicaltype(map)
+        P <: AbstractString || return map.convert, P
+        return _CheckedString(map.convert, limits.max_string_bytes, label), P
+    end
+    if kind in (:string, :enum) && value_type <: AbstractString && isconcretetype(value_type)
+        return _CheckedString(identity, limits.max_string_bytes, label), value_type
+    end
+    return _StoredConvert(kind, element, limits), _physicaleltype(element.type_)
+end
+
+function _nestedwriteleafnodes!(output::Vector{_NestedWriteNode}, node::_NestedWriteNode)
     if node.plan isa _NestedLeafPlan
-        types[Int(first(node.leaves))] = node.value_type
+        push!(output, node)
     else
-        foreach(child -> _nestedwriteleaftypes!(types, child), node.children)
+        foreach(child -> _nestedwriteleafnodes!(output, child), node.children)
     end
-    return types
+    return output
+end
+
+function _shredsetup(node::_NestedWriteNode, limits::Limits)
+    leafnodes = _nestedwriteleafnodes!(_NestedWriteNode[], node)
+    converts = Any[]
+    types = Type[]
+    for leaf in leafnodes
+        convert, P = _leafconvert(leaf.plan::_NestedLeafPlan, leaf.value_type, limits)
+        push!(converts, convert)
+        push!(types, P)
+    end
+    repeated = any(leaf -> leaf.plan.source.max_repetition_level > 0, leafnodes)
+    return converts, types, repeated, _shredtree(node, Int(first(node.leaves)) - 1)
 end
 
 """
-    _nestedwriterows(semantic, node, column, limits) -> Vector{Any}
+    _nestedwriterows(semantic, node, column, limits) -> Vector{_ShreddedLeaf}
 
-Shred every value of `column`, the rows of one top-level field bound to `node`, into fresh
-level streams and dense values for the field's leaves, in schema order.
+Shred every value of `column`, the rows of one top-level field bound to `node`, into level
+streams and present physical values for the field's leaves, in schema order.
 """
 function _nestedwriterows(semantic::_NestedSchemaPlan, node::_NestedWriteNode,
         column::AbstractVector, limits::Limits)
-    count = length(semantic.leaves)
-    leaves = Vector{Any}(undef, count)
-    types = _nestedwriteleaftypes!(Vector{Type}(undef, count), node)
-    for index in node.leaves
-        leaves[Int(index)] = _nestedwriteleaf(semantic.leaves[Int(index)],
-            types[Int(index)], limits)
+    converts, types, repeated, tree = _shredsetup(node, limits)
+    count = length(converts)
+    values = Any[sizehint!(P[], length(column)) for P in types]
+    levels() = [sizehint!(UInt16[], length(column)) for _ in 1:count]
+    typed = count <= _SHRED_TUPLE_LEAVES
+    state = _ShredState{repeated}(levels(), levels(), typed ? Tuple(values) : values,
+        typed ? Tuple(converts) : converts)
+    _shredcolumn!(state, tree, column, eachindex(column))
+    return _ShreddedLeaf[_ShreddedLeaf(state.repetition[index], state.definition[index],
+        state.values[index]) for index in 1:count]
+end
+
+# Fields with at most this many leaves shred straight into their leaves' page buffers;
+# wider ones shred a row group into level streams first, then encode leaf by leaf.
+const _FUSED_LEAVES = 16
+
+"""
+    _encodenested(semantic, node, column, specs, options) -> Vector{_EncodedChunk}
+
+Encode the column chunks of one nested field's leaves (`specs`, in schema order) for the
+rows `column`.
+"""
+function _encodenested(semantic::_NestedSchemaPlan, node::_NestedWriteNode,
+        column::AbstractVector, rows::UnitRange{Int}, specs::Vector{_LeafSpec},
+        options::_ChunkOptions)
+    if length(specs) > _FUSED_LEAVES
+        leaves = _nestedwriterows(semantic, node, view(column, rows), options.limits)
+        return _EncodedChunk[_encodechunk(spec, _LeveledRows(leaf.repetition,
+            leaf.definition, leaf.values, length(rows)), options)
+            for (spec, leaf) in zip(specs, leaves)]
     end
-    _nestedwriteshredcolumn!(leaves, node, column)
-    return Any[leaves[Int(index)] for index in node.leaves]
+    converts, _, repeated, tree = _shredsetup(node, options.limits)
+    scratches = _nestedscratches(length(specs))
+    chunks = Tuple(_ChunkWriter(spec, options, scratch)
+        for (spec, scratch) in zip(specs, scratches))
+    state = _ShredState{repeated}(Vector{UInt16}[chunk.repetitions for chunk in chunks],
+        Vector{UInt16}[chunk.definitions for chunk in chunks],
+        map(chunk -> chunk.values, chunks), Tuple(converts))
+    _shredpages!(state, tree, column, rows, chunks, options)
+    return _EncodedChunk[_finishchunk(chunk) for chunk in chunks]
+end
+
+# Buffers for the leaves of nested fields, one set per leaf position, reused by the
+# fields and row groups a task encodes.
+function _nestedscratches(count::Int)
+    pool = get!(() -> _EncodeScratch[], task_local_storage(),
+        :ParquetNestedScratch)::Vector{_EncodeScratch}
+    while length(pool) < count
+        push!(pool, _newscratch())
+    end
+    return pool
+end
+
+# A leaf's page ends at a row boundary once it holds `pagerows` rows or its buffers reach
+# `pagesize` bytes; `starts[k]` is the first row of leaf k's open page.
+function _shredpages!(state::_ShredState, tree, column::AbstractVector,
+        rows::UnitRange{Int}, chunks::Tuple, options::_ChunkOptions)
+    starts = ones(Int, length(chunks))
+    total = length(rows)
+    row = 0
+    for index in rows
+        _shred!(state, tree, _element(column, index), 0x0000)
+        row += 1
+        _flushpages!(chunks, starts, 1, row, total, options, row == total)
+    end
+    return
+end
+
+@inline _flushpages!(::Tuple{}, ::Vector{Int}, ::Int, ::Int, ::Int, ::_ChunkOptions,
+    ::Bool) = nothing
+@inline function _flushpages!(chunks::Tuple, starts::Vector{Int}, leaf::Int, row::Int,
+        total::Int, options::_ChunkOptions, last::Bool)
+    chunk = first(chunks)
+    start = @inbounds starts[leaf]
+    rows = row - start + 1
+    if last || rows >= options.pagerows || _bufferbytes(chunk.values) +
+            2 * (length(chunk.definitions) + length(chunk.repetitions)) >= options.pagesize
+        _flushpage!(chunk, rows, start - 1)
+        start == 1 && _hintoutput!(chunk, total, rows)
+        @inbounds starts[leaf] = row + 1
+    end
+    _flushpages!(Base.tail(chunks), starts, leaf + 1, row, total, options, last)
+    return
 end
 
 function _nestedwritebind(shape::_NestedWriteShape, plan::_NestedPlan)

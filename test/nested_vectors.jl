@@ -175,8 +175,8 @@ end
     end
     @test_throws BoundsError columns.l[[5]]
     @test_throws BoundsError columns.m[Bool[true]]
-    # Plain pair-vector maps (as other readers' map rows are) should write as MAP (S3).
+    # Plain pair-vector maps (as other readers' map rows are) write as MAP (S3).
     plainmaps = (m=[["a" => 1], Pair{String,Int}[]],)
-    @test_broken collect(Parquet.Tables.columns(
+    @test collect(Parquet.Tables.columns(
         Parquet.Table(Parquet._encodefile(plainmaps))).m) == [["a" => 1], Pair{String,Int}[]]
 end

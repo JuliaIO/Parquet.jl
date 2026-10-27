@@ -349,14 +349,9 @@ end
 function _encodefield(schema::_WriteSchema, field::_NestedField, binding::_NestedBinding,
         range::UnitRange{Int}, options::_WriteOptions)
     offset = firstindex(binding.column) - 1
-    column = view(binding.column, (offset + first(range)):(offset + last(range)))
-    leaves = _nestedwriterows(schema.semantic, binding.node, column, options.limits)
-    chunks = _EncodedChunk[]
-    for (index, leaf) in zip(field.leaves, leaves)
-        rows = _LeveledRows(leaf.repetition, leaf.definition, leaf.values, length(range))
-        push!(chunks, _encodechunk(schema.leaves[index], rows, options.chunk))
-    end
-    return chunks
+    return _encodenested(schema.semantic, binding.node, binding.column,
+        (offset + first(range)):(offset + last(range)),
+        _LeafSpec[schema.leaves[index] for index in field.leaves], options.chunk)
 end
 
 function _encodefielderror(field::_FieldSpec, err)

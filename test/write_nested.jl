@@ -1173,3 +1173,66 @@ end
         end
     end
 end
+
+# Plain Julia values with the same contents as a read-back nested value.
+wnplain(value) = value
+wnplain(value::AbstractString) = String(value)
+wnplain(value::Union{AbstractVector,Tuple}) = Any[wnplain(item) for item in value]
+wnplain(value::Union{AbstractDict,AbstractVector{<:Pair}}) =
+    Pair[wnplain(key) => wnplain(item) for (key, item) in value]
+wnplain(value::NamedTuple) = map(wnplain, value)
+
+function wnroundtrip(column; kwargs...)
+    table = Parquet.Table(Parquet._encodefile((value=column,); kwargs...))
+    return collect(table.value), Parquet._tablemetadata(table).schema
+end
+
+@testset "plain Julia nested shapes" begin
+    Inner = NamedTuple{(:x, :t),Tuple{Int,NTuple{2,Int}}}
+    Element = NamedTuple{(:a, :m),Tuple{Union{Missing,Vector{Union{Missing,Int}}},
+        Union{Missing,Vector{Pair{String,Union{Missing,Inner}}}}}}
+    deep = Union{Missing,Vector{Union{Missing,Element}}}[
+        i % 7 == 0 ? missing : Union{Missing,Element}[(i + j) % 5 == 0 ? missing :
+            Element((i % 3 == 0 ? missing : Union{Missing,Int}[i, missing],
+                i % 4 == 0 ? missing : Pair{String,Union{Missing,Inner}}["k$j" =>
+                    (isodd(i) ? missing : Inner((i, (i, j))))]))
+            for j in 1:(i % 3)] for i in 1:30]
+    cases = Any[
+        [[1, 2], Int[], [3]],
+        Union{Missing,Vector{Union{Missing,String}}}[["a", missing], missing, String[]],
+        [view([1, 2, 3], 1:2), view([4, 5], 2:2)],
+        [1:2, 3:3, 1:0],
+        [(1, 2), (3, 4)],
+        Tuple{Int,Union{Missing,Int}}[(1, missing), (2, 3)],
+        Union{Missing,NTuple{2,String}}[("a", "b"), missing],
+        [[(1, 2)], Tuple{Int,Int}[]],
+        [["a" => 1, "b" => 2], Pair{String,Int}[], ["a" => 3, "a" => 4]],
+        Union{Missing,Vector{Pair{String,Union{Missing,Int}}}}[["a" => missing], missing],
+        [Dict("a" => [1, 2]), Dict{String,Vector{Int}}()],
+        [(x=1, y=(2, 3)), (x=4, y=(5, 6))],
+        deep,
+    ]
+    for column in cases, version in (:v1, :v2)
+        values, _ = wnroundtrip(column; pageversion=version)
+        @test isequal(wnplain.(values), wnplain.(column))
+    end
+
+    # Tuples are lists; pair vectors and dictionaries are maps.
+    _, schema = wnroundtrip([(1, 2)])
+    @test schema[2].converted_type == WNMD.ConvertedType.LIST
+    _, schema = wnroundtrip([["a" => 1]])
+    @test schema[2].converted_type == WNMD.ConvertedType.MAP
+
+    # Abstract columns narrow to one element type, missing included.
+    for column in (Any[["a" => 1], ["b" => missing]], Any[(1, missing), (2, 3)],
+            Any[Dict("a" => 1), Dict("b" => missing)], Any[[1, 2], 3:4], Any[deep...])
+        values, _ = wnroundtrip(column)
+        @test isequal(wnplain.(values), wnplain.(column))
+    end
+
+    @test_throws "need one element type" Parquet._encodefile((value=[(1, "a")],))
+    @test_throws "fixed, nonzero number" Parquet._encodefile((value=[()],))
+    @test_throws "MAP key types cannot include Missing" Parquet._encodefile(
+        (value=[Pair{Union{Missing,String},Int}["a" => 1]],))
+    @test_throws "mixes values" Parquet._encodefile((value=Any[(1, 2), (1, 2, 3)],))
+end

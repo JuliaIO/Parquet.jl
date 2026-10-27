@@ -348,12 +348,15 @@ end
 function _writedeclared(T::Type)
     T === Missing && return true
     S = Base.nonmissingtype(T)
+    # A tuple type is abstract when a field may be missing; it still writes as a list.
+    S isa DataType && S <: Tuple && !isempty(S.parameters) &&
+        !Base.isvarargtype(S.parameters[end]) &&
+        return all(F -> F === Missing || _writedeclared(F), fieldtypes(S))
     S !== Union{} && isconcretetype(S) || return false
     _writemap(S) === nothing || return true
     _writevaluescanned(S) && return true
     # Containers are checked field by field when their schema is inferred.
-    return S <: Union{AbstractVector,NamedTuple,AbstractDict,Tuple,ListValue,
-        StructValue,MapValue}
+    return S <: Union{AbstractVector,NamedTuple,AbstractDict,ListValue,StructValue,MapValue}
 end
 
 function _narrowwritecolumn(name::String, values::AbstractVector)
@@ -392,8 +395,20 @@ function _writepromote(A::Type, B::Type, name::String)
         types = map((a, b) -> _writepromote(a, b, name), fieldtypes(A), fieldtypes(B))
         return NamedTuple{fieldnames(A),Tuple{types...}}
     end
-    if A <: Vector && B <: Vector
+    if A <: AbstractVector && B <: AbstractVector
         return Vector{_writepromote(eltype(A), eltype(B), name)}
+    end
+    if A <: Tuple && B <: Tuple && fieldcount(A) == fieldcount(B)
+        return Tuple{map((a, b) -> _writepromote(a, b, name), fieldtypes(A),
+            fieldtypes(B))...}
+    end
+    if A <: Pair && B <: Pair
+        return Pair{_writepromote(fieldtype(A, 1), fieldtype(B, 1), name),
+            _writepromote(fieldtype(A, 2), fieldtype(B, 2), name)}
+    end
+    if A <: Dict && B <: Dict
+        return Dict{_writepromote(keytype(A), keytype(B), name),
+            _writepromote(valtype(A), valtype(B), name)}
     end
     promoted = promote_type(A, B)
     numeric = A <: Real && B <: Real && !(A <: Bool) && !(B <: Bool)

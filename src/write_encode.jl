@@ -862,12 +862,11 @@ struct _EncodeScratch
     compressed::Vector{UInt8}
 end
 
-function _encodescratch()
-    return get!(task_local_storage(), :ParquetEncodeScratch) do
-        _EncodeScratch(Dict{Any,Any}(), Dict{Any,Any}(), _HashSet(), UInt16[], UInt16[],
-            UInt32[], UInt8[], UInt8[], UInt8[])
-    end::_EncodeScratch
-end
+_newscratch() = _EncodeScratch(Dict{Any,Any}(), Dict{Any,Any}(), _HashSet(), UInt16[],
+    UInt16[], UInt32[], UInt8[], UInt8[], UInt8[])
+
+_encodescratch() =
+    get!(_newscratch, task_local_storage(), :ParquetEncodeScratch)::_EncodeScratch
 
 function _scratchbuffer(scratch::_EncodeScratch, element::Metadata.SchemaElement,
         limits::Limits)

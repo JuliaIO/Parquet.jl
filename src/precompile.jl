@@ -37,6 +37,8 @@ using PrecompileTools: @compile_workload, @setup_workload
         st=cycle([(a=Int32(i), b="s$i", c=Float64(i)) for i in 1:3]),
         map=cycle([Dict("a" => i) for i in 1:3]),
         lst=cycle([[(k=i, v="v")] for i in 1:3]),
+        pairs=cycle([["a" => i, "b" => -i] for i in 1:3]),
+        tuple=cycle([(i, i + 1) for i in 1:3]),
     )
     # One nested column sends every column of a table down the nested reader.
     mixed = merge(scalars, NamedTuple{Symbol.(:o_, keys(optional))}(values(optional)),
