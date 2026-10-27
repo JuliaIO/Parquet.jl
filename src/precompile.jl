@@ -67,6 +67,18 @@ using PrecompileTools: @compile_workload, @setup_workload
             filter=Tables.col(:i64) > 0, limit=2))
         Tables.columns(readback)
         close(readback)
+        # Filters and row windows: pruning by statistics and page indexes, filter columns
+        # decoded first, the other columns of every type only for matching rows.
+        for table in (scalars, optional)
+            bytes = take!(write(IOBuffer(), table; rowgroupsize=16, pagesize=64))
+            for filter in (Tables.colcmp(>=, Tables.col(:us), Dates.DateTime(1970, 1, 1)),
+                    Tables.colcmp(==, Tables.col(:str), "a") | Tables.isnull(Tables.col(:f64)),
+                    Tables.colin(Tables.col(:date), (Dates.Date(2026, 1, 2),)) &
+                        (Tables.col(:i64) > 0))
+                Tables.columns(Table(bytes; filter=filter))
+            end
+            Tables.columns(Table(bytes; limit=3))
+        end
         Writer(joinpath(dir, "writer.parquet")) do writer
             write(writer, optional)
             write(writer, optional)
