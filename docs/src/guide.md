@@ -204,10 +204,25 @@ scale per value) is read once more to choose that type. Changes made to a source
 
 ## Nested columns
 
-The development implementation reads and writes recursive structs, lists, and maps.
-For ordinary Julia input, use `NamedTuple` values for structs, vectors for lists, and
-dictionaries for maps. Declared element types supply the schema for empty and all-null
-columns. Null containers, empty containers, and null elements remain distinct.
+Lists, structs, and maps read as typed rows:
+
+- A list row is a read-only `AbstractVector{T}` view of the column's elements;
+  `copy(row)` gives a `Vector{T}`.
+- A struct row is a `NamedTuple` of its fields, so `row.field` is type-stable. A struct
+  whose field names repeat or number more than 64, or that holds more than 32 levels of
+  nested values, reads as `name => value` pairs instead; `row["name"]` looks one up.
+- A map row is the map's `key => value` pairs in file order, duplicate keys included;
+  `Dict(row)` builds a dictionary (the last duplicate wins).
+
+`T` includes `missing` only when the schema allows null elements, and a null list,
+struct, or map reads as `missing`. Copies and subsets of a nested column (`copy`,
+`column[rows]`, `vcat`, `DataFrame(table)`) are plain `Vector`s of rows, so `push!` and
+`setindex!` take plain vectors, named tuples, and dictionaries.
+
+To write nested columns, use `NamedTuple` values for structs, vectors for lists, and
+dictionaries (or rows read from a file) for maps. Declared element types supply the
+schema for empty and all-null columns. Null containers, empty containers, and null
+elements remain distinct.
 
 ```@example nested
 using Parquet, Tables
@@ -224,7 +239,7 @@ Parquet.write(io, (; profile, samples, attrs); compress=:zstd, pageversion=:v2)
 table = Parquet.Table(take!(io))
 columns = Tables.columntable(table)
 (
-    name=String(columns.profile[2]["name"]),
+    name=String(columns.profile[2].name),
     null_list=ismissing(columns.samples[1]),
     empty_list=isempty(columns.samples[2]),
     values=collect(columns.samples[3]),
@@ -232,9 +247,8 @@ columns = Tables.columntable(table)
 )
 ```
 
-Nested read values expose indexing and iteration; their concrete container types may
-differ from the input. The reader also accepts the legacy list and map layouts tested
-in the pinned Apache corpus. The rewrite remains preproduction.
+The reader also accepts the legacy list and map layouts tested in the pinned Apache
+corpus. The rewrite remains preproduction.
 
 ## What this package does not support
 

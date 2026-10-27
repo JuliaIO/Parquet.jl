@@ -355,3 +355,22 @@ end
         end
     end
 end
+
+@testset "nested corpus fixtures write back as read" begin
+    for name in NESTED_TABLE_FIXTURES
+        fixture = ntfixture(name)
+        isfile(fixture) || continue
+        table = Parquet.Table(fixture)
+        columns = Parquet.Tables.columns(table)
+        # The table itself (its stored schema) and plain vectors of its rows (a copy).
+        for source in (table, map(collect, columns))
+            io = IOBuffer()
+            Parquet.write(io, source)
+            again = Parquet.Tables.columns(Parquet.Table(take!(io)))
+            @test keys(again) == keys(columns)
+            for key in keys(columns)
+                @test isequal(ntsemantic.(collect(again[key])), ntsemantic.(collect(columns[key])))
+            end
+        end
+    end
+end

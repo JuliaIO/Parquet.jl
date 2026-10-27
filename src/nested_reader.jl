@@ -7,9 +7,9 @@
 # space's entry level; at each slot it opens, the nodes of that space are present when d
 # reaches their own level.
 #
-# Each leaf rebuilds its whole path from its own levels. The first leaf under a node
-# stores the node's validity bits and list offsets; every leaf under it hashes and counts
-# what it saw, and leaves that disagree about a shared ancestor are rejected.
+# Each leaf rebuilds its whole path from its own levels. The first leaf under a node keeps
+# the node's validity bits and offsets; leaves that share a node compare slot counts and
+# hashes of theirs, so leaves that disagree about a shared ancestor are rejected.
 
 # Assembly recurses once per plan-tree level, so a plan deep enough to be built under a
 # raised max_metadata_depth could overflow the stack. Such plans are rejected with a
@@ -162,10 +162,10 @@ function _assemblynode!(builder::_AssemblyBuilder, plan::_NestedPlan, keyed::Boo
         1 + maximum(child -> child.depth, children; init=0), 0)
 end
 
-function _fieldassembly(plan::_NestedPlan, limits::Limits, options::_ReadOptions;
-        keyed::Bool=false)
+function _fieldassembly(plan::_NestedPlan, limits::Limits, options::_ReadOptions)
     builder = _AssemblyBuilder(limits, options, 0, _LeafPath[])
-    root = _assemblynode!(builder, plan, keyed, UInt16[], Tuple{Int,UInt8,Int,Int,Int,Bool}[])
+    root = _assemblynode!(builder, plan, false, UInt16[],
+        Tuple{Int,UInt8,Int,Int,Int,Bool}[])
     items = [Tuple{Int,Int}[] for _ in 1:(2 * builder.nodes)]
     for (position, path) in enumerate(builder.paths), item in eachindex(path.node)
         kind = path.kind[item]
