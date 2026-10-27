@@ -396,3 +396,9 @@ end
         end
     end
 end
+
+@testset "nested read tasks share no variables of the function that starts them" begin
+    for m in methods(Parquet._readnestedcolumns)
+        @test !occursin("Core.Box", string(Base.uncompressed_ir(m)))
+    end
+end

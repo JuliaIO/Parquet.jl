@@ -54,17 +54,18 @@ function _readleafchunks(file::File, metadata::Metadata.FileMetaData,
     sink = _leafsink(path, L, _scratch(buffers.dense, L), rows, entries, buffers)
     total = 0
     for (group, md, (start, stop)) in chunks
-        before = sink.slots[1]
-        sink.chunkstart = true
+        state = sink.state
+        before = state.slots[1]
+        state.chunkstart = true
         _readchunk!(sink, _physicaleltype(node.element.type_), L, convert, file.source, md,
             node, start, stop, limits, budget, buffers)
-        sink.slots[1] - before == group.num_rows || throw(FormatError(
-            "leaf $(path.leaf) has $(sink.slots[1] - before) rows in a row group of " *
+        state.slots[1] - before == group.num_rows || throw(FormatError(
+            "leaf $(path.leaf) has $(state.slots[1] - before) rows in a row group of " *
             "$(group.num_rows)"))
         total += Int(group.num_rows)
     end
     counts = _finishleaf!(sink, total)
-    piece = _leafpiece(sink, _leafvalues(sink, node, convert), counts)
+    piece = _leafpiece(sink.state, _leafvalues(sink, node, convert), counts)
     _charge!(budget, sizeof(sink.output) + sum(sizeof, piece.offsets; init=0) +
         sum(bits -> sizeof(bits.chunks), piece.bits; init=0))
     return piece
@@ -131,14 +132,12 @@ function _readnestedcolumns(file::File, metadata::Metadata.FileMetaData, schema:
     built = _readmap(fieldorder, _readtasks(file, ntasks, length(assemblies))) do field, _
         assembly = assemblies[field]
         isempty(groups) && return _emptycolumn(assembly.root)
-        parts = map(eachindex(ranges)) do range
-            leafpieces = _LeafPiece[pieces[starts[field] +
+        parts = AbstractVector[_buildfield(assembly, _LeafPiece[pieces[starts[field] +
                 (position - 1) * length(ranges) + range]
-                for position in eachindex(assembly.paths)]
-            return _buildfield(assembly, leafpieces,
-                sum(group -> Int(groups[group].num_rows), ranges[range]; init=0))
-        end
-        length(parts) == 1 && return only(parts)
+                for position in eachindex(assembly.paths)],
+            sum(group -> Int(groups[group].num_rows), ranges[range]; init=0))
+            for range in eachindex(ranges)]
+        length(parts) == 1 && return parts[1]
         column = _concat(_columntype(assembly.root.eltype)[part for part in parts])
         budget.maximum == typemax(Int64) || _charge!(budget, Base.summarysize(column))
         return column
