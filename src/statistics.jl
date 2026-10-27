@@ -909,10 +909,20 @@ function _statisticissignedcomparison(comparison::Symbol)
     return comparison in (:signed, :boolean, :decimal, :floating)
 end
 
+# Polars (whose `created_by` names no version) leaves every page holding a NaN out of a
+# FLOAT or DOUBLE column chunk's bounds, and marks those pages all null in the column
+# index.
+function _statisticspolars(createdby::Union{Nothing,String})
+    createdby === nothing && return false
+    return startswith(lowercase(lstrip(createdby)), "polars")
+end
+
 function _statisticproducertrust(element::Metadata.SchemaElement,
     createdby::Union{Nothing,String}, comparison::Symbol, family::Symbol, lower, upper,
     limit::Int64)
     family === :none && return _StatisticTrustFact(:trusted, :no_bounds)
+    comparison in (:floating, :ieee_total_order) && _statisticspolars(createdby) &&
+        return _StatisticTrustFact(:untrusted, :polars_nan_bounds)
     binary = element.type_ in (Metadata.Type.BYTE_ARRAY,
         Metadata.Type.FIXED_LEN_BYTE_ARRAY)
     java = _statisticsjavaproducer(createdby)

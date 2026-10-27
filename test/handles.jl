@@ -125,8 +125,9 @@ end
     @test_throws ArgumentError filtered[1]
     @test_throws ArgumentError DataAPI.nrow(filtered)
     @test_throws ArgumentError DataAPI.nrow(Parquet.File(bytes; filter=Parquet.col(:a) > 1))
+    # Row groups whose statistics rule the filter out are skipped.
     @test [table.a for table in Parquet.File(bytes;
-        filter=(Parquet.col(:a) < 1) | (Parquet.col(:a) > 8))] == [Int[], Int[], [9, 10]]
+        filter=(Parquet.col(:a) < 1) | (Parquet.col(:a) > 8))] == [[9, 10]]
 
     # Key-value metadata through DataAPI; a repeated key reads as its last value.
     metadata = Parquet.File(bytes).metadata

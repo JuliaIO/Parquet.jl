@@ -53,7 +53,18 @@ UTC timestamp with a `Durations.ZonedTimestamp`.
 `select` and `drop` choose columns, `filter` keeps rows where a predicate is `true`,
 and `limit` caps the row count. Only the columns a read selects or filters on are
 decoded; the column chunks of every other column are never read, so columns this
-package cannot decode can be skipped too. The filter and limit apply after reading.
+package cannot decode can be skipped too.
+
+A filter skips the row groups that its column statistics, bloom filters, or dictionary
+pages show cannot match, and the pages that cannot match by the file's page index
+(written by Parquet.jl, Polars, and pyarrow with `write_page_index=True`) or the
+statistics pyarrow writes into each page header. The
+filter columns are decoded first and the other columns only for the rows that matched.
+A `limit` or offset decodes only the row groups and pages it reaches. The result is the
+same as filtering the whole table: pruning only skips data that cannot match, and the
+filter still runs on every row read. Statistics count only where Parquet's sort-order
+rules define them; for example, binary statistics from parquet-mr before 1.8 are
+ignored.
 
 ```julia
 table = Parquet.Table("input.parquet"; select=[:id, :price],
@@ -74,7 +85,8 @@ table = Parquet.Table("input.parquet";
 `Parquet.File(path; keywords...)` opens a file without reading column data. It takes
 the same keywords as `Parquet.Table`. `Tables.schema(file)` gives the columns a read
 returns; iterating the file yields one `Parquet.Table` per row group, so a file is its
-own `Tables.partitions`, and `file[i]` reads row group `i`. Close the file when done.
+own `Tables.partitions`, and `file[i]` reads row group `i`. With a filter, row groups
+whose statistics rule it out are skipped. Close the file when done.
 
 ```julia
 file = Parquet.File("input.parquet"; select=[:id, :price])
@@ -240,8 +252,10 @@ limits = Parquet.Limits(max_statistics_value_bytes=1024)
 Parquet.write("bounded.parquet", table; limits=limits)
 ```
 
-Readers treat statistics as untrusted metadata. They validate physical widths,
-logical ordering, and declared sort order before exposing a bound.
+Reads use statistics, the page index, and bloom filters only to skip data a filter
+cannot match, and only where the column's declared sort order defines them; bounds that
+fail validation (physical width, logical range, the writer's known statistics bugs) are
+ignored.
 
 ### Bloom filters
 

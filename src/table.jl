@@ -389,7 +389,8 @@ are those of [`Parquet.Table`](@ref) and apply to every table the file yields.
 
 - `Tables.schema(file)` and `Tables.columnnames(file)` give the columns a read returns.
 - Iterating the file yields one `Parquet.Table` per row group, so `file` is its own
-  `Tables.partitions`; `length(file)` and `file[i]` give the row groups directly.
+  `Tables.partitions`; `length(file)` and `file[i]` give the row groups directly. With a
+  filter, row groups whose statistics rule it out are skipped.
   With both a filter and a `limit` (or a scan `offset`), which row groups contribute
   is known only while reading, so such a file can be iterated but not indexed.
 - `DataAPI.nrow(file)` is the row count of an unfiltered read.
@@ -431,23 +432,68 @@ function File(input; select=nothing, drop=nothing, filter=nothing, limit=nothing
 end
 
 # The table of row groups `groups` (ascending indices) with the file's scan applied.
-# `window` replaces the scan's (offset, limit) for these groups.
+# `window` replaces the scan's (offset, limit) for these groups. A filter skips the row
+# groups and pages it cannot match (`pushdown.jl`); a flat table then decodes its filter
+# columns first and its other columns only for the matching rows, and a row window
+# decodes only the pages it overlaps.
 function _readtable(file::File, groups::AbstractVector{Int}, budget::_ByteBudget;
         window=nothing)
     plan = file.plan
-    limits = plan.limits
-    metadata = plan.metadata
-    if groups != eachindex(metadata.row_groups)
-        selected = metadata.row_groups[groups]
-        metadata = _withfields(metadata; row_groups=selected,
-            num_rows=sum(group -> group.num_rows, selected; init=Int64(0)))
+    bound = plan.bound
+    offset, limit = something(window, bound === nothing ? (0, nothing) :
+        (bound.offset, bound.limit))
+    filter = bound === nothing ? nothing : bound.filter
+    nested = _nestedplan(plan.schema; limits=plan.limits)
+    nested.plan_count > 0 || throw(AssertionError("nested schema plan has no root"))
+    filter === nothing && iszero(offset) && limit === nothing &&
+        return _readgroups(file, groups, budget, nested, offset, limit)
+    parts = if filter === nothing
+        _windowparts(_GroupRows[_GroupRows(index,
+            [0:(Int(plan.metadata.row_groups[index].num_rows) - 1)]) for index in groups
+            if plan.metadata.row_groups[index].num_rows > 0], offset, limit)
+    else
+        _filterparts(file, groups, filter, budget)
     end
+    if !_isflattableplan(nested)
+        # Nested columns decode whole row groups; the scan's residual does the rest.
+        filter === nothing && (offset = isempty(parts) ? 0 : first(parts[1].rows[1]))
+        return _readgroups(file, Int[part.group for part in parts], budget, nested,
+            offset, limit)
+    end
+    limits = plan.limits
+    metadata = _withgroups(plan.metadata, Int[part.group for part in parts])
+    schema = plan.schema
+    _validatetablerowgroups(metadata, schema, limits)
+    columns, rows = _readselectedflat(_coalescedfile(file, metadata, schema), plan, parts,
+        filter !== nothing, offset, limit, budget)
+    named = NamedTuple{Tuple(_tablenames(schema, limits))}(Tuple(columns))
+    bound === nothing && return Table(metadata, schema, named, rows)
+    projection = Tables.BoundScan(bound.columns, nothing, bound.filtercols, nothing, 0,
+        bound.validate)
+    named, rows, metadata, schema = _scanresidual(named, rows, projection, metadata, schema,
+        limits, 0, nothing)
+    return Table(metadata, schema, named, rows)
+end
+
+# File metadata restricted to the row groups `groups`.
+function _withgroups(metadata::Metadata.FileMetaData, groups::AbstractVector{Int})
+    groups == eachindex(metadata.row_groups) && return metadata
+    selected = metadata.row_groups[groups]
+    return _withfields(metadata; row_groups=selected,
+        num_rows=sum(group -> group.num_rows, selected; init=Int64(0)))
+end
+
+# Every row of row groups `groups`, then the scan's filter and the row window `offset`,
+# `limit` applied to the columns read.
+function _readgroups(file::File, groups::AbstractVector{Int}, budget::_ByteBudget,
+        nested::_NestedSchemaPlan, offset::Int, limit)
+    plan = file.plan
+    limits = plan.limits
+    metadata = _withgroups(plan.metadata, groups)
     schema = plan.schema
     rows = _validatetablerowgroups(metadata, schema, limits)
     _checklimit(:container_elements, rows, limits.max_container_elements)
     file = _coalescedfile(file, metadata, schema)
-    nested = _nestedplan(schema; limits=limits)
-    nested.plan_count > 0 || throw(AssertionError("nested schema plan has no root"))
     names = _tablenames(schema, limits)
     if _isflattableplan(nested)
         columns = _readflattable(file, metadata, schema, rows, limits, budget, plan.ntasks,
@@ -462,7 +508,6 @@ function _readtable(file::File, groups::AbstractVector{Int}, budget::_ByteBudget
     named = NamedTuple{Tuple(names)}(Tuple(columns))
     bound = plan.bound
     if bound !== nothing
-        offset, limit = something(window, (bound.offset, bound.limit))
         named, rows, metadata, schema = _scanresidual(named, rows, bound, metadata, schema,
             limits, offset, limit)
     end
@@ -494,8 +539,10 @@ path is unmapped and closed before `Table` returns, and a source you pass stays 
 - `select` keeps the given columns, in that order (names, indices, a regex, or a vector
   of them); `drop` keeps all but the given columns.
 - `filter` keeps the rows where a predicate built from [`Parquet.col`](@ref) is `true`,
-  for example `filter=Parquet.col(:fare) > 10`.
-- `limit` keeps at most that many (filtered) rows.
+  for example `filter=Parquet.col(:fare) > 10`. Row groups and pages that statistics,
+  page indexes, bloom filters, or dictionary pages show cannot match are skipped, and
+  the columns not filtered on are decoded only for the rows that match.
+- `limit` keeps at most that many (filtered) rows; only the pages it reaches are decoded.
 - `scan` takes a full `Tables.Scan` (renames, offset, `validate`) instead of the keywords
   above. Type overrides are not supported.
 
@@ -574,7 +621,8 @@ function _filegroups(file::File)
     groups = plan.metadata.row_groups
     bound = plan.bound
     (bound === nothing || (iszero(bound.offset) && bound.limit === nothing)) &&
-        return Tuple{Int,Int,Union{Nothing,Int}}[(index, 0, nothing) for index in eachindex(groups)]
+        return Tuple{Int,Int,Union{Nothing,Int}}[(index, 0, nothing)
+            for index in _statisticsgroups(file, eachindex(groups))]
     bound.filter === nothing || return nothing
     first = bound.offset
     last = bound.limit === nothing ? typemax(Int) : Base.checked_add(first, bound.limit)
@@ -627,7 +675,11 @@ end
 # the groups until the window is filled.
 function Base.iterate(file::File, (index, skip, keep)::Tuple{Int,Int,Any})
     groups = file.plan.metadata.row_groups
-    (index > length(groups) || keep == 0) && return nothing
+    keep == 0 && return nothing
+    while index <= length(groups) && isempty(_statisticsgroups(file, index:index))
+        index += 1
+    end
+    index > length(groups) && return nothing
     table = _readtable(file, index:index, _ByteBudget(file.plan.limits);
         window=(0, nothing))
     rows = _tablerows(table)
