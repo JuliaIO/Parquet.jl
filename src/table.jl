@@ -393,8 +393,9 @@ are those of [`Parquet.Table`](@ref) and apply to every table the file yields.
   With both a filter and a `limit` (or a scan `offset`), which row groups contribute
   is known only while reading, so such a file can be iterated but not indexed.
 - `DataAPI.nrow(file)` is the row count of an unfiltered read.
-- `DataAPI.metadata(file)` gives the file's key-value metadata and
-  [`Parquet.metadata`](@ref) the raw footer metadata (statistics, encodings).
+- `DataAPI.metadata(file)` gives the file's key-value metadata (without the
+  `ARROW:schema` entry, which sets column types) and [`Parquet.metadata`](@ref) the raw
+  footer metadata (statistics, encodings).
 - As a Tables.jl source (for example `DataFrame(file)`), the file reads every row group.
 
 `source` is a path, a byte vector, an `IO`, or a [`Parquet.AbstractSource`](@ref). A
@@ -678,8 +679,11 @@ metadata(table::Table) = _tablemetadata(table)
 # Parquet's key-value metadata as DataAPI metadata (style `:default`).
 DataAPI.metadatasupport(::Type{<:Union{File,Table}}) = (read=true, write=false)
 
+# A file's ARROW:schema becomes column types (time zones, durations), so DataAPI
+# metadata leaves it out, as pyarrow does; `Parquet.metadata` still has it.
 function _keyvaluemetadata(x::Union{File,Table})
-    return something(metadata(x).key_value_metadata, Metadata.KeyValue[])
+    entries = something(metadata(x).key_value_metadata, Metadata.KeyValue[])
+    return filter(entry -> entry.key != "ARROW:schema", entries)
 end
 
 function DataAPI.metadatakeys(x::Union{File,Table})

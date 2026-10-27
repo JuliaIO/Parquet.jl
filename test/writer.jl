@@ -100,15 +100,17 @@ end
         Dict("source" => "test", "ARROW:schema" => "stale"),
         Dict(:name => Dict("unit" => "none")))
     metadata = wrmetadata(take!(Parquet.write(IOBuffer(), table)))
-    @test [(item.key, item.value) for item in metadata.key_value_metadata] ==
+    @test [(item.key, item.value) for item in metadata.key_value_metadata[1:1]] ==
         [("source", "test")]
+    @test [item.key for item in metadata.key_value_metadata] == ["source", "ARROW:schema"]
     chunks = metadata.row_groups[1].columns
     @test chunks[1].meta_data.key_value_metadata === nothing
     @test [(item.key, item.value) for item in chunks[2].meta_data.key_value_metadata] ==
         [("unit", "none")]
     explicit = wrmetadata(take!(Parquet.write(IOBuffer(), (id=[1],);
         metadata=Dict("a" => 1), colmetadata=(id=("b" => "c",),))))
-    @test [(item.key, item.value) for item in explicit.key_value_metadata] == [("a", "1")]
+    @test [(item.key, item.value) for item in explicit.key_value_metadata[1:1]] ==
+        [("a", "1")]
     @test [(item.key, item.value) for item in
         explicit.row_groups[1].columns[1].meta_data.key_value_metadata] == [("b", "c")]
     @test_throws "reserved" Parquet.write(IOBuffer(), (id=[1],);
@@ -236,4 +238,47 @@ end
     @test WRMD.Encoding.RLE_DICTIONARY in encodings([distinct[cld(i, 4)] for i in 1:rows])
     @test !(WRMD.Encoding.RLE_DICTIONARY in encodings(["s$i" for i in distinct]))
     @test WRMD.Encoding.RLE_DICTIONARY in encodings(["s$(i % 3000)" for i in 1:rows])
+end
+
+@testset "the generated ARROW:schema carries time zones and durations" begin
+    P = Dates.Microsecond
+    zone = Symbol("America/New_York")
+    stamps(Z) = [Parquet.Durations.ZonedTimestamp{P,Z}(
+        Parquet.Durations.Timestamp{P}(Dates.UTInstant(P(1_700_000_000_000_000 + i))),
+        Dates.UTC) for i in 1:3]
+    table = (ny=stamps(zone), utc=stamps(:UTC), ms=Dates.Millisecond.(1:3),
+        lists=[stamps(zone)[1:i] for i in 1:3], plain=[1, 2, 3])
+    bytes = take!(Parquet.write(IOBuffer(), table; metadata=Dict("k" => "v")))
+    @test [item.key for item in wrmetadata(bytes).key_value_metadata] ==
+        ["k", "ARROW:schema"]
+    readback = Parquet.Table(bytes)
+    # The reader turns the entry into column types instead of user metadata.
+    @test DataAPI.metadatakeys(readback) == ["k"]
+    @test "ARROW:schema" in [item.key for item in
+        Parquet.metadata(readback).key_value_metadata]
+    @test eltype(readback.ny) == Parquet.Durations.ZonedTimestamp{P,zone}
+    @test readback.ny == table.ny
+    @test eltype(readback.utc) == Parquet.Durations.ZonedTimestamp{P,:UTC}
+    @test eltype(readback.ms) == Dates.Millisecond
+    @test collect(readback.lists[3]) == table.lists[3]
+    @test eltype(readback.plain) == Int64
+    # A Table rewrite generates the schema again rather than copying it.
+    rewritten = Parquet.Table(take!(Parquet.write(IOBuffer(), readback)))
+    @test eltype(rewritten.ny) == Parquet.Durations.ZonedTimestamp{P,zone}
+    @test collect(rewritten.lists[2]) == table.lists[2]
+    @test eltype(rewritten.ms) == Dates.Millisecond
+end
+
+@testset "a map without values is a list of keys in the ARROW:schema" begin
+    corpus = get(ENV, "PARQUET_TESTING_DIR", joinpath(@__DIR__, "parquet-testing"))
+    source = Parquet.Table(joinpath(corpus, "data", "map_no_value.parquet"))
+    bytes = take!(Parquet.write(IOBuffer(), source))
+    entry = last(wrmetadata(bytes).key_value_metadata)
+    @test entry.key == "ARROW:schema"
+    fields = Parquet._decodearrowschema(entry.value, Parquet.Limits())
+    types = Dict(field.name => field.type for field in fields)
+    # pyarrow reads such a map as list<key>; an Arrow Map would need a value field.
+    @test types["my_map_no_v"] == 0x0c
+    @test types["my_map"] == 0x11
+    @test isequal(collect(Parquet.Table(bytes).my_map_no_v), collect(source.my_map_no_v))
 end

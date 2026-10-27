@@ -281,7 +281,10 @@ end
         close(table)
     end
     rewritten = wpmetadata(output)
-    actual = only(rewritten.key_value_metadata)
+    # The stale ARROW:schema is dropped; the writer generates a fresh one last.
+    @test [item.key for item in rewritten.key_value_metadata] == ["source", "ARROW:schema"]
+    @test rewritten.key_value_metadata[2].value != "opaque-schema"
+    actual = first(rewritten.key_value_metadata)
     @test actual.key == expected.key
     @test actual.value == expected.value
     @test wpexact(actual.unknown_fields, expected.unknown_fields)
@@ -294,13 +297,14 @@ end
     end
     rewritten = wpmetadata(output)
     @test [element.name for element in rewritten.schema] == ["schema", "renamed"]
-    @test [item.key for item in rewritten.key_value_metadata] == ["source"]
+    @test [item.key for item in rewritten.key_value_metadata] == ["source", "ARROW:schema"]
     single = Parquet._encodefile((value=Int32[1],))
     onlystale = wprewritefooter(single,
         wpreplace(wpmetadata(single); key_value_metadata=stale))
     table = Parquet.Table(onlystale)
     try
-        @test wpmetadata(Parquet._encodefile(table)).key_value_metadata === nothing
+        @test [item.key for item in wpmetadata(Parquet._encodefile(table)).key_value_metadata] ==
+            ["ARROW:schema"]
     finally
         close(table)
     end

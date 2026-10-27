@@ -90,14 +90,17 @@ end
         s=Second.(1:3), min=Minute.(1:3), h=Hour.(1:3), d=Day.(1:3), w=Week.(1:3)))
     table = Parquet.Table(bytes)
     try
+        # The ARROW:schema gives each INT64 column its duration unit back; Minute
+        # through Week are stored as seconds.
         columns = Tables.columns(table)
-        for name in (:ns, :us, :ms, :s)
-            @test Tables.getcolumn(columns, name) == [1, 2, 3]
-        end
-        @test Tables.getcolumn(columns, :min) == [60, 120, 180]
-        @test Tables.getcolumn(columns, :h) == 3600 .* (1:3)
-        @test Tables.getcolumn(columns, :d) == 86400 .* (1:3)
-        @test Tables.getcolumn(columns, :w) == 604800 .* (1:3)
+        @test Tables.getcolumn(columns, :ns) == Nanosecond.(1:3)
+        @test Tables.getcolumn(columns, :us) == Microsecond.(1:3)
+        @test Tables.getcolumn(columns, :ms) == Millisecond.(1:3)
+        @test Tables.getcolumn(columns, :s) == Second.(1:3)
+        @test Tables.getcolumn(columns, :min) == Second.(60 .* (1:3))
+        @test Tables.getcolumn(columns, :h) == Second.(3600 .* (1:3))
+        @test Tables.getcolumn(columns, :d) == Second.(86400 .* (1:3))
+        @test Tables.getcolumn(columns, :w) == Second.(604800 .* (1:3))
     finally
         close(table)
     end

@@ -268,6 +268,37 @@ function _bindflat(schema::_WriteSchema, field::_FlatField, values::AbstractVect
     return _FlatBinding(values, _flatconverter(leaf, values, options.limits), optional)
 end
 
+# What a leaf's Parquet type cannot say about values of type `T`, for the ARROW:schema:
+# a zoned timestamp's time zone, or the TimeUnit of a period stored as an INT64 count
+# (seconds for Minute through Week).
+_arrowhint(::Type) = nothing
+_arrowhint(::Type{Durations.ZonedTimestamp{P,Z}}) where {P,Z} = String(Z)
+_arrowhint(::Type{Dates.Nanosecond}) = Int16(3)
+_arrowhint(::Type{Dates.Microsecond}) = Int16(2)
+_arrowhint(::Type{Dates.Millisecond}) = Int16(1)
+_arrowhint(::Type{<:Union{Dates.Second,Dates.Minute,Dates.Hour,Dates.Day,Dates.Week}}) =
+    Int16(0)
+
+function _writearrowhint!(hints::Dict{Vector{String},Any}, path::Vector{String}, T::Type)
+    hint = _arrowhint(Base.nonmissingtype(T))
+    hint === nothing || (hints[path] = hint)
+    return hints
+end
+
+_writearrowhints!(hints, schema::_WriteSchema, field::_FlatField, binding::_FlatBinding) =
+    _writearrowhint!(hints, schema.leaves[field.leaf].path, eltype(binding.column))
+
+_writearrowhints!(hints, ::_WriteSchema, ::_FieldSpec, binding::_NestedBinding) =
+    _writearrowhints!(hints, binding.node)
+
+function _writearrowhints!(hints, node::_NestedWriteNode)
+    plan = node.plan
+    plan isa _NestedLeafPlan &&
+        return _writearrowhint!(hints, plan.source.path, node.value_type)
+    foreach(child -> _writearrowhints!(hints, child), node.children)
+    return hints
+end
+
 # Binds one column of a later table: its declared type must give the field's schema.
 function _bindcolumn(schema::_WriteSchema, index::Int, name::String,
         values::AbstractVector, shape, options::_WriteOptions)
@@ -460,6 +491,8 @@ mutable struct Writer{S<:IO}
     rows::Int64
     metadata::Union{Nothing,Vector{Metadata.KeyValue}}
     colmetadata::Dict{String,Vector{Metadata.KeyValue}}
+    # Leaf path => time zone or duration unit for the ARROW:schema, from the first table.
+    arrowhints::Dict{Vector{String},Any}
     closed::Bool
 end
 
@@ -467,7 +500,8 @@ end
 # rejected before any chunk is encoded leaves an IO sink untouched.
 function _newwriter(io::IO, path, temporary, options::_WriteOptions)
     return Writer(io, path, temporary, options, nothing, _GroupRecord[], Int64(0),
-        Int64(0), nothing, Dict{String,Vector{Metadata.KeyValue}}(), false)
+        Int64(0), nothing, Dict{String,Vector{Metadata.KeyValue}}(),
+        Dict{Vector{String},Any}(), false)
 end
 
 function Writer(io::IO; nullable::Bool=true, kwargs...)
@@ -558,7 +592,8 @@ function _writetable!(writer::Writer, table, source)
         columns, rows = _writeinputcolumns(table, options.limits)
     end
     shapes = nothing
-    if writer.schema === nothing
+    isfirst = writer.schema === nothing
+    if isfirst
         if stored
             writer.schema = _storedschema(table, options)
         else
@@ -581,6 +616,13 @@ function _writetable!(writer::Writer, table, source)
                 _nestedwritebind(shapes[index], schema.semantic.root.children[index])))
         else
             push!(bindings, _bindcolumn(schema, index, name, values, nothing, options))
+        end
+    end
+    if isfirst
+        stored && merge!(writer.arrowhints, _arrowhints(_tablemetadata(table),
+            _tableschema(table), options.limits))
+        for (field, binding) in zip(schema.fields, bindings)
+            _writearrowhints!(writer.arrowhints, schema, field, binding)
         end
     end
     rows == 0 && return
@@ -756,7 +798,7 @@ function _finishfile!(writer::Writer)
         schema=schema.elements,
         num_rows=writer.rows,
         row_groups=rowgroups,
-        key_value_metadata=writer.metadata,
+        key_value_metadata=_withschema(writer.metadata, schema, writer.arrowhints),
         created_by=_createdby(),
         column_orders=options.chunk.statistics ? _writecolumnorders(schema.schema) : nothing,
     )
@@ -767,6 +809,22 @@ function _finishfile!(writer::Writer)
     Base.write(io, PARQUET_MAGIC)
     writer.offset += length(footer) + 4 + length(PARQUET_MAGIC)
     return
+end
+
+# The file's key-value metadata ends with an ARROW:schema generated from the written
+# schema, so Arrow readers recover time zones and durations the Parquet types cannot hold.
+# A stored schema with an annotation this package cannot read gets none.
+function _withschema(metadata, schema::_WriteSchema, hints)
+    arrow = try
+        _arrowschema(schema.schema; hints=hints)
+    catch err
+        err isa Union{FormatError,UnsupportedFeatureError} || rethrow()
+        nothing
+    end
+    arrow === nothing && return metadata
+    entries = metadata === nothing ? Metadata.KeyValue[] : copy(metadata)
+    push!(entries, Metadata.KeyValue(key="ARROW:schema", value=arrow))
+    return entries
 end
 
 function _writeindex!(writer::Writer, index, limits::Limits)
@@ -889,14 +947,16 @@ Keywords and defaults (pyarrow's):
   ordinals) whose column chunks get split-block bloom filters. Each filter is sized from
   its chunk's distinct values for a 1% false-positive rate. BOOLEAN columns get none.
 - `metadata`, `colmetadata`: file and column key-value metadata, by default the table's
-  DataAPI metadata. Column metadata is stored with each of the column's chunks.
+  DataAPI metadata. Column metadata is stored with each of the column's chunks. The
+  writer adds an `ARROW:schema` entry generated from the written schema (time zones of
+  zoned timestamps, units of `Dates` periods); that key is reserved.
 - `ntasks=Threads.nthreads()`: tasks encoding column chunks in parallel; the output does
   not depend on it.
 - `limits=Parquet.Limits()`.
 
 Writing a `Parquet.Table` keeps its stored schema and file key-value metadata, except the
-entries that describe the source's schema (`ARROW:schema`, `pandas`, and Spark's row
-metadata).
+entries that describe the source's schema (`ARROW:schema`, which is generated again,
+`pandas`, and Spark's row metadata).
 """
 function write(sink::Union{IO,AbstractString}, table; kwargs...)
     nullable = Tables.partitions(table) isa Tuple{Any} ? nothing : true

@@ -114,7 +114,10 @@ one row group. The column chunks of a row group are encoded on `ntasks` tasks
 written to a temporary file in the same directory and moved into place when writing
 finishes, so a failed write leaves an existing file intact. File and column key-value
 metadata come from the `metadata` and `colmetadata` keywords, or by default from the
-table's DataAPI metadata.
+table's DataAPI metadata. The file's metadata ends with an `ARROW:schema` entry generated
+from the written columns, so pyarrow and Polars read the time zone of a
+`Durations.ZonedTimestamp` column and the unit of a `Dates` period column, and
+`Parquet.Table` reads them back as the same types.
 
 ### Write a file in parts
 

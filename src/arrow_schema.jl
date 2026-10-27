@@ -314,6 +314,10 @@ function _arrowfieldobject(node::SchemaNode, hints)
             _FBObject[_arrowfieldobject(item, hints)])
     elseif repeated !== nothing && (logical !== nothing && logical.MAP !== nothing ||
             converted in (Metadata.ConvertedType.MAP, Metadata.ConvertedType.MAP_KEY_VALUE))
+        # A map without values is a list of its keys to pyarrow; an Arrow map needs both.
+        length(repeated.children) == 1 && return _arrowfieldobject(element.name,
+            nullable, (0x0c, _fbobject()),
+            _FBObject[_arrowfieldobject(only(repeated.children), hints)])
         entries = _arrowfieldobject(repeated.element.name, false, (0x0d, _fbobject()),
             _FBObject[_arrowfieldobject(child, hints) for child in repeated.children])
         return _arrowfieldobject(element.name, nullable, (0x11, _fbobject(false)),
@@ -379,7 +383,14 @@ end
 function _arrowhints!(hints, node::SchemaNode, field::_ArrowField)
     element = node.element
     if element.type_ !== nothing
-        kind = _logicalkind(element)
+        # An annotation this package cannot read gets no hint; reading the column
+        # reports it, so the rest of the file still opens.
+        kind = try
+            _logicalkind(element)
+        catch err
+            err isa Union{FormatError,UnsupportedFeatureError} || rethrow()
+            return
+        end
         if field.type == _ARROW_TIMESTAMP && kind isa _TimestampLogicalKind &&
                 kind.is_adjusted_to_utc && field.timezone !== nothing &&
                 !isempty(field.timezone) && field.timezone != "UTC"

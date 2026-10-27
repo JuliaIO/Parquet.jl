@@ -333,21 +333,21 @@ end
         label=Union{Missing,String}["a", missing, "b"],
     )
     @test bytes2hex(sha256(Parquet._encodefile(flat; statistics=false))) ==
-        "bd0f5655e9f9aca2a1aa5f1d2721d9ea8f5ca3c9a2714385cca49edfcb7c0256"
+        "14fdceb9fad03da64d4b2206d079d7efd171af4c4fc62c538dce5cb1bcf99cd3"
     @test bytes2hex(sha256(Parquet._encodefile(flat; pageindex=false,
         statistics=false))) ==
-        "2d33126eb969251001cb972c25a054f27274de3e6b3684dec5a7fa0a12d9beb4"
+        "032042c3748fcdf2d11c18d7a8562af83a4052d8a7a712f89d425660df5c00f9"
     dictionary = (
         id=fill(Int64(7), 64),
         flag=Union{Missing,Bool}[isodd(index) ? true : missing for index in 1:64],
     )
     @test bytes2hex(sha256(Parquet._encodefile(dictionary;
         pageversion=:v2, dictionary=true, statistics=false))) ==
-        "882a9fa55dc6f7cae7dd78db80d99a6bb0dd92a1d586537d71cd8f9d2105cd63"
+        "4cd005cfc828c588f480223577f1f1661b3893450c357e124167a4f152ba838a"
     @test bytes2hex(sha256(Parquet._encodefile(dictionary;
         pageversion=:v2, dictionary=true, pageindex=false,
         statistics=false))) ==
-        "81f6ae40c63b1ae73f6df1344ec4ba81031910092519cda6808f198d7ce30182"
+        "3f9d893a6cab868b29d9aee0b5df01ce5fe1a588bfe2aa9acd9c3f3c3bc23acf"
     lists = (
         days=Union{Missing,Vector{Union{Missing,Date}}}[
             missing,
@@ -357,11 +357,11 @@ end
     )
     @test bytes2hex(sha256(Parquet._encodefile(lists;
         pageversion=:v2, encoding=:plain, statistics=false))) ==
-        "d7a97e35b231befee376faf76c9ee8fb01ffcae60631b7113bd029ac803168b7"
+        "241204dec72d9bcb40e3550299a3ea894905d76e21325bee4ef1e8257c3a7e68"
     @test bytes2hex(sha256(Parquet._encodefile(lists;
         pageversion=:v2, encoding=:plain, pageindex=false,
         statistics=false))) ==
-        "c9ba5e006a12d3873e98b8b7948f6c35d2e090b1d3d09ac9036895d892e48afd"
+        "c55942e04f3ec885599b55b142a384de3e5355e1fd1ab26b0ed16c1b4e37fdb0"
 end
 
 @testset "PLAIN V1 writer metadata" begin

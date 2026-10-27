@@ -374,7 +374,7 @@ end
         label=Union{Missing,String}["a", missing, "b"])
     disabled = Parquet._encodefile(input; statistics=false)
     @test bytes2hex(sha256(disabled)) ==
-        "bd0f5655e9f9aca2a1aa5f1d2721d9ea8f5ca3c9a2714385cca49edfcb7c0256"
+        "14fdceb9fad03da64d4b2206d079d7efd171af4c4fc62c538dce5cb1bcf99cd3"
     metadata = wsmetadata(disabled)
     @test metadata.column_orders === nothing
     @test all(chunk -> chunk.meta_data.statistics === nothing,

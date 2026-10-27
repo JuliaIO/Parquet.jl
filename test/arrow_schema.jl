@@ -79,8 +79,11 @@ end
     @test eltype(table.lst[1]) == DS.ZonedTimestamp{Millisecond,Symbol("Asia/Tokyo")}
     @test last(only(table.m[1])) == Nanosecond(9)
 
-    # A table read with zones and durations writes back with its stored types.
+    # A table read with zones and durations writes them back: the writer's generated
+    # ARROW:schema carries the same hints.
     rewritten = Parquet.Table(take!(Parquet.write(IOBuffer(), table)))
     @test rewritten.st[1]["t"] == zoned(Microsecond, 7)
-    @test last(only(rewritten.m[1])) == 9
+    @test rewritten.st[1]["t"] isa DS.ZonedTimestamp{Microsecond,Symbol("Europe/Paris")}
+    @test eltype(rewritten.lst[1]) == DS.ZonedTimestamp{Millisecond,Symbol("Asia/Tokyo")}
+    @test last(only(rewritten.m[1])) == Nanosecond(9)
 end
