@@ -31,16 +31,6 @@ end
     @test Parquet._isdictionaryencoding(MD.Encoding.PLAIN_DICTIONARY)
     @test Parquet._isdictionaryencoding(MD.Encoding.RLE_DICTIONARY)
     @test !Parquet._isdictionaryencoding(MD.Encoding.PLAIN)
-    encoded = vcat(UInt8[0x02], Parquet.encode_hybrid(UInt64[0, 1, 2, 3, 2], 2))
-    @test Parquet._decodedictionaryindices(encoded, 5, 1, Parquet.Limits()) ==
-        (UInt64[0, 1, 2, 3, 2], length(encoded) + 1)
-    @test Parquet._decodedictionaryindices(UInt8[], 0, 1, Parquet.Limits()) == (UInt64[], 1)
-    @test_throws Parquet.FormatError Parquet._decodedictionaryindices(UInt8[33], 1, 1, Parquet.Limits())
-    dictionary = Parquet.DecodedDictionary([UInt8[0x01]])
-    values = Parquet._lookupdictionary(dictionary, UInt64[0, 0])
-    values[1][1] = 0xff
-    @test values[2] == UInt8[0x01]
-    @test_throws Parquet.FormatError Parquet._lookupdictionary(dictionary, UInt64[1])
     # Writer dictionaries deduplicate by exact bits, so +0.0 and -0.0 stay distinct
     # and two NaN payloads are not collapsed.
     bits = UInt32[0x00000000, 0x80000000, 0x7fc00001, 0x7fc00002]

@@ -1,7 +1,3 @@
-struct DecodedDictionary{T}
-    values::Vector{T}
-end
-
 function _isdictionaryencoding(encoding::Metadata.Encoding.T)
     return encoding == Metadata.Encoding.PLAIN_DICTIONARY ||
         encoding == Metadata.Encoding.RLE_DICTIONARY
@@ -34,18 +30,6 @@ function _dictionarypage!(dictionary::Vector{L}, ::Type{P}, convert, frame,
     return dictionary
 end
 
-function _decodedictionaryindices(bytes::AbstractVector{UInt8}, count::Int, offset::Int,
-    limits::Limits)
-    count >= 0 || throw(ArgumentError("dictionary index count must be nonnegative"))
-    if count == 0 && offset == length(bytes) + 1
-        return UInt64[], offset
-    end
-    _requirebytes(bytes, offset, 1)
-    bitwidth = Int(bytes[offset])
-    bitwidth <= 32 || throw(FormatError("dictionary index bit width $bitwidth exceeds 32"))
-    return decode_hybrid(bytes, count, bitwidth; offset=offset + 1, limits=limits)
-end
-
 function _dictionarycopy(value::Vector{UInt8})
     return copy(value)
 end
@@ -54,20 +38,6 @@ function _dictionarycopy(value)
     return value
 end
 
-function _lookupdictionary(dictionary::DecodedDictionary{T}, indices::Vector{UInt64}) where {T}
-    output = Vector{T}(undef, length(indices))
-    count = UInt64(length(dictionary.values))
-    for index in eachindex(indices)
-        raw = indices[index]
-        raw < count || throw(FormatError("dictionary index $raw is outside a dictionary of $count entries"))
-        output[index] = _dictionarycopy(dictionary.values[Int(raw) + 1])
-    end
-    return output
-end
-
-# Writes the `count` dictionary entries selected by the indices in `bytes[position:]`
-# (a bit-width byte, then RLE/bit-packed hybrid runs ending by `stop`) to
-# `dest[(offset + 1):(offset + count)]`, using `indices` as scratch.
 # Decodes `count` dictionary indices from `bytes[position:]` (a bit-width byte, then
 # RLE/bit-packed hybrid runs ending by `stop`) into `indices`.
 function _dictionaryindices!(indices::Vector{UInt32}, count::Int, bytes::_ByteView,
@@ -84,6 +54,9 @@ end
     throw(FormatError("dictionary index $raw is outside a dictionary of $entries entries"))
 end
 
+# Writes the `count` dictionary entries selected by the indices in `bytes[position:]`
+# (a bit-width byte, then RLE/bit-packed hybrid runs ending by `stop`) to
+# `dest[(offset + 1):(offset + count)]`, using `indices` as scratch.
 function _dictionary!(dest::Vector{L}, offset::Int, count::Int, dictionary::Vector{L},
         indices::Vector{UInt32}, bytes::_ByteView, position::Int, stop::Int) where {L}
     position = _dictionaryindices!(indices, count, bytes, position, stop)
@@ -91,8 +64,7 @@ function _dictionary!(dest::Vector{L}, offset::Int, count::Int, dictionary::Vect
     entries = UInt32(length(dictionary))
     @inbounds for index in 1:count
         raw = indices[index]
-        raw < entries || throw(FormatError(
-            "dictionary index $raw is outside a dictionary of $entries entries"))
+        raw < entries || _dictionaryindexerror(raw, entries)
         dest[offset + index] = _dictionarycopy(dictionary[raw + 1])
     end
     return position
