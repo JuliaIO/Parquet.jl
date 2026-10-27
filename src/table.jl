@@ -3,12 +3,22 @@ import DataAPI, Dates, Tables
 # `Table <: Tables.AbstractColumns`, so `table.x` is column `x`; the package reads the
 # fields below through `getfield` (the `_table*` accessors). A table owns its columns and
 # holds no file: reading copies every value out of the source, which is then released.
+# `colmetadata` holds each column's key-value metadata, in column order.
 struct Table{C<:NamedTuple} <: Tables.AbstractColumns
     metadata::Metadata.FileMetaData
     schema::Schema
     columns::C
     rows::Int
+    colmetadata::Vector{Vector{Pair{String,String}}}
 end
+
+function Table(metadata::Metadata.FileMetaData, schema::Schema, columns::NamedTuple,
+        rows::Int)
+    return Table(metadata, schema, columns, rows,
+        [Pair{String,String}[] for _ in 1:length(columns)])
+end
+
+_tablecolmetadata(table::Table) = getfield(table, :colmetadata)
 
 function _tablecolumns(table::Table)
     return getfield(table, :columns)
@@ -347,6 +357,47 @@ struct _ReadPlan
     ntasks::Int
     options::_ReadOptions
     limits::Limits
+    colmetadata::Vector{Vector{Pair{String,String}}}
+end
+
+# The key-value metadata of each top-level field of a file: its ARROW:schema field
+# metadata (where pyarrow and Polars keep it), then that of its first column chunk in the
+# first row group (where `Parquet.write` stores `colmetadata`).
+function _filecolmetadata(metadata::Metadata.FileMetaData, schema::Schema, limits::Limits)
+    fields = schema.root.children
+    result = [Pair{String,String}[] for _ in fields]
+    entries = something(metadata.key_value_metadata, Metadata.KeyValue[])
+    index = findlast(entry -> entry.key == "ARROW:schema", entries)
+    if index !== nothing && entries[index].value !== nothing
+        arrow = try
+            _decodearrowschema(entries[index].value, limits)
+        catch err
+            err isa Union{FormatError,LimitError} || rethrow()
+            nothing
+        end
+        if arrow !== nothing && length(arrow) == length(fields)
+            for (position, (node, field)) in enumerate(zip(fields, arrow))
+                node.element.name == field.name && append!(result[position], field.metadata)
+            end
+        end
+    end
+    isempty(metadata.row_groups) && return result
+    columns = first(metadata.row_groups).columns
+    leaf = 1
+    for (position, node) in enumerate(fields)
+        md = leaf <= length(columns) ? columns[leaf].meta_data : nothing
+        values = md === nothing ? nothing : md.key_value_metadata
+        values === nothing || append!(result[position],
+            (entry.key => something(entry.value, "") for entry in values))
+        leaf += _writeschemaleafcount(node)
+    end
+    return result
+end
+
+# The key-value metadata of each column a read with `plan` returns.
+function _outputcolmetadata(plan::_ReadPlan)
+    plan.bound === nothing && return plan.colmetadata
+    return [plan.colmetadata[column.index] for column in plan.bound.columns]
 end
 
 # The scan the read keywords ask for, or `nothing` for a whole-file read.
@@ -367,7 +418,9 @@ end
 
 function _readplan(metadata::Metadata.FileMetaData, schema::Schema, scan, ntasks::Int,
         options::_ReadOptions, limits::Limits)
-    scan === nothing && return _ReadPlan(nothing, metadata, schema, ntasks, options, limits)
+    colmetadata = _filecolmetadata(metadata, schema, limits)
+    scan === nothing && return _ReadPlan(nothing, metadata, schema, ntasks, options, limits,
+        colmetadata)
     sourcenames = _tablenames(schema, limits)
     bound = Tables.resolve(scan, sourcenames)
     any(column -> column.type !== nothing, bound.columns) && throw(ArgumentError(
@@ -376,7 +429,7 @@ function _readplan(metadata::Metadata.FileMetaData, schema::Schema, scan, ntasks
         bound.filtercols)))
     metadata, schema = _selectfields(metadata, schema, positions,
         String[String(sourcenames[position]) for position in positions], limits)
-    return _ReadPlan(bound, metadata, schema, ntasks, options, limits)
+    return _ReadPlan(bound, metadata, schema, ntasks, options, limits, colmetadata)
 end
 
 """
@@ -395,8 +448,9 @@ are those of [`Parquet.Table`](@ref) and apply to every table the file yields.
   is known only while reading, so such a file can be iterated but not indexed.
 - `DataAPI.nrow(file)` is the row count of an unfiltered read.
 - `DataAPI.metadata(file)` gives the file's key-value metadata (without the
-  `ARROW:schema` entry, which sets column types) and [`Parquet.metadata`](@ref) the raw
-  footer metadata (statistics, encodings).
+  `ARROW:schema` entry, which sets column types), `DataAPI.colmetadata(file, column)` a
+  column's (its ARROW:schema field metadata and its column chunks' key-value metadata),
+  and [`Parquet.metadata`](@ref) the raw footer metadata (statistics, encodings).
 - As a Tables.jl source (for example `DataFrame(file)`), the file reads every row group.
 
 `source` is a path, a byte vector, an `IO`, or a [`Parquet.AbstractSource`](@ref). A
@@ -406,20 +460,39 @@ function File(input; select=nothing, drop=nothing, filter=nothing, limit=nothing
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
         int96::Type=Dates.Nanosecond, limits::Limits=Limits(),
         budget::_ByteBudget=_ByteBudget(limits))
+    return _openfile(input, nothing; select=select, drop=drop, filter=filter, limit=limit,
+        scan=scan, ntasks=ntasks, int96=int96, limits=limits, budget=budget)
+end
+
+# A `File`; `cached` is the footer and decoded metadata of an earlier open of the same
+# file, which are reused (a dataset reads each footer once).
+function _openfile(input, cached::Union{Nothing,Tuple{Footer,Metadata.FileMetaData}};
+        select=nothing, drop=nothing, filter=nothing, limit=nothing,
+        scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
+        int96::Type=Dates.Nanosecond, limits::Limits=Limits(),
+        budget::_ByteBudget=_ByteBudget(limits))
     ntasks >= 1 || throw(ArgumentError("ntasks must be at least 1, got $ntasks"))
     request = _scanrequest(select, drop, filter, limit, scan)
     options = _ReadOptions(; int96=int96)
     owned = !(input isa AbstractSource)
     src = source(input; budget=budget)
     try
-        footer = readfooter(src, limits)
-        metadata = _decodefooter(footer, limits, budget)
-        metadata.num_rows >= 0 || throw(FormatError("file metadata has a negative row count"))
-        metadata.num_rows <= typemax(Int) || throw(FormatError("file row count overflows Int"))
-        _checklimit(:container_elements, metadata.num_rows, limits.max_container_elements)
+        if cached === nothing
+            footer = readfooter(src, limits)
+            metadata = _decodefooter(footer, limits, budget)
+            metadata.num_rows >= 0 || throw(FormatError("file metadata has a negative row count"))
+            metadata.num_rows <= typemax(Int) || throw(FormatError("file row count overflows Int"))
+            _checklimit(:container_elements, metadata.num_rows, limits.max_container_elements)
+        else
+            footer, metadata = cached
+            _checkedsourcelength(src) == footer.offset + footer.length + 8 || throw(
+                FormatError("the file changed after its footer was read"))
+        end
         schema = Schema(metadata; limits=limits)
-        _validatetablerowgroups(metadata, schema, limits)
-        _validatetablechunkranges(metadata, schema, footer.offset)
+        if cached === nothing
+            _validatetablerowgroups(metadata, schema, limits)
+            _validatetablechunkranges(metadata, schema, footer.offset)
+        end
         options = _ReadOptions(options.int96, _arrowhints(metadata, schema, limits))
         plan = _readplan(metadata, schema, request, Int(ntasks), options, limits)
         file = File(src, footer, metadata, plan, owned, false)
@@ -467,12 +540,12 @@ function _readtable(file::File, groups::AbstractVector{Int}, budget::_ByteBudget
     columns, rows = _readselectedflat(_coalescedfile(file, metadata, schema), plan, parts,
         filter !== nothing, offset, limit, budget)
     named = NamedTuple{Tuple(_tablenames(schema, limits))}(Tuple(columns))
-    bound === nothing && return Table(metadata, schema, named, rows)
+    bound === nothing && return Table(metadata, schema, named, rows, _outputcolmetadata(plan))
     projection = Tables.BoundScan(bound.columns, nothing, bound.filtercols, nothing, 0,
         bound.validate)
     named, rows, metadata, schema = _scanresidual(named, rows, projection, metadata, schema,
         limits, 0, nothing)
-    return Table(metadata, schema, named, rows)
+    return Table(metadata, schema, named, rows, _outputcolmetadata(plan))
 end
 
 # File metadata restricted to the row groups `groups`.
@@ -511,7 +584,7 @@ function _readgroups(file::File, groups::AbstractVector{Int}, budget::_ByteBudge
         named, rows, metadata, schema = _scanresidual(named, rows, bound, metadata, schema,
             limits, offset, limit)
     end
-    return Table(metadata, schema, named, rows)
+    return Table(metadata, schema, named, rows, _outputcolmetadata(plan))
 end
 
 # `file` reading through a `_CoalescedSource` over the column chunks of `metadata`, when
@@ -530,11 +603,14 @@ end
 """
     Parquet.Table(source; select=nothing, drop=nothing, filter=nothing, limit=nothing,
                   scan=nothing, ntasks=Threads.nthreads(), int96=Dates.Nanosecond,
-                  limits=Parquet.Limits())
+                  partitioning=:hive, limits=Parquet.Limits())
 
 Read a Parquet file from a path, a byte vector, an `IO`, or a
 [`Parquet.AbstractSource`](@ref) into Tables.jl columns. The table owns its columns: a
-path is unmapped and closed before `Table` returns, and a source you pass stays open.
+path is unmapped and closed before `Table` returns, and a source you pass stays open. A
+directory, a glob pattern, a vector of paths or sources, or a
+[`Parquet.Dataset`](@ref) reads every file of the dataset into one table, with the
+dataset's partition columns (`partitioning`).
 
 - `select` keeps the given columns, in that order (names, indices, a regex, or a vector
   of them); `drop` keeps all but the given columns.
@@ -559,7 +635,10 @@ nanosecond range (1677 to 2262); read such files with `int96=Dates.Microsecond`.
 """
 function Table(input; select=nothing, drop=nothing, filter=nothing, limit=nothing,
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
-        int96::Type=Dates.Nanosecond, limits::Limits=Limits())
+        int96::Type=Dates.Nanosecond, partitioning=:hive, limits::Limits=Limits())
+    _isdataset(input) && return _readdataset(Dataset(input; partitioning=partitioning,
+        select=select, drop=drop, filter=filter, limit=limit, scan=scan, ntasks=ntasks,
+        int96=int96, limits=limits))
     budget = _ByteBudget(limits)
     file = File(input; select=select, drop=drop, filter=filter, limit=limit, scan=scan,
         ntasks=ntasks, int96=int96, limits=limits, budget=budget)
@@ -569,6 +648,12 @@ function Table(input; select=nothing, drop=nothing, filter=nothing, limit=nothin
         close!(file)
     end
 end
+
+# Whether `Table` reads `input` as a dataset: a directory, a glob pattern, or a vector of
+# paths or sources.
+_isdataset(input::AbstractString) = !isfile(input) && (isdir(input) || _isglob(input))
+_isdataset(input::AbstractVector) = !(input isa AbstractVector{UInt8})
+_isdataset(input) = false
 
 # Applies the filter, row bounds, order, and renames of a resolved scan to the columns
 # read for it, and restricts the schema to the output columns.
@@ -691,7 +776,8 @@ function Base.iterate(file::File, (index, skip, keep)::Tuple{Int,Int,Any})
             Tables.Scan(; offset=drop, limit=take))
         named = NamedTuple{keys(columns)}(Tuple(Tables.getcolumn(sliced, name)
             for name in keys(columns)))
-        table = Table(_tablemetadata(table), _tableschema(table), named, take)
+        table = Table(_tablemetadata(table), _tableschema(table), named, take,
+            _tablecolmetadata(table))
     end
     return table, (index + 1, skip - drop, keep === nothing ? nothing : keep - take)
 end
@@ -755,6 +841,19 @@ function DataAPI.metadata(x::Union{File,Table}, key::AbstractString, default;
         entry.key == key && return style ? (entry.value, :default) : entry.value
     end
     return style ? (default, :default) : default
+end
+
+# Column metadata through DataAPI (style `:default`): each column's names and entries.
+DataAPI.colmetadatasupport(::Type{<:Union{File,Table}}) = (read=true, write=false)
+
+_colmetadataentries(table::Table) = collect(keys(_tablecolumns(table))),
+    _tablecolmetadata(table)
+
+function _colmetadataentries(file::File)
+    plan = file.plan
+    names = plan.bound === nothing ? _tablenames(file.plan.schema, plan.limits) :
+        Symbol[column.name for column in plan.bound.columns]
+    return names, _outputcolmetadata(plan)
 end
 
 """

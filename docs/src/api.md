@@ -9,6 +9,7 @@ CurrentModule = Parquet
 ```@docs
 Parquet.Table
 Parquet.File
+Parquet.Dataset
 Parquet.read
 Parquet.metadata
 Parquet.write

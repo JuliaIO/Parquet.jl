@@ -147,7 +147,7 @@ end
 
 function source(path::AbstractString; budget::_ByteBudget=_UNCAPPED)
     isdir(path) && throw(ArgumentError(
-        "$(repr(path)) is a directory; Parquet reads one file at a time"))
+        "$(repr(path)) is a directory; read it with Parquet.Dataset or Parquet.Table"))
     io = open(path, "r")
     try
         count = filesize(io)

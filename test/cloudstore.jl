@@ -20,3 +20,25 @@ using Tables
         close(file)
     end
 end
+
+@testset "CloudStore datasets" begin
+    Minio.with() do conf
+        credentials, bucket = conf
+        for year in (2024, 2025), part in 1:2
+            bytes = take!(Parquet.write(IOBuffer(), (id=[100 * year + part], s=["v$part"])))
+            CloudStore.put(bucket, "lake/year=$year/part-$part.parquet", bytes; credentials)
+        end
+        CloudStore.put(bucket, "lake/_SUCCESS", UInt8[]; credentials)
+        CloudStore.put(bucket, "lakehouse/x.parquet",
+            take!(Parquet.write(IOBuffer(), (id=[1],))); credentials)
+        ds = Parquet.Dataset(bucket, "lake/"; credentials)
+        @test length(ds.files) == 4
+        t = Parquet.Table(ds)
+        @test t.year == [2024, 2024, 2025, 2025]
+        @test t.id == [202401, 202402, 202501, 202502]
+        filtered = Parquet.Dataset(bucket, "lake/"; credentials,
+            filter=Parquet.colcmp(==, Parquet.col(:year), 2025))
+        @test Parquet.Table(filtered).id == [202501, 202502]
+        @test_throws ArgumentError Parquet.Dataset(bucket, "nothing-here/"; credentials)
+    end
+end

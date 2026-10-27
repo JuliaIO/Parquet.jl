@@ -227,9 +227,17 @@ end
     catch err
         err
     end
+    # An empty directory is a dataset without files; a File is one file.
     @test error isa ArgumentError
-    @test occursin("is a directory", sprint(showerror, error))
-    @test_throws ArgumentError Parquet.File(directory)
+    @test occursin("no Parquet files found", sprint(showerror, error))
+    error = try
+        Parquet.File(directory)
+        nothing
+    catch err
+        err
+    end
+    @test error isa ArgumentError
+    @test occursin("is a directory; read it with Parquet.Dataset", sprint(showerror, error))
 end
 
 @testset "path setup cleanup" begin

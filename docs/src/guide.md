@@ -17,7 +17,9 @@ df = Parquet.read("input.parquet", DataFrame) # columns handed over without a co
 ```
 
 Column chunks decode on `Threads.nthreads()` tasks; pass `ntasks=1` to read on the
-calling task. `DataAPI.metadata(table)` gives the file's key-value metadata and
+calling task. `DataAPI.metadata(table)` gives the file's key-value metadata,
+`DataAPI.colmetadata(table, :price)` a column's (from the file's ARROW:schema, as pyarrow
+and Polars store it, or from its column chunks, as `Parquet.write` does), and
 `Parquet.metadata(table)` the raw footer metadata.
 
 ### Column types
@@ -93,6 +95,29 @@ file = Parquet.File("input.parquet"; select=[:id, :price])
 total = sum(sum(part.price) for part in file)
 close(file)
 ```
+
+### Read a dataset of many files
+
+`Parquet.Table` and `Parquet.read` also take a directory, a glob pattern
+(`"lake/**/*.parquet"`), or a vector of paths or sources, and read every file as one
+table; `Parquet.Dataset` opens such a source without reading data, and iterates it one
+row group at a time. Names starting with `.` or `_` (`_SUCCESS`, `.crc` files) are
+skipped. Directories named `key=value` (Hive partitioning, as pyarrow's
+`write_to_dataset`, Polars' `partition_by`, and DuckDB's `PARTITION_BY` write them) add a
+typed column `key`, and a filter on it skips whole files:
+
+```julia
+trips = Parquet.Table("lake/trips/"; filter=Parquet.colcmp(==, Parquet.col(:year), 2025))
+ds = Parquet.Dataset("lake/trips/"; select=[:fare, :year])
+Tables.schema(ds), DataAPI.nrow(ds)              # from the footers only
+for part in ds                                    # one table per file row group
+    process(part)
+end
+```
+
+Columns match by name across files; a column some files lack reads as `missing` in
+their rows. With CloudStore loaded, `Parquet.Dataset(bucket, "lake/trips/";
+credentials)` lists and reads the objects under a prefix.
 
 ## Write a table
 

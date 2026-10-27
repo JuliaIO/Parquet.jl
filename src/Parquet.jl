@@ -43,12 +43,13 @@ include("write_logical.jl")
 include("logical_column.jl")
 include("table.jl")
 include("pushdown.jl")
+include("dataset.jl")
 include("write_nested.jl")
 include("writer.jl")
 include("precompile.jl")
 
 if VERSION >= v"1.11"
-    Core.eval(@__MODULE__, Expr(:public, :AbstractSource, :BSONValue, :Decimal, :File,
+    Core.eval(@__MODULE__, Expr(:public, :AbstractSource, :BSONValue, :Dataset, :Decimal, :File,
         :FormatError, :JSONValue, :LimitError, :Limits, :LogicalColumn, :Table,
         :UnsupportedFeatureError, :Writer, :col, :colcmp, :colin, :concurrentreads,
         :isnull, :metadata, :read, :readrange, :sourcelength, :write))
