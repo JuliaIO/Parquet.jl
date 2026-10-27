@@ -196,7 +196,7 @@ function wsroundtrip(bytes::Vector{UInt8}, expected::NamedTuple)
     table = Parquet.Table(bytes)
     try
         for name in keys(expected)
-            @test isequal(getproperty(table.columns, name),
+            @test isequal(getproperty(Parquet.Tables.columns(table), name),
                 getproperty(expected, name))
         end
     finally

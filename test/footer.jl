@@ -92,21 +92,24 @@ end
 
 @testset "footer framing" begin
     input = parquetbytes(UInt8[0x01, 0x02, 0x03])
-    file = Parquet.File(input)
-    @test file.footer.offset == 4
-    @test file.footer.length == 3
-    @test !file.footer.encrypted
-    @test collect(file.footer.bytes) == UInt8[0x01, 0x02, 0x03]
-    close(file)
-    close(file)
+    footer = Parquet.readfooter(Parquet.source(input))
+    @test footer.offset == 4
+    @test footer.length == 3
+    @test !footer.encrypted
+    @test collect(footer.bytes) == UInt8[0x01, 0x02, 0x03]
+    # File decodes the footer it frames.
+    @test_throws Parquet.FormatError Parquet.File(input)
 
-    encrypted = Parquet.File(parquetbytes(UInt8[0xaa]; encrypted=true))
-    @test encrypted.footer.encrypted
-    close(encrypted)
+    encryptedbytes = parquetbytes(UInt8[0xaa]; encrypted=true)
+    @test Parquet.readfooter(Parquet.source(encryptedbytes)).encrypted
+    @test_throws Parquet.UnsupportedFeatureError Parquet.File(encryptedbytes)
 
-    custom = Parquet.File(TestSource(input))
-    @test custom.footer.length == 3
+    @test Parquet.readfooter(TestSource(input)).length == 3
+    valid = Parquet._encodefile((a=Int32[1, 2],))
+    custom = Parquet.File(TestSource(valid))
+    @test custom.metadata.num_rows == 2
     @test !Parquet.concurrentreads(custom.source)
+    close(custom)
     close(custom)
 
     @test_throws Parquet.FormatError Parquet.File(UInt8[])
@@ -126,12 +129,10 @@ end
 @testset "footer exact source reads" begin
     input = parquetbytes(UInt8[0x01, 0x02, 0x03])
     source = FooterProbeSource(input; mode=:length_changing)
-    file = Parquet.File(source)
+    Parquet.readfooter(source)
     @test source.lengthcalls == 1
     @test source.reads == [(Int64(0), Int64(4)),
         (Int64(length(input) - 8), Int64(8)), (Int64(4), Int64(3))]
-    close(file)
-    @test source.closes == 1
 
     invalid = copy(input)
     invalid[1] = 0x00
@@ -188,7 +189,7 @@ end
 end
 
 @testset "File source ownership and copied IO" begin
-    input = parquetbytes(UInt8[0x01, 0x02, 0x03])
+    input = Parquet._encodefile((a=Int32[1, 2, 3],))
     failed = FooterProbeSource(UInt8[])
     @test_throws Parquet.FormatError Parquet.File(failed)
     @test failed.closes == 0
@@ -200,9 +201,10 @@ end
     close(file)
     @test adopted.closes == 1
 
-    tablefailure = FooterProbeSource(input)
+    # A source whose footer does not decode is not adopted.
+    tablefailure = FooterProbeSource(parquetbytes(UInt8[0x01, 0x02, 0x03]))
     @test_throws Parquet.FormatError Parquet.Table(tablefailure)
-    @test tablefailure.closes == 1
+    @test tablefailure.closes == 0
 
     limits = Parquet.Limits(max_materialized_bytes=100_000)
     invalidio = IOBuffer(UInt8[])

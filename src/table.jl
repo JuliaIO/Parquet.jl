@@ -1,6 +1,8 @@
-import Tables
+import DataAPI, Tables
 
-mutable struct Table{F<:File,C<:NamedTuple}
+# `Table <: Tables.AbstractColumns`, so `table.x` is column `x`; the package reads the
+# fields below through `getfield` (the `_table*` accessors).
+mutable struct Table{F<:File,C<:NamedTuple} <: Tables.AbstractColumns
     file::F
     metadata::Metadata.FileMetaData
     schema::Schema
@@ -9,26 +11,31 @@ mutable struct Table{F<:File,C<:NamedTuple}
     @atomic closed::Bool
 end
 
+function _tablecolumns(table::Table)
+    return getfield(table, :columns)
+end
+
+function _tablemetadata(table::Table)
+    return getfield(table, :metadata)
+end
+
+function _tableschema(table::Table)
+    return getfield(table, :schema)
+end
+
+function _tablerows(table::Table)
+    return getfield(table, :rows)
+end
+
 function _writefieldsencoded(table::Table, limits::Limits, encoding,
         dictionary::Bool)
     return _provenancewritefields(table, limits, encoding, dictionary)
 end
 
 function _writekeyvaluemetadata(table::Table, limits::Limits)
-    metadata = table.metadata.key_value_metadata
+    metadata = _tablemetadata(table).key_value_metadata
     metadata === nothing && return nothing
     return _rewritekeyvaluemetadata(metadata, limits)
-end
-
-function _readfilemetadata(file::File, limits::Limits,
-    budget::_ByteBudget=_ByteBudget(limits))
-    file.footer.encrypted && throw(FormatError("encrypted footers are not supported yet"))
-    reader = Thrift.Reader(file.footer.bytes; limits=limits, budget=budget)
-    metadata = Thrift.decode(reader, Metadata.FileMetaData)
-    metadata.encryption_algorithm === nothing || throw(FormatError(
-        "plaintext-footer encryption is not supported yet"))
-    Thrift.remaining(reader) == 0 || throw(FormatError("file footer has trailing bytes"))
-    return metadata
 end
 
 function _tablenames(schema::Schema, limits::Limits)
@@ -347,7 +354,7 @@ function Table(input; scan::Union{Nothing,Tables.Scan}=nothing,
     budget = _ByteBudget(limits)
     file = File(input; limits=limits, budget=budget)
     try
-        metadata = _readfilemetadata(file, limits, budget)
+        metadata = file.metadata
         metadata.num_rows >= 0 || throw(FormatError("file metadata has a negative row count"))
         metadata.num_rows <= typemax(Int) || throw(FormatError("file row count overflows Int"))
         _checklimit(:container_elements, metadata.num_rows, limits.max_container_elements)
@@ -428,7 +435,7 @@ end
 
 function close!(table::Table)
     (@atomicswap table.closed = true) && return
-    close!(table.file)
+    close!(getfield(table, :file))
     return
 end
 
@@ -437,32 +444,52 @@ function Base.close(table::Table)
     return
 end
 
-function Base.length(table::Table)
-    return table.rows
-end
-
-function Tables.istable(::Type{<:Table})
-    return true
-end
-
-function Tables.columnaccess(::Type{<:Table})
-    return true
-end
-
 function Tables.columns(table::Table)
-    return table.columns
+    return _tablecolumns(table)
 end
 
 function Tables.columnnames(table::Table)
-    return keys(table.columns)
+    return keys(_tablecolumns(table))
+end
+
+function Tables.getcolumn(table::Table, name::Symbol)
+    return getfield(_tablecolumns(table), name)
+end
+
+function Tables.getcolumn(table::Table, index::Int)
+    return getfield(_tablecolumns(table), index)
+end
+
+function Tables.getcolumn(table::Table, ::Type{T}, index::Int, name::Symbol) where {T}
+    return getfield(_tablecolumns(table), index)
 end
 
 function Tables.schema(table::Table)
-    names = Tuple(keys(table.columns))
-    types = Tuple(eltype(column) for column in values(table.columns))
-    return Tables.Schema(names, types)
+    columns = _tablecolumns(table)
+    return Tables.Schema(Tuple(keys(columns)), Tuple(eltype(column) for column in columns))
 end
 
 function Tables.rowcount(table::Table)
-    return length(table)
+    return _tablerows(table)
+end
+
+function DataAPI.nrow(table::Table)
+    return _tablerows(table)
+end
+
+function DataAPI.ncol(table::Table)
+    return length(_tablecolumns(table))
+end
+
+function Base.show(io::IO, table::Table)
+    print(io, "Parquet.Table(", _tablerows(table), " rows, ", DataAPI.ncol(table),
+        " columns)")
+    return
+end
+
+function Base.show(io::IO, ::MIME"text/plain", table::Table)
+    print(io, "Parquet.Table with ", _tablerows(table), " rows, ", DataAPI.ncol(table),
+        " columns, and schema:\n")
+    show(IOContext(io, :print_schema_header => false), Tables.schema(table))
+    return
 end

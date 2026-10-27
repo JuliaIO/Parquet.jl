@@ -42,7 +42,7 @@ end
 function _chunkmetadata(chunk::Metadata.ColumnChunk, node::SchemaNode)
     chunk.file_path === nothing || throw(FormatError("column chunks stored in another file are not supported"))
     chunk.crypto_metadata === nothing && chunk.encrypted_column_metadata === nothing ||
-        throw(FormatError("encrypted column chunks are not supported"))
+        throw(UnsupportedFeatureError("encrypted column chunks are not supported"))
     md = chunk.meta_data
     md === nothing && throw(FormatError("column chunk has no metadata"))
     md.type_ == node.element.type_ ||
@@ -238,14 +238,14 @@ function (logical::_LogicalValue{L})(value) where {L}
         logical.limits))::L
 end
 
-# The conversion of `element`'s physical values and the type it produces. STRING values
-# become DataStrings payloads (`_StringPayloads`).
+# The conversion of `element`'s physical values and the type it produces. STRING and
+# ENUM values become DataStrings payloads (`_StringPayloads`).
 function _valueconverter(element::Metadata.SchemaElement, limits::Limits)
     physical = _physicaleltype(element.type_)
     kind = _logicalkind(element)
     kind === nothing && return identity, physical
     L = _logicaleltype(element, physical)
-    kind === :string && return _StringPayloads(limits), DataStrings.StringPayload
+    kind in (:string, :enum) && return _StringPayloads(limits), DataStrings.StringPayload
     kind === :date && return _DateValue(), L
     kind === :int96 && return _Int96Value(element), L
     kind isa _TimestampLogicalKind &&

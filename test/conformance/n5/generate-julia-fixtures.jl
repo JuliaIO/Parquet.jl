@@ -123,9 +123,9 @@ end
 function n5checkproperty(case, fixture)
     table = Parquet.Table(fixture.bytes)
     try
-        table.rows == length(case.rows) || throw(ArgumentError(
+        Parquet._tablerows(table) == length(case.rows) || throw(ArgumentError(
             "property case $(case.id) row count differs"))
-        N5.n5schemaexact(table.metadata.schema, fixture.schema) ||
+        N5.n5schemaexact(Parquet._tablemetadata(table).schema, fixture.schema) ||
             throw(ArgumentError("property case $(case.id) schema differs"))
         isequal(N5.n5normalizetable(case.node, table), case.rows) ||
             throw(ArgumentError("property case $(case.id) rows differ"))
@@ -209,9 +209,9 @@ function n5normalizeread(value)
 end
 
 function n5normalizetable(table::Parquet.Table)
-    columns = collect(pairs(table.columns))
-    output = Vector{Vector{Pair{String,Any}}}(undef, table.rows)
-    for row in 1:table.rows
+    columns = collect(pairs(Parquet.Tables.columns(table)))
+    output = Vector{Vector{Pair{String,Any}}}(undef, Parquet._tablerows(table))
+    for row in 1:Parquet._tablerows(table)
         values = Pair{String,Any}[]
         sizehint!(values, length(columns))
         for column in columns

@@ -88,7 +88,7 @@ end
             encoding=:delta_binary_packed)
         table = Parquet.Table(bytes)
         for name in keys(input)
-            @test isequal(getproperty(table.columns, name), getproperty(input, name))
+            @test isequal(getproperty(Parquet.Tables.columns(table), name), getproperty(input, name))
         end
         close(table)
 
@@ -154,13 +154,13 @@ end
     for pageversion in (:v1, :v2)
         bytes = Parquet._encodefile(input; pageversion=pageversion, codec=:zstd)
         table = Parquet.Table(bytes)
-        @test isequal(table.columns.uuids, uuids)
-        @test reinterpret(UInt16, collect(skipmissing(table.columns.halves))) ==
+        @test isequal(Parquet.Tables.columns(table).uuids, uuids)
+        @test reinterpret(UInt16, collect(skipmissing(Parquet.Tables.columns(table).halves))) ==
             reinterpret(UInt16, collect(skipmissing(halves)))
-        @test isequal(table.columns.json, json)
-        @test isequal(table.columns.bson, bson)
-        @test isequal(table.columns.intervals, intervals)
-        @test isequal(table.columns.nulls, nulls)
+        @test isequal(Parquet.Tables.columns(table).json, json)
+        @test isequal(Parquet.Tables.columns(table).bson, bson)
+        @test isequal(Parquet.Tables.columns(table).intervals, intervals)
+        @test isequal(Parquet.Tables.columns(table).nulls, nulls)
         close(table)
 
         file = Parquet.File(bytes)
@@ -202,9 +202,9 @@ end
             encoding=(small=:delta_binary_packed, medium=:delta_binary_packed,
                 wide=:delta_byte_array))
         table = Parquet.Table(bytes)
-        @test isequal(table.columns.small, decimalexpected(small))
-        @test table.columns.medium == decimalexpected(medium)
-        @test table.columns.wide == decimalexpected(wide)
+        @test isequal(Parquet.Tables.columns(table).small, decimalexpected(small))
+        @test Parquet.Tables.columns(table).medium == decimalexpected(medium)
+        @test Parquet.Tables.columns(table).wide == decimalexpected(wide)
         close(table)
 
         file = Parquet.File(bytes)
@@ -267,7 +267,7 @@ end
             converted=Parquet.Metadata.ConvertedType.TIME_MICROS)
     end
     table = Parquet.Table(timebytes)
-    @test table.columns.value == [Time(Dates.Nanosecond(1_000_000))]
+    @test Parquet.Tables.columns(table).value == [Time(Dates.Nanosecond(1_000_000))]
     rewritten = Parquet._encodefile(table)
     close(table)
     file = Parquet.File(rewritten)
@@ -305,7 +305,7 @@ end
             converted=Parquet.Metadata.ConvertedType.UTF8)
     end
     table = Parquet.Table(enumbytes)
-    @test table.columns.value == ["alpha", "beta"]
+    @test Parquet.Tables.columns(table).value == ["alpha", "beta"]
     rewritten = Parquet._encodefile(table)
     close(table)
     file = Parquet.File(rewritten)
@@ -320,7 +320,7 @@ end
             converted=Parquet.Metadata.ConvertedType.UTF8)
     end
     table = Parquet.Table(legacystring)
-    @test table.columns.value == ["legacy"]
+    @test Parquet.Tables.columns(table).value == ["legacy"]
     rewritten = Parquet._encodefile(table)
     close(table)
     file = Parquet.File(rewritten)
@@ -380,7 +380,7 @@ end
             converted=Parquet.Metadata.ConvertedType.UTF8)
     end
     table = Parquet.Table(opaquebytes)
-    @test table.columns.value == Vector{UInt8}[collect(codeunits("future"))]
+    @test Parquet.Tables.columns(table).value == Vector{UInt8}[collect(codeunits("future"))]
     rewritten = Parquet._encodefile(table)
     close(table)
     file = Parquet.File(rewritten)
@@ -437,7 +437,7 @@ end
         table = Parquet.Table(bytes)
         try
             elements = filter(element -> element.type_ !== nothing,
-                table.metadata.schema)
+                Parquet._tablemetadata(table).schema)
             if source === nested
                 stamps = [element.logicalType.TIMESTAMP for element in elements
                     if element.logicalType !== nothing &&
@@ -451,9 +451,9 @@ end
             decimal = last(elements)
             @test decimal.logicalType.DECIMAL.precision == 1
             @test decimal.logicalType.DECIMAL.scale == 0
-            @test table.rows == length(first(source))
+            @test Parquet._tablerows(table) == length(first(source))
             source === flat && @test all(column -> all(ismissing, column),
-                values(table.columns))
+                values(Parquet.Tables.columns(table)))
         finally
             close(table)
         end

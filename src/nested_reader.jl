@@ -79,7 +79,8 @@ function _nestedreadcheckvalues(values::Vector{T}, leaf::_NestedLeafPlan) where 
     expected = _physicaleltype(leaf.source.element.type_)
     logical = _nestedreadlogicaltype(leaf)
     T === logical && logical !== expected && return
-    T === DataStrings.StringPayload && _logicalkind(leaf.source) === :string && return
+    T === DataStrings.StringPayload && _logicalkind(leaf.source) in (:string, :enum) &&
+        return
     T === expected && leaf.source.element.type_ != Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
         return
     for value in values

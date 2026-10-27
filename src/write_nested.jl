@@ -1106,15 +1106,15 @@ end
 
 function _provenancewritefields(table::Table, limits::Limits, encoding,
         dictionary::Bool)
-    rows = table.rows
+    rows = _tablerows(table)
     rows >= 0 || throw(ArgumentError("Parquet row count must be nonnegative"))
     _checklimit(:container_elements, rows, limits.max_container_elements)
-    elements = copy(table.metadata.schema)
+    elements = copy(_tablemetadata(table).schema)
     schema = Schema(elements; limits=limits)
     semantic = _nestedplan(schema; limits=limits)
     children = semantic.root.children
     names = Tables.columnnames(table)
-    columns = Base.values(table.columns)
+    columns = Base.values(_tablecolumns(table))
     length(columns) == length(children) || throw(ArgumentError(
         "table columns no longer match the stored Parquet schema"))
     for (index, child) in enumerate(children)

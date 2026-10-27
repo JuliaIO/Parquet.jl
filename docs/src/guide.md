@@ -2,19 +2,22 @@
 
 ## Read a table
 
-`Parquet.Table(path)` reads a Parquet file and exposes column access through
-Tables.jl. Close the table when it is no longer needed.
+`Parquet.Table(path)` reads a Parquet file into columns. A table is a
+`Tables.AbstractColumns`: `table.price`, `table[:price]`, and
+`Tables.getcolumn(table, :price)` return a column, and any Tables.jl sink accepts it.
+Close the table when it is no longer needed.
 
 ```julia
 using Parquet
-using Tables
 
 table = Parquet.Table("input.parquet")
-columns = Tables.columntable(table)
+table.price          # a column
 close(table)
 ```
 
-Use `Parquet.File(path)` when you need file metadata without materializing a table.
+Column chunks decode on `Threads.nthreads()` tasks; pass `ntasks=1` to read on the
+calling task. Use `Parquet.File(path)` when you need file metadata without reading
+column data.
 
 ### Read some columns
 
@@ -120,6 +123,8 @@ in the pinned Apache corpus. The rewrite remains preproduction.
 Complete coverage of the format is not a goal, so a few parts are deliberately left
 out. Reading one of them reports an unsupported feature rather than an invalid file.
 
+- Encrypted files (Parquet modular encryption). Reading one throws
+  `Parquet.UnsupportedFeatureError`.
 - LZO compression, in either direction. Every available implementation is GPL-2 and
   this package is MIT.
 - Writing INT96. The type is deprecated in the format. INT96 columns, which Spark,
@@ -176,7 +181,7 @@ may be written with a different annotation even though their values remain exact
 - A millisecond `TIMESTAMP` reads as `Parquet.Timestamp{:millis}` when
   `isAdjustedToUTC` is true, and as `Dates.DateTime` when it is false. Microsecond
   and nanosecond timestamps always read as `Parquet.Timestamp`.
-- An `ENUM` column reads as `String` and is written back as `STRING`.
+- An `ENUM` column reads as strings and is written back as `STRING`.
 - A millisecond or microsecond `TIME` column reads as `Dates.Time` and is written
   back as `TIME` with nanosecond units.
 - A `Vector{UInt8}` column is written as `BYTE_ARRAY`. A list of `UInt8` elements is
@@ -214,8 +219,8 @@ file that the reader declines. Ordinary Parquet nesting is far below these bound
 
 ## Sources and file lifetime
 
-`Parquet.File` and `Parquet.Table` accept a path, a byte vector, or an `IO`. A path is
-memory mapped. `close` releases the file descriptor, but the mapping itself lives until
+`Parquet.File` and `Parquet.Table` accept a path to one file, a byte vector, or an
+`IO`. A directory path throws an `ArgumentError`. A path is memory mapped. `close` releases the file descriptor, but the mapping itself lives until
 the garbage collector finalizes it. On Windows the file may therefore stay locked after
 `close`. If another process truncates a mapped file while it is open, reads of the
 removed region terminate the process, and no bounds check can prevent that.

@@ -8,9 +8,17 @@ struct Footer{B<:AbstractVector{UInt8}}
     bytes::B
 end
 
+"""
+    Parquet.File(source; limits=Parquet.Limits())
+
+Open a Parquet file and decode its footer metadata without reading any column data.
+`source` is a path, a byte vector, an `IO`, or a `Parquet.AbstractSource`. A path is
+memory mapped until `close(file)`.
+"""
 mutable struct File{S<:AbstractSource,F<:Footer}
     source::S
     footer::F
+    metadata::Metadata.FileMetaData
     @atomic closed::Bool
 end
 
@@ -54,15 +62,41 @@ function readfooter(src::AbstractSource, limits::Limits=Limits())
     return Footer(footeroffset, footerlength, leadingmagic === :encrypted, bytes)
 end
 
+# The file metadata a footer encodes. Encrypted files are refused: a PARE footer is
+# itself encrypted, and a plaintext footer names its encryption algorithm.
+function _decodefooter(footer::Footer, limits::Limits, budget::_ByteBudget)
+    footer.encrypted && throw(UnsupportedFeatureError(
+        "encrypted Parquet files are not supported"))
+    reader = Thrift.Reader(footer.bytes; limits=limits, budget=budget)
+    metadata = Thrift.decode(reader, Metadata.FileMetaData)
+    metadata.encryption_algorithm === nothing || throw(UnsupportedFeatureError(
+        "encrypted Parquet files are not supported (this one has a plaintext footer)"))
+    Thrift.remaining(reader) == 0 || throw(FormatError("file footer has trailing bytes"))
+    return metadata
+end
+
 function File(input; limits::Limits=Limits(), budget::_ByteBudget=_ByteBudget(limits))
     src = source(input; budget=budget)
-    footer = try
-        readfooter(src, limits)
+    try
+        footer = readfooter(src, limits)
+        return File(src, footer, _decodefooter(footer, limits, budget), false)
     catch
         input isa AbstractSource || close!(src)
         rethrow()
     end
-    return File(src, footer, false)
+end
+
+function _readfilemetadata(file::File, limits::Limits,
+    budget::_ByteBudget=_ByteBudget(limits))
+    return _decodefooter(file.footer, limits, budget)
+end
+
+function Base.show(io::IO, file::File)
+    metadata = file.metadata
+    columns = isempty(metadata.schema) ? 0 : something(metadata.schema[1].num_children, 0)
+    print(io, "Parquet.File(", metadata.num_rows, " rows, ", columns, " columns, ",
+        length(metadata.row_groups), " row groups)")
+    return
 end
 
 function close!(file::File)

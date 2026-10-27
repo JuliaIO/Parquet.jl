@@ -240,7 +240,7 @@ function oiroundtrip(bytes::Vector{UInt8}, expected::NamedTuple)
     table = Parquet.Table(bytes)
     try
         for name in keys(expected)
-            @test isequal(getproperty(table.columns, name),
+            @test isequal(getproperty(Parquet.Tables.columns(table), name),
                 getproperty(expected, name))
         end
     finally
@@ -735,7 +735,7 @@ end
         bytes = oilegacyfile([empty, oidatav1(Int32(1)), empty,
             oidatav1(Int32(2)), empty])
         table = Parquet.Table(bytes)
-        @test table.columns.value == Int32[1, 2]
+        @test Parquet.Tables.columns(table).value == Int32[1, 2]
         close(table)
     end
 end
@@ -863,7 +863,7 @@ end
     table = Parquet.Table(withcolumns; limits=Parquet.Limits(
         max_page_index_bytes=total))
     try
-        @test table.columns == input
+        @test Parquet.Tables.columns(table) == input
     finally
         close(table)
     end

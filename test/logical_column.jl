@@ -15,7 +15,7 @@ end
 function logicalcolumnvalues(bytes::Vector{UInt8}, name::Symbol=:value)
     table = Parquet.Table(bytes)
     return try
-        copy(getproperty(table.columns, name))
+        copy(getproperty(Parquet.Tables.columns(table), name))
     finally
         close(table)
     end

@@ -8,8 +8,17 @@ CurrentModule = Parquet
 
 ```@docs
 Parquet.Table
+Parquet.File
 Parquet.write
 Parquet.Limits
+```
+
+## Errors
+
+```@docs
+Parquet.FormatError
+Parquet.UnsupportedFeatureError
+Parquet.LimitError
 ```
 
 ## Logical values

@@ -104,15 +104,15 @@ function wpsemantic(value)
 end
 
 function wpsemanticcolumns(table::Parquet.Table)
-    names = keys(table.columns)
-    columns = map(values(table.columns)) do column
+    names = keys(Parquet.Tables.columns(table))
+    columns = map(values(Parquet.Tables.columns(table))) do column
         return Any[wpsemantic(value) for value in column]
     end
     return NamedTuple{names}(columns)
 end
 
 function wpexactrewrite(table::Parquet.Table; kwargs...)
-    expected_schema = table.metadata.schema
+    expected_schema = Parquet._tablemetadata(table).schema
     expected_values = wpsemanticcolumns(table)
     output = Parquet._encodefile(table; kwargs...)
     metadata = wpmetadata(output)
@@ -120,7 +120,7 @@ function wpexactrewrite(table::Parquet.Table; kwargs...)
     rewritten = Parquet.Table(output)
     try
         @test isequal(wpsemanticcolumns(rewritten), expected_values)
-        @test rewritten.rows == table.rows
+        @test Parquet._tablerows(rewritten) == Parquet._tablerows(table)
     finally
         close(rewritten)
     end
@@ -228,7 +228,7 @@ end
 @testset "schema-bearing writer exact provenance" begin
     bytes = wpcustomschemafile()
     table = Parquet.Table(bytes)
-    expected = table.metadata.schema
+    expected = Parquet._tablemetadata(table).schema
     @test expected[1].name == "provenance root"
     @test expected[1].field_id == Int32(101)
     @test !isempty(expected[1].unknown_fields)
@@ -266,7 +266,7 @@ end
     bytes = wprewritefooter(bytes, wpreplace(original;
         key_value_metadata=[stale[1], kept, stale[2], stale[3]]))
     table = Parquet.Table(bytes)
-    expected = table.metadata.key_value_metadata[2]
+    expected = Parquet._tablemetadata(table).key_value_metadata[2]
     output = try
         error = try
             Parquet._encodefile(table;
@@ -311,7 +311,7 @@ end
     path = wpfixture("list_columns.parquet")
     if isfile(path)
         table = Parquet.Table(path)
-        expected = table.metadata.schema
+        expected = Parquet._tablemetadata(table).schema
         policies = (
             Dict(("int64_list", "list", "item") => :delta_binary_packed,
                 ("utf8_list", "list", "item") => :delta_byte_array),
@@ -383,7 +383,7 @@ end
         m=Dict{String,Union{Missing,Int32}}[],
     )
     table = Parquet.Table(Parquet._encodefile(empty))
-    @test table.rows == 0
+    @test Parquet._tablerows(table) == 0
     for pageversion in (:v1, :v2)
         output = wpexactrewrite(table; pageversion=pageversion,
             codec=:uncompressed)
@@ -437,7 +437,7 @@ end
         output = Parquet._encodefile(table; limits=limits)
         rewritten = Parquet.Table(output; limits=limits)
         try
-            value = rewritten.columns.deep[1]
+            value = Parquet.Tables.columns(rewritten).deep[1]
             for _ in 1:256
                 value = value[1]
             end
@@ -467,7 +467,7 @@ end
         output = Parquet._encodefile(table; limits=limits)
         rewritten = Parquet.Table(output; limits=limits)
         try
-            pair = only(only(rewritten.columns.m))
+            pair = only(only(Parquet.Tables.columns(rewritten).m))
             @test ismissing(pair.second)
             value = pair.first
             for _ in 1:depth

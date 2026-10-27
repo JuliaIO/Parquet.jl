@@ -167,6 +167,8 @@ end
     @test collect(firstvalue) == Pair{String,Any}["id" => Int32(1), "name" => "one"]
     @test copy(firstvalue) == collect(firstvalue)
     @test NamedTuple(firstvalue) == (id=Int32(1), name="one")
+    @test sprint(show, firstvalue) == "(id = 1, name = \"one\")"
+    @test sprint(show, Parquet.StructVector(["x"], (Int[7],))[1]) == "(x = 7,)"
     @test_throws KeyError firstvalue["absent"]
     @test_throws Base.CanonicalIndexError setindex!(required, firstvalue, 1)
 
@@ -414,7 +416,7 @@ end
     )
     table = Parquet.Table(Parquet._encodefile(source))
     try
-        columns = table.columns
+        columns = Parquet.Tables.columns(table)
         for selection in ([3, 1], Bool[true, false, true, true], Int[], :)
             for name in keys(columns)
                 column = getproperty(columns, name)
@@ -426,7 +428,7 @@ end
             written = Parquet.Table(Parquet._encodefile(subset))
             try
                 for name in keys(columns)
-                    @test isequal(collect(getproperty(written.columns, name)),
+                    @test isequal(collect(getproperty(Parquet.Tables.columns(written), name)),
                         collect(getproperty(columns, name))[selection])
                 end
             finally

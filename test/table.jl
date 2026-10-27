@@ -109,7 +109,8 @@ end
     )
     bytes = Parquet._encodefile(input)
     table = Parquet.Table(bytes)
-    @test length(table) == 3
+    @test Tables.rowcount(table) == Parquet.DataAPI.nrow(table) == 3
+    @test length(table) == Parquet.DataAPI.ncol(table) == 5
     @test Tables.istable(typeof(table))
     @test Tables.columnaccess(typeof(table))
     @test Tables.columnnames(table) == (:id, :flag, :score, :name, :label)
@@ -120,8 +121,48 @@ end
     @test isequal(columns.score, input.score)
     @test columns.name == input.name
     @test isequal(columns.label, input.label)
+    # A Table is a Tables.AbstractColumns: columns by property, index, and name.
+    @test table isa Tables.AbstractColumns
+    @test table.id == table[:id] == table[1] == Tables.getcolumn(table, :id) ==
+        Tables.getcolumn(table, Int64, 1, :id) == input.id
+    @test propertynames(table) == keys(input)
+    @test isequal(collect(table), collect(values(Tables.columns(table))))
     close(table)
     close(table)
+end
+
+@testset "encrypted files are refused as unsupported" begin
+    datadir = joinpath(get(ENV, "PARQUET_TESTING_DIR",
+        joinpath(@__DIR__, "parquet-testing")), "data")
+    files = isdir(datadir) ? filter(f -> endswith(f, ".parquet.encrypted"),
+        readdir(datadir)) : String[]
+    isempty(files) && @info "parquet-testing corpus not found; skipping encrypted files"
+    for file in files
+        error = try
+            Parquet.Table(joinpath(datadir, file))
+            nothing
+        catch err
+            err
+        end
+        @test error isa Parquet.UnsupportedFeatureError
+        @test occursin("encrypted", error.message)
+    end
+end
+
+@testset "Table and File display never print buffers" begin
+    rows = 100_000
+    bytes = Parquet._encodefile((id=collect(Int64, 1:rows),
+        name=["n$(i % 7)" for i in 1:rows]))
+    table = Parquet.Table(bytes)
+    @test sprint(show, table) == "Parquet.Table(100000 rows, 2 columns)"
+    text = sprint(show, MIME("text/plain"), table)
+    @test startswith(text, "Parquet.Table with 100000 rows, 2 columns, and schema:\n")
+    @test occursin(":id", text) && occursin(":name", text) && length(text) < 200
+    close(table)
+    file = Parquet.File(bytes)
+    @test sprint(show, file) == "Parquet.File(100000 rows, 2 columns, 1 row groups)"
+    @test sprint(show, MIME("text/plain"), file) == sprint(show, file)
+    close(file)
 end
 
 @testset "Apache optional LIST fixture" begin
@@ -139,8 +180,8 @@ end
             missing,
             Union{Missing,String}["efg", missing, "hij", "xyz"],
         ]
-        @test isequal(table.columns.int64_list, expectedintegers)
-        @test isequal(table.columns.utf8_list, expectedstrings)
+        @test isequal(Parquet.Tables.columns(table).int64_list, expectedintegers)
+        @test isequal(Parquet.Tables.columns(table).utf8_list, expectedstrings)
         close(table)
     else
         @info "parquet-testing corpus not found; skipping LIST Tables fixture" corpus
@@ -154,7 +195,7 @@ end
         table = Parquet.Table(Parquet._encodefile((dates=dates,);
             pageversion=pageversion, codec=:snappy))
         @test Tables.schema(table).types == (Union{Missing,Date},)
-        @test isequal(table.columns.dates, dates)
+        @test isequal(Parquet.Tables.columns(table).dates, dates)
         close(table)
     end
 
@@ -170,8 +211,8 @@ end
             pageversion=pageversion, codec=:snappy))
         @test Tables.schema(table).types ==
             (Int32, Union{Missing,Parquet.ListValue{Union{Missing,Date}}})
-        @test table.columns.id == Int32[1, 2, 3, 4, 5]
-        @test isequal(table.columns.days, days)
+        @test Parquet.Tables.columns(table).id == Int32[1, 2, 3, 4, 5]
+        @test isequal(Parquet.Tables.columns(table).days, days)
         close(table)
     end
 end
@@ -310,13 +351,13 @@ end
     legacybloom = tablereplace(metadata;
         row_groups=[tablereplace(group; columns=[legacychunk])])
     legacytable = Parquet.Table(tablerewritefooter(bytes, legacybloom))
-    @test legacytable.columns.value == Int32[1]
+    @test Parquet.Tables.columns(legacytable).value == Int32[1]
     close(legacytable)
 
     zerogroup = tablereplace(metadata;
         row_groups=[tablereplace(group; file_offset=Int64(0))])
     zerotable = Parquet.Table(tablerewritefooter(bytes, zerogroup))
-    @test zerotable.columns.value == Int32[1]
+    @test Parquet.Tables.columns(zerotable).value == Int32[1]
     close(zerotable)
 end
 
@@ -349,7 +390,7 @@ end
     successful = TableCallbackSource(bytes, 0, 0, 0,
         TableCallbackSentinel(3))
     table = Parquet.Table(successful)
-    @test table.columns.value == Int32[1]
+    @test Parquet.Tables.columns(table).value == Int32[1]
     @test successful.closes == 0
     close(table)
     @test successful.closes == 1
@@ -376,17 +417,17 @@ end
     expected_required = Vector{UInt8}[UInt8[1, 2, 3], UInt8[4, 5, 6]]
     expected_optional = Union{Missing,Vector{UInt8}}[UInt8[7, 8], missing]
     table = Parquet.Table(Parquet._encodefile(input))
-    @test table.columns.required == expected_required
-    @test isequal(table.columns.optional, expected_optional)
-    @test table.columns.required isa Parquet.FixedByteArrayVector
-    @test table.columns.required.width == 3
-    @test table.columns.optional.width == 2
-    @test collect(table.columns.required) == expected_required
-    @test copy(table.columns.required) == expected_required
-    table.columns.required[1] = UInt8[9, 9, 9]
-    @test table.columns.required[1] == UInt8[9, 9, 9]
-    table.columns.required[1] = expected_required[1]
-    @test_throws ArgumentError setindex!(table.columns.required, UInt8[1], 1)
+    @test Parquet.Tables.columns(table).required == expected_required
+    @test isequal(Parquet.Tables.columns(table).optional, expected_optional)
+    @test Parquet.Tables.columns(table).required isa Parquet.FixedByteArrayVector
+    @test Parquet.Tables.columns(table).required.width == 3
+    @test Parquet.Tables.columns(table).optional.width == 2
+    @test collect(Parquet.Tables.columns(table).required) == expected_required
+    @test copy(Parquet.Tables.columns(table).required) == expected_required
+    Parquet.Tables.columns(table).required[1] = UInt8[9, 9, 9]
+    @test Parquet.Tables.columns(table).required[1] == UInt8[9, 9, 9]
+    Parquet.Tables.columns(table).required[1] = expected_required[1]
+    @test_throws ArgumentError setindex!(Parquet.Tables.columns(table).required, UInt8[1], 1)
     @test Tables.schema(table).types ==
         (Vector{UInt8}, Union{Missing,Vector{UInt8}})
     rewritten = Parquet._encodefile(table)
@@ -399,16 +440,16 @@ end
     @test [element.type_length for element in metadata.schema[2:end]] == [3, 2]
     close(file)
     table = Parquet.Table(rewritten)
-    @test table.columns.required == expected_required
-    @test isequal(table.columns.optional, expected_optional)
+    @test Parquet.Tables.columns(table).required == expected_required
+    @test isequal(Parquet.Tables.columns(table).optional, expected_optional)
     close(table)
 
     short = Parquet.Table(Parquet._encodefile(input))
-    pop!(short.columns.required[1])
+    pop!(Parquet.Tables.columns(short).required[1])
     @test_throws ArgumentError Parquet._encodefile(short)
     close(short)
     long = Parquet.Table(Parquet._encodefile(input))
-    push!(long.columns.required[1], 0xff)
+    push!(Parquet.Tables.columns(long).required[1], 0xff)
     @test_throws ArgumentError Parquet._encodefile(long)
     close(long)
 end
@@ -459,7 +500,7 @@ end
         table = Parquet.Table(fixture)
         columns = Tables.columntable(table)
         @test keys(columns) == (:a, :b)
-        @test length(table) == 5120
+        @test Tables.rowcount(table) == 5120
         @test sum(Int64, columns.a) == 43118090240
         @test sum(Int64, columns.b) == 129016125440
         close(table)
@@ -471,8 +512,8 @@ end
             catch err
                 err
             end
-            @test error isa Parquet.FormatError
-            @test occursin("plaintext-footer encryption", sprint(showerror, error))
+            @test error isa Parquet.UnsupportedFeatureError
+            @test occursin("plaintext footer", sprint(showerror, error))
         end
     else
         @info "parquet-testing corpus not found; skipping Tables corpus facade" corpus
@@ -573,18 +614,18 @@ end
         amount=decimals)
     bytes = Parquet._encodefile(source; rowgroupsize=2)
     full = Parquet.Table(bytes)
-    amounts = full.columns.amount
+    amounts = Parquet.Tables.columns(full).amount
     close(full)
 
     table = Parquet.Table(bytes; scan=Tables.Scan(select=(:items, :id)))
     try
-        @test keys(table.columns) == (:items, :id)
-        @test table.rows == 4
-        @test collect.(table.columns.items) == source.items
-        @test table.columns.id == source.id
-        @test [element.name for element in table.metadata.schema] ==
+        @test keys(Parquet.Tables.columns(table)) == (:items, :id)
+        @test Parquet._tablerows(table) == 4
+        @test collect.(Parquet.Tables.columns(table).items) == source.items
+        @test Parquet.Tables.columns(table).id == source.id
+        @test [element.name for element in Parquet._tablemetadata(table).schema] ==
             ["schema", "items", "list", "element", "id"]
-        @test all(group -> length(group.columns) == 2, table.metadata.row_groups)
+        @test all(group -> length(group.columns) == 2, Parquet._tablemetadata(table).row_groups)
     finally
         close(table)
     end
@@ -595,19 +636,19 @@ end
         filter=Tables.col(:id) >= 2)
     table = Parquet.Table(bytes; scan=request)
     try
-        @test keys(table.columns) == (:cents, :point)
-        @test table.rows == 2
-        @test isequal(table.columns.cents, amounts[3:4])
-        @test isequal([NamedTuple(value) for value in table.columns.point],
+        @test keys(Parquet.Tables.columns(table)) == (:cents, :point)
+        @test Parquet._tablerows(table) == 2
+        @test isequal(Parquet.Tables.columns(table).cents, amounts[3:4])
+        @test isequal([NamedTuple(value) for value in Parquet.Tables.columns(table).point],
             [(x=3.0, y=missing), (x=4.0, y=4.5)])
         io = IOBuffer()
         Parquet.write(io, table)
         rewritten = Parquet.Table(take!(io))
         try
-            @test keys(rewritten.columns) == (:cents, :point)
-            element = rewritten.metadata.schema[2]
+            @test keys(Parquet.Tables.columns(rewritten)) == (:cents, :point)
+            element = Parquet._tablemetadata(rewritten).schema[2]
             @test element.name == "cents" && element.logicalType.DECIMAL.precision == 5
-            @test isequal(rewritten.columns.cents, table.columns.cents)
+            @test isequal(Parquet.Tables.columns(rewritten).cents, Parquet.Tables.columns(table).cents)
         finally
             close(rewritten)
         end
@@ -619,11 +660,11 @@ end
             (Tables.Scan(select=(), offset=3), 1),
             (Tables.Scan(select=(), filter=Tables.col(:id) > 1), 3))
         table = Parquet.Table(bytes; scan=request)
-        @test isempty(table.columns) && table.rows == rows
+        @test isempty(Parquet.Tables.columns(table)) && Parquet._tablerows(table) == rows
         close(table)
     end
     table = Parquet.Table(bytes; scan=Tables.Scan(select=Tables.Not(r"^(name|point)$")))
-    @test keys(table.columns) == (:id, :items, :amount)
+    @test keys(Parquet.Tables.columns(table)) == (:id, :items, :amount)
     close(table)
     @test_throws ArgumentError Parquet.Table(bytes;
         scan=Tables.Scan(select=(:id => Float64,)))
@@ -636,7 +677,7 @@ end
         tracked = TableScanSource(paged, Tuple{Int64,Int64}[])
         table = Parquet.Table(tracked; scan=Tables.Scan(select=(:name,)))
         try
-            @test table.columns.name == source.name
+            @test Parquet.Tables.columns(table).name == source.name
         finally
             close(table)
         end
@@ -661,7 +702,7 @@ end
     damaged[(start + 1):stop] .= 0x00
     @test_throws Parquet.FormatError Parquet.Table(damaged)
     table = Parquet.Table(damaged; scan=Tables.Scan(select=Tables.Not(:id)))
-    @test table.columns.name == source.name
+    @test Parquet.Tables.columns(table).name == source.name
     close(table)
 end
 
@@ -681,12 +722,12 @@ end
         parallel = Parquet.Table(bytes; limits=capped)
         ordered = Parquet.Table(bytes; ntasks=1)
         try
-            @test keys(parallel.columns) == keys(ordered.columns) == keys(table)
+            @test keys(Parquet.Tables.columns(parallel)) == keys(Parquet.Tables.columns(ordered)) == keys(table)
             for name in keys(table)
-                @test isequal(collect(getproperty(parallel.columns, name)),
-                    collect(getproperty(ordered.columns, name)))
+                @test isequal(collect(getproperty(Parquet.Tables.columns(parallel), name)),
+                    collect(getproperty(Parquet.Tables.columns(ordered), name)))
             end
-            @test parallel.columns.id == source.id
+            @test Parquet.Tables.columns(parallel).id == source.id
         finally
             close(parallel)
             close(ordered)

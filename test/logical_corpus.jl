@@ -19,7 +19,7 @@ import Tables
                 "fixed_length_decimal.parquet",
                 "fixed_length_decimal_legacy.parquet")
             table = Parquet.Table(joinpath(data, name))
-            @test table.columns.value == expecteddecimal
+            @test Parquet.Tables.columns(table).value == expecteddecimal
             close(table)
         end
 
@@ -28,7 +28,7 @@ import Tables
             missing, 0x3c00, 0xc000, 0x7e00, 0x0000, 0xbc00, 0x8000, 0x4000]
         actualbits = Union{Missing,UInt16}[
             ismissing(value) ? missing : reinterpret(UInt16, value)
-            for value in nonzero.columns.x
+            for value in Parquet.Tables.columns(nonzero).x
         ]
         @test isequal(actualbits, expectedbits)
         close(nonzero)
@@ -37,7 +37,7 @@ import Tables
         expectedbits = Union{Missing,UInt16}[missing, 0x0000, 0x7e00]
         actualbits = Union{Missing,UInt16}[
             ismissing(value) ? missing : reinterpret(UInt16, value)
-            for value in zeros.columns.x
+            for value in Parquet.Tables.columns(zeros).x
         ]
         @test isequal(actualbits, expectedbits)
         close(zeros)
@@ -49,7 +49,7 @@ import Tables
             Parquet.JSONValue(codeunits("[1,null,3]")),
             missing,
         ]
-        @test isequal(json.columns.json_field, expectedjson)
+        @test isequal(Parquet.Tables.columns(json).json_field, expectedjson)
         close(json)
 
         bson = Parquet.Table(joinpath(data, "bson.parquet"))
@@ -58,11 +58,11 @@ import Tables
             Parquet.BSONValue(hex2bytes("0f000000106100010000000a620000")),
             missing,
         ]
-        @test isequal(bson.columns.bson_field, expectedbson)
+        @test isequal(Parquet.Tables.columns(bson).bson_field, expectedbson)
         close(bson)
 
         unknown = Parquet.Table(joinpath(data, "unknown-logical-type.parquet"))
-        @test unknown.columns[2] == [
+        @test Parquet.Tables.columns(unknown)[2] == [
             collect(codeunits("unknown string $index")) for index in 1:3
         ]
         close(unknown)
@@ -101,7 +101,7 @@ end
                     [1230768000000000000, 1230768060000000000]))
             table = Parquet.Table(joinpath(data, name))
             try
-                values = getproperty(table.columns, column)
+                values = getproperty(Parquet.Tables.columns(table), column)
                 @test all(value -> value isa Parquet.Timestamp{:nanos} &&
                     !value.is_adjusted_to_utc, values)
                 @test [value.ticks for value in values] == expected
@@ -111,7 +111,7 @@ end
                 Parquet.write(io, Tables.columntable(table))
                 rewritten = Parquet.Table(take!(io))
                 try
-                    @test isequal(getproperty(rewritten.columns, column), values)
+                    @test isequal(getproperty(Parquet.Tables.columns(rewritten), column), values)
                 finally
                     close(rewritten)
                 end

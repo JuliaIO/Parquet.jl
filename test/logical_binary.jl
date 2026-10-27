@@ -45,7 +45,7 @@ end
     @test Parquet._binarylogicalkind(float16) === :float16
     @test Parquet._binarylogicalkind(unknown) === :unknown
     @test Parquet._binarylogicalkind(interval) === :interval
-    @test Parquet._binarylogicaleltype(enum, Vector{UInt8}) === String
+    @test Parquet._binarylogicaleltype(enum, Vector{UInt8}) === Parquet.DataStrings.DataString
     @test Parquet._binarylogicaleltype(json, Vector{UInt8}) === Parquet.JSONValue
     @test Parquet._binarylogicaleltype(bson, Vector{UInt8}) === Parquet.BSONValue
     @test Parquet._binarylogicaleltype(uuid, Vector{UInt8}) === UUID
@@ -177,6 +177,21 @@ end
     @test_throws Parquet.FormatError Parquet._binarylogicalvalue(modern, UInt8[0xff])
     @test_throws Parquet.FormatError Parquet._binarylogicalvalue(modern, Int32(1))
     @test_throws ArgumentError Parquet._binaryphysicalvalue(modern, UInt8[0x61])
+
+    # ENUM columns read as StringVector columns; a Table rewrite keeps the annotation.
+    labels = ["red", "a much longer enum label", missing, "red"]
+    io = IOBuffer()
+    Parquet.write(io, (color=Parquet.LogicalColumn(labels, :enum),))
+    bytes = take!(io)
+    table = Parquet.Table(bytes)
+    @test table.color isa Parquet.DataStrings.StringVector{Union{Missing,Parquet.DataStrings.DataString}}
+    @test isequal(table.color, labels)
+    rewritten = IOBuffer()
+    Parquet.write(rewritten, table)
+    file = Parquet.File(take!(rewritten))
+    @test file.metadata.schema[2].logicalType.ENUM !== nothing
+    close(file)
+    close(table)
 end
 
 @testset "tagged JSON and BSON bytes" begin
@@ -223,6 +238,9 @@ end
     @test_throws CanonicalIndexError setindex!(copiedbson.bytes, 0x00, 1)
     @test hash(copiedbson) == originalbsonhash
     @test_throws ArgumentError Parquet._binaryphysicalvalue(bson, taggedbson.bytes)
+    @test sprint(print, taggedjson) == "{\"answer\":42}"
+    @test sprint(show, taggedjson) == "Parquet.JSONValue(\"{\\\"answer\\\":42}\")"
+    @test sprint(show, taggedbson) == "Parquet.BSONValue(7 bytes)"
 
     optionaljson = Union{Missing,Vector{UInt8}}[jsonbytes, missing]
     logicaljson = Parquet._binarylogicalvalues(json, optionaljson)

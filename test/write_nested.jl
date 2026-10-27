@@ -313,11 +313,11 @@ end
             wnbytes(["x"]); max_repetition=0, max_definition=2)
         table = Parquet.Table(bytes)
         try
-            @test table.columns.s[1] === missing
-            @test table.columns.s[2]["a"] == 1
-            @test table.columns.s[2]["b"] === missing
-            @test table.columns.s[3]["a"] == 2
-            @test table.columns.s[3]["b"] == "x"
+            @test Parquet.Tables.columns(table).s[1] === missing
+            @test Parquet.Tables.columns(table).s[2]["a"] == 1
+            @test Parquet.Tables.columns(table).s[2]["b"] === missing
+            @test Parquet.Tables.columns(table).s[3]["a"] == 2
+            @test Parquet.Tables.columns(table).s[3]["b"] == "x"
         finally
             close(table)
         end
@@ -357,7 +357,7 @@ end
         wncheckpagetype(bytes, 1, pageversion, 6, 4, 3)
         table = Parquet.Table(bytes)
         try
-            wnchecklist(table.columns.items, values)
+            wnchecklist(Parquet.Tables.columns(table).items, values)
         finally
             close(table)
         end
@@ -403,7 +403,7 @@ end
         wncheckpagetype(bytes, 2, pageversion, 5, 4, 3)
         table = Parquet.Table(bytes)
         try
-            column = table.columns.attrs
+            column = Parquet.Tables.columns(table).attrs
             @test column[1] === missing
             @test isempty(column[2])
             @test isequal(collect(column[3]),
@@ -421,8 +421,8 @@ end
     ]
     table = Parquet.Table(Parquet._encodefile((attrs=dictionaries,)))
     try
-        @test isempty(table.columns.attrs[1])
-        @test isequal(Dict(table.columns.attrs[2]), dictionaries[2])
+        @test isempty(Parquet.Tables.columns(table).attrs[1])
+        @test isequal(Dict(Parquet.Tables.columns(table).attrs[2]), dictionaries[2])
     finally
         close(table)
     end
@@ -458,7 +458,7 @@ end
             max_repetition=1, max_definition=4)
         table = Parquet.Table(bytes)
         try
-            column = table.columns.rows
+            column = Parquet.Tables.columns(table).rows
             @test column[1] === missing
             @test isempty(column[2])
             @test column[3][1] === missing
@@ -502,7 +502,7 @@ end
             max_repetition=1, max_definition=4)
         table = Parquet.Table(bytes)
         try
-            column = table.columns.record
+            column = Parquet.Tables.columns(table).record
             @test column[1] === missing
             @test column[2]["items"] === missing
             @test isempty(column[3]["items"])
@@ -544,7 +544,7 @@ end
             max_repetition=2, max_definition=4)
         table = Parquet.Table(bytes)
         try
-            column = table.columns.batches
+            column = Parquet.Tables.columns(table).batches
             @test column[1] === missing
             @test isempty(column[2])
             @test isempty(column[3][1])
@@ -588,7 +588,7 @@ end
             max_repetition=1, max_definition=4)
         table = Parquet.Table(bytes)
         try
-            column = table.columns.objects
+            column = Parquet.Tables.columns(table).objects
             @test column[1] === missing
             @test isempty(column[2])
             @test column[3][1].second === missing
@@ -631,7 +631,7 @@ end
         wncheckpagetype(bytes, 1, pageversion, 8, 3, 5)
         table = Parquet.Table(bytes)
         try
-            column = table.columns.nested
+            column = Parquet.Tables.columns(table).nested
             @test column[1] === missing
             @test isempty(column[2])
             @test column[3][1] === missing
@@ -715,9 +715,9 @@ end
         max_repetition=0, max_definition=0)
     table = Parquet.Table(bytes)
     try
-        @test table.columns.s[1][1] == 1
-        @test table.columns.s[1][2] == "a"
-        @test_throws ArgumentError table.columns.s[1]["x"]
+        @test Parquet.Tables.columns(table).s[1][1] == 1
+        @test Parquet.Tables.columns(table).s[1][2] == "a"
+        @test_throws ArgumentError Parquet.Tables.columns(table).s[1]["x"]
     finally
         close(table)
     end
@@ -747,7 +747,7 @@ end
         Int32[1,2,3]; max_repetition=1, max_definition=1)
     table = Parquet.Table(bytes)
     try
-        value = table.columns.m[1]
+        value = Parquet.Tables.columns(table).m[1]
         @test collect(value) == ["k" => Int32(1), "k" => Int32(2),
             "z" => Int32(3)]
         @test Parquet.maplookup(value, "k") == 2
@@ -849,7 +849,7 @@ end
     ]
     table = Parquet.Table(Parquet._encodefile(present))
     try
-        value = table.columns.logicals[1][1]
+        value = Parquet.Tables.columns(table).logicals[1][1]
         @test value["enum"] == "alpha"
         @test value["time"] == Time(0)
         @test value["timestamp"] == Parquet.Timestamp(7, :nanos, false)
@@ -884,7 +884,7 @@ end
             codec=codec)
         table = Parquet.Table(bytes)
         try
-            records = table.columns.records[1]
+            records = Parquet.Tables.columns(table).records[1]
             @test length(records) == length(entries)
             @test records[1]["i32"] == entries[1].i32
             @test records[64]["text"] == entries[64].text
@@ -954,8 +954,8 @@ end
     for lists in (Any[Int32[1]], AbstractVector{Int32}[Int32[1]], Vector[Int32[1]])
         table = Parquet.Table(Parquet._encodefile((value=lists,)))
         try
-            @test collect(only(table.columns.value)) == Int32[1]
-            @test table.metadata.schema[end].type_ == WNMD.Type.INT32
+            @test collect(only(table.value)) == Int32[1]
+            @test Parquet._tablemetadata(table).schema[end].type_ == WNMD.Type.INT32
         finally
             close(table)
         end
@@ -988,9 +988,9 @@ end
     ])
     table = Parquet.Table(Parquet._encodefile(schemaless))
     try
-        @test table.columns.value == Int32[1,2]
-        @test collect(table.columns.items[1]) == Int32[1,2]
-        @test isempty(table.columns.items[2])
+        @test Parquet.Tables.columns(table).value == Int32[1,2]
+        @test collect(Parquet.Tables.columns(table).items[1]) == Int32[1,2]
+        @test isempty(Parquet.Tables.columns(table).items[2])
     finally
         close(table)
     end
@@ -1035,7 +1035,7 @@ end
     scalar = WNZeroVector(Int32[10,20])
     table = Parquet.Table(Parquet._encodefile((value=scalar,)))
     try
-        @test table.columns.value == Int32[10,20]
+        @test Parquet.Tables.columns(table).value == Int32[10,20]
     finally
         close(table)
     end
@@ -1046,8 +1046,8 @@ end
     ])
     table = Parquet.Table(Parquet._encodefile((value=nested,)))
     try
-        @test collect(table.columns.value[1]) == Int32[1,2]
-        @test isempty(table.columns.value[2])
+        @test collect(Parquet.Tables.columns(table).value[1]) == Int32[1,2]
+        @test isempty(Parquet.Tables.columns(table).value[2])
     finally
         close(table)
     end
@@ -1109,7 +1109,7 @@ end
             plain(x) = x
             @test isequal(
                 [plain(pair.first) => plain(pair.second)
-                    for pair in only(table.columns.m)],
+                    for pair in only(Parquet.Tables.columns(table).m)],
                 collect(only(source)))
         finally
             close(table)
@@ -1126,7 +1126,7 @@ end
             pageversion=version, pageindex=false)
         table = Parquet.Table(bytes)
         try
-            pairs = collect(table.columns.m[1])
+            pairs = collect(Parquet.Tables.columns(table).m[1])
             @test length(pairs) == 2
             @test pairs[1].first[1] === missing
             @test pairs[2].first[1] == Int32(2)
@@ -1138,7 +1138,7 @@ end
     duplicate = Parquet.MapVector(Int32[0, 2], Int32[1, 1], Int32[10, 11])
     table = Parquet.Table(Parquet._encodefile((m=duplicate,)))
     try
-        @test collect(table.columns.m[1]) ==
+        @test collect(Parquet.Tables.columns(table).m[1]) ==
             [Int32(1) => Int32(10), Int32(1) => Int32(11)]
     finally
         close(table)
@@ -1152,12 +1152,12 @@ end
             pageversion=pageversion, checksum=false, pageindex=false)
         reread = Parquet.Table(bytes)
         try
-            @test reread.columns.attrs[1] === missing
-            @test isempty(reread.columns.attrs[2])
-            @test isequal(collect(reread.columns.attrs[3]),
+            @test Parquet.Tables.columns(reread).attrs[1] === missing
+            @test isempty(Parquet.Tables.columns(reread).attrs[2])
+            @test isequal(collect(Parquet.Tables.columns(reread).attrs[3]),
                 Pair{String,Union{Missing,Int32}}[
                     "a" => missing, "b" => Int32(2)])
-            @test collect(reread.columns.attrs[4]) == ["c" => Int32(3)]
+            @test collect(Parquet.Tables.columns(reread).attrs[4]) == ["c" => Int32(3)]
         finally
             close(reread)
         end

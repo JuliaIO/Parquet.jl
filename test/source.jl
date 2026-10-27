@@ -90,6 +90,10 @@ function Base.open(path::FailingSourcePath, mode::AbstractString)
     return path.io
 end
 
+function Base.isdir(::FailingSourcePath)
+    return false
+end
+
 @testset "byte sources" begin
     bytes = UInt8[0x10, 0x20, 0x30, 0x40]
     src = Parquet.source(bytes)
@@ -213,6 +217,19 @@ end
             err isa Base.IOError || rethrow()
         end
     end
+end
+
+@testset "directory paths" begin
+    directory = mktempdir()
+    error = try
+        Parquet.Table(directory)
+        nothing
+    catch err
+        err
+    end
+    @test error isa ArgumentError
+    @test occursin("is a directory", sprint(showerror, error))
+    @test_throws ArgumentError Parquet.File(directory)
 end
 
 @testset "path setup cleanup" begin

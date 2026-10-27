@@ -456,6 +456,19 @@ function Base.hash(value::StructValue, seed::UInt)
     return output
 end
 
+# Shown like a NamedTuple: `(a = 1, b = "x")`.
+function Base.show(io::IO, value::StructValue)
+    print(io, "(")
+    for index in 1:length(value)
+        index > 1 && print(io, ", ")
+        print(io, value.names[index], " = ")
+        show(io, value[index])
+    end
+    length(value) == 1 && print(io, ",")
+    print(io, ")")
+    return
+end
+
 function (::Type{NamedTuple})(value::StructValue)
     length(unique(value.names)) == length(value.names) || throw(ArgumentError(
         "cannot convert a struct with duplicate field names to NamedTuple"))

@@ -329,9 +329,9 @@ end
         a = vcat([Parquet.decode_plain(Int32, page.data, Int(page.header.data_page_header.num_values))[1] for page in snappy[1]]...)
         @test length(a) == 5120 && sum(Int64, a) == 43118090240 && a[1:4] == Int32[50462976, 117835012, 185207048, 252579084]
         snappytable = Parquet.Table(codeccorpus("datapage_v1-snappy-compressed-checksum.parquet"))
-        @test length(snappytable) == 5120
-        @test sum(Int64, snappytable.columns.a) == 43118090240
-        @test sum(Int64, snappytable.columns.b) == 129016125440
+        @test Parquet.Tables.rowcount(snappytable) == 5120
+        @test sum(Int64, Parquet.Tables.columns(snappytable).a) == 43118090240
+        @test sum(Int64, Parquet.Tables.columns(snappytable).b) == 129016125440
         close(snappytable)
         types = codeccorpuspages(codeccorpus("alltypes_plain.snappy.parquet"), 1)
         @test [(page.kind, length(page.data)) for page in types] == [(:dict, 8), (:v1, 9)]
@@ -399,9 +399,9 @@ end
         for fixture in ("hadoop_lz4_compressed.parquet", "non_hadoop_lz4_compressed.parquet",
             "lz4_raw_compressed.parquet")
             table = Parquet.Table(codeccorpus(fixture))
-            @test table.columns.c0 == Int64[1593604800, 1593604800, 1593604801, 1593604801]
-            @test table.columns.c1 == Vector{UInt8}[collect(codeunits(value)) for value in ("abc", "def", "abc", "def")]
-            @test isequal(table.columns.v11, Union{Missing,Float64}[42.0, 7.7, 42.125, 7.7])
+            @test Parquet.Tables.columns(table).c0 == Int64[1593604800, 1593604800, 1593604801, 1593604801]
+            @test Parquet.Tables.columns(table).c1 == Vector{UInt8}[collect(codeunits(value)) for value in ("abc", "def", "abc", "def")]
+            @test isequal(Parquet.Tables.columns(table).v11, Union{Missing,Float64}[42.0, 7.7, 42.125, 7.7])
             close(table)
         end
         # seeded mutations of a real SNAPPY page payload

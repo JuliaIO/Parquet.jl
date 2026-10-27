@@ -4,8 +4,8 @@
     @test !Base.isexported(Parquet, :Table)
     @test !Base.isexported(Parquet, :close!)
     @test !Base.isexported(Parquet, :write)
-    for name in (:BSONValue, :Decimal, :Interval, :JSONValue, :LogicalColumn,
-        :Timestamp)
+    for name in (:BSONValue, :Decimal, :FormatError, :Interval, :JSONValue, :LimitError,
+        :LogicalColumn, :Timestamp, :UnsupportedFeatureError)
         @test !Base.isexported(Parquet, name)
     end
     if VERSION >= v"1.11"
@@ -14,9 +14,16 @@
         @test Base.ispublic(Parquet, :Table)
         @test Base.ispublic(Parquet, :close!)
         @test Base.ispublic(Parquet, :write)
-        for name in (:BSONValue, :Decimal, :Interval, :JSONValue, :LogicalColumn,
-            :Timestamp)
+        for name in (:BSONValue, :Decimal, :FormatError, :Interval, :JSONValue,
+            :LimitError, :LogicalColumn, :Timestamp, :UnsupportedFeatureError)
             @test Base.ispublic(Parquet, name)
         end
+    end
+end
+
+@testset "error types are documented" begin
+    documented = Base.Docs.meta(Parquet)
+    for name in (:FormatError, :LimitError, :UnsupportedFeatureError, :File, :Table)
+        @test haskey(documented, Base.Docs.Binding(Parquet, name))
     end
 end

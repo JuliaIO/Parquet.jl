@@ -372,7 +372,7 @@ end
         @test [element.name for element in emptymetadata.schema] == ["schema", "value"]
         close(emptyfile)
         emptytable = Parquet.Table(emptybytes)
-        @test emptytable.columns.value == Int32[]
+        @test Parquet.Tables.columns(emptytable).value == Int32[]
         close(emptytable)
     end
     @test_throws ArgumentError Parquet._encodefile((value=Int32[],);
@@ -522,8 +522,8 @@ end
             @test valueposition == length(valuebytes) + 1
         end
         table = Parquet.Table(bytes)
-        @test table.columns.id == input.id
-        @test isequal(table.columns.days, days)
+        @test Parquet.Tables.columns(table).id == input.id
+        @test isequal(Parquet.Tables.columns(table).days, days)
         close(table)
     end
 
@@ -531,7 +531,7 @@ end
         bytes = Parquet._encodefile((days=days,); pageversion=pageversion,
             encoding=encoding, codec=:snappy)
         table = Parquet.Table(bytes)
-        @test isequal(table.columns.days, days)
+        @test isequal(Parquet.Tables.columns(table).days, days)
         close(table)
     end
 
@@ -543,7 +543,7 @@ end
         @test chunk.dictionary_page_offset !== nothing
         @test MD.Encoding.RLE_DICTIONARY in chunk.encodings
         table = Parquet.Table(bytes)
-        @test isequal(table.columns.days, repeated)
+        @test isequal(Parquet.Tables.columns(table).days, repeated)
         close(table)
     end
 
@@ -556,7 +556,7 @@ end
     @test metadata.schema[2].converted_type == MD.ConvertedType.DATE
     close(file)
     table = Parquet.Table(bytes)
-    @test isequal(table.columns.date, dates)
+    @test isequal(Parquet.Tables.columns(table).date, dates)
     close(table)
 
     invalid = Vector{Union{Missing,Date,Int32}}[
@@ -609,7 +609,7 @@ end
     splitpages, _ = writtenpages(splitbytes, 1)
     @test length(splitpages) == 10
     splittable = Parquet.Table(splitbytes)
-    @test splittable.columns.a == fill("large", 10)
+    @test Parquet.Tables.columns(splittable).a == fill("large", 10)
     close(splittable)
     @test_throws Parquet.LimitError Parquet._encodefile((a=["large"],);
         limits=Parquet.Limits(max_page_bytes=8))
@@ -642,9 +642,9 @@ end
         bytes = Parquet._encodefile(input; codec=name, dictionary=true)
         @test bytes == Parquet._encodefile(input; codec=name, dictionary=true)
         table = Parquet.Table(bytes)
-        @test table.columns.id == input.id
-        @test table.columns.name == input.name
-        @test isequal(table.columns.optional, input.optional)
+        @test Parquet.Tables.columns(table).id == input.id
+        @test Parquet.Tables.columns(table).name == input.name
+        @test isequal(Parquet.Tables.columns(table).optional, input.optional)
         close(table)
         file = Parquet.File(bytes)
         metadata = TH.decode(file.footer.bytes, MD.FileMetaData)
@@ -659,7 +659,7 @@ end
         close(file)
     end
     @test Parquet._encodefile(input; codec=:SNAPPY) == Parquet._encodefile(input; codec="snappy")
-    @test Parquet.Table(Parquet._encodefile(input; codec=:gzip, compressionlevel=9)).columns.id == input.id
+    @test Parquet.Table(Parquet._encodefile(input; codec=:gzip, compressionlevel=9)).id == input.id
     @test_throws ArgumentError Parquet._encodefile(input; codec=:unknown)
     @test_throws ArgumentError Parquet._encodefile(input; codec=:lz4)
     @test_throws ArgumentError Parquet._encodefile(input; codec=:lzo)
@@ -694,8 +694,8 @@ end
         bytes = Parquet._encodefile(input; codec=name, pageversion=:v2)
         @test bytes == Parquet._encodefile(input; codec=name, pageversion=:v2)
         table = Parquet.Table(bytes)
-        @test table.columns.required == input.required
-        @test isequal(table.columns.optional, input.optional)
+        @test Parquet.Tables.columns(table).required == input.required
+        @test isequal(Parquet.Tables.columns(table).optional, input.optional)
         close(table)
         for column in 1:2
             pages, metadata = writtenpages(bytes, column)
@@ -733,7 +733,7 @@ end
     @test missingheader.data_page_header_v2.is_compressed == false
     @test missingheader.compressed_page_size == missingheader.uncompressed_page_size == 2
     missingtable = Parquet.Table(missingbytes)
-    @test all(ismissing, missingtable.columns.value)
+    @test all(ismissing, Parquet.Tables.columns(missingtable).value)
     close(missingtable)
 
     emptybytes = Parquet._encodefile((value=Int32[],); codec=:snappy, pageversion=:v2)
@@ -743,12 +743,12 @@ end
     @test isempty(emptymetadata.row_groups)
     close(emptyfile)
     emptytable = Parquet.Table(emptybytes)
-    @test isempty(emptytable.columns.value)
+    @test isempty(Parquet.Tables.columns(emptytable).value)
     close(emptytable)
 
     io = IOBuffer()
     Parquet.write(io, input; codec=:gzip, pageversion="V2")
-    @test Parquet.Table(take!(io)).columns.required == input.required
+    @test Parquet.Tables.columns(Parquet.Table(take!(io))).required == input.required
     @test_throws ArgumentError Parquet._encodefile(input; pageversion=:v3)
     @test_throws ArgumentError Parquet._encodefile(input; pageversion=2)
 end
@@ -772,7 +772,7 @@ function checkencodedfile(input::NamedTuple, encoding::MD.Encoding.T, pageversio
     table = Parquet.Table(bytes)
     for name in keys(input)
         expected = expectedtablevalues(getproperty(input, name))
-        @test isequal(getproperty(table.columns, name), expected)
+        @test isequal(getproperty(Parquet.Tables.columns(table), name), expected)
     end
     close(table)
     if isempty(first(values(input)))
@@ -938,7 +938,7 @@ end
     io = IOBuffer()
     Parquet.write(io, (value=Int32[1],); encoding=:plain)
     table = Parquet.Table(take!(io))
-    @test table.columns.value == Int32[1]
+    @test Parquet.Tables.columns(table).value == Int32[1]
     close(table)
 end
 
@@ -993,7 +993,7 @@ end
         table = Parquet.Table(bytes)
         for name in keys(input)
             expected = expectedtablevalues(getproperty(input, name))
-            @test isequal(getproperty(table.columns, name), expected)
+            @test isequal(getproperty(Parquet.Tables.columns(table), name), expected)
         end
         close(table)
         for (index, encoding) in enumerate(expectedencodings)
@@ -1111,7 +1111,7 @@ end
     @test metadata.encodings == [MD.Encoding.PLAIN, MD.Encoding.RLE,
         MD.Encoding.RLE_DICTIONARY]
     table = Parquet.Table(dictionary)
-    @test table.columns.value == expectedtablevalues(repeated.value)
+    @test Parquet.Tables.columns(table).value == expectedtablevalues(repeated.value)
     close(table)
 
     @test_throws ArgumentError Parquet._encodefile((value=NTuple{0,UInt8}[()],))
@@ -1145,7 +1145,7 @@ end
     end
     written = Parquet.Table(bytes)
     try
-        @test written.metadata.created_by == "Parquet.jl version $(pkgversion(Parquet))"
+        @test Parquet._tablemetadata(written).created_by == "Parquet.jl version $(pkgversion(Parquet))"
     finally
         close(written)
     end
@@ -1156,9 +1156,9 @@ end
     bytes = take!(Parquet.write(IOBuffer(), parts))
     table = Parquet.Table(bytes)
     try
-        @test table.columns.a == [1, 2, 3, 4, 5]
-        @test table.columns.b == ["x", "y", "z", "w", "v"]
-        @test [group.num_rows for group in table.metadata.row_groups] == [2, 3]
+        @test Parquet.Tables.columns(table).a == [1, 2, 3, 4, 5]
+        @test Parquet.Tables.columns(table).b == ["x", "y", "z", "w", "v"]
+        @test [group.num_rows for group in Parquet._tablemetadata(table).row_groups] == [2, 3]
     finally
         close(table)
     end
@@ -1166,8 +1166,8 @@ end
     bytes = take!(Parquet.write(IOBuffer(), parts; rowgroupsize=2))
     table = Parquet.Table(bytes)
     try
-        @test table.columns.a == [1, 2, 3, 4, 5]
-        @test [group.num_rows for group in table.metadata.row_groups] == [2, 2, 1]
+        @test Parquet.Tables.columns(table).a == [1, 2, 3, 4, 5]
+        @test [group.num_rows for group in Parquet._tablemetadata(table).row_groups] == [2, 2, 1]
     finally
         close(table)
     end

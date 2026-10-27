@@ -49,6 +49,24 @@ function Interval(months::Integer, days::Integer, milliseconds::Integer)
     return Interval(UInt32(months), UInt32(days), UInt32(milliseconds))
 end
 
+# `print` gives the document text; `show` wraps it like a constructor call.
+function Base.print(io::IO, value::JSONValue)
+    Base.write(io, value.bytes)
+    return
+end
+
+function Base.show(io::IO, value::JSONValue)
+    print(io, "Parquet.JSONValue(")
+    show(io, value.bytes.s)
+    print(io, ")")
+    return
+end
+
+function Base.show(io::IO, value::BSONValue)
+    print(io, "Parquet.BSONValue(", length(value.bytes), " bytes)")
+    return
+end
+
 function Base.:(==)(left::JSONValue, right::JSONValue)
     return left.bytes == right.bytes
 end
@@ -171,7 +189,7 @@ function _binarylogicalkind(node::SchemaNode)
 end
 
 function _binarylogicaleltype(kind::Symbol, physical::Type)
-    kind === :enum && return String
+    kind === :enum && return DataStrings.DataString
     kind === :uuid && return UUIDs.UUID
     kind === :float16 && return Float16
     kind === :json && return JSONValue

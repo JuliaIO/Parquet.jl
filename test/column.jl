@@ -1062,8 +1062,8 @@ end
     int32 = columnleaf(MD.Type.INT32)
     page = datapage(Int32[1])
     @test_throws Parquet.FormatError readsynthetic([page], int32; num_values=1, file_path="other.parquet")
-    @test_throws Parquet.FormatError readsynthetic([page], int32; num_values=1, crypto=MD.ColumnCryptoMetaData(ENCRYPTION_WITH_FOOTER_KEY=MD.EncryptionWithFooterKey()))
-    @test_throws Parquet.FormatError readsynthetic([page], int32; num_values=1, encryptedmeta=UInt8[0x01])
+    @test_throws Parquet.UnsupportedFeatureError readsynthetic([page], int32; num_values=1, crypto=MD.ColumnCryptoMetaData(ENCRYPTION_WITH_FOOTER_KEY=MD.EncryptionWithFooterKey()))
+    @test_throws Parquet.UnsupportedFeatureError readsynthetic([page], int32; num_values=1, encryptedmeta=UInt8[0x01])
     @test_throws Parquet.FormatError readsynthetic([page], int32; num_values=1, type=MD.Type.INT64)
     @test_throws Parquet.FormatError readsynthetic([page], int32; num_values=1, path=["other"])
     # INT96 values are 12 bytes; a 4-byte page cannot hold one.
@@ -1223,11 +1223,11 @@ end
         @warn "parquet-testing corpus not found; skipping V2 column corpus tests" COLUMN_CORPUS
     else
         gzip = Parquet.Table(columncorpus("concatenated_gzip_members.parquet"))
-        @test gzip.columns.long_col == collect(Int64, 1:513)
+        @test Parquet.Tables.columns(gzip).long_col == collect(Int64, 1:513)
         close(gzip)
 
         booleans = Parquet.Table(columncorpus("rle_boolean_encoding.parquet"))
-        booleanvalues = booleans.columns.datatype_boolean
+        booleanvalues = Parquet.Tables.columns(booleans).datatype_boolean
         @test length(booleanvalues) == 68
         @test findall(ismissing, booleanvalues) == [3, 16, 24, 39, 49, 61]
         @test isequal(booleanvalues[1:8], Union{Missing,Bool}[true, false, missing, true,
@@ -1237,36 +1237,36 @@ end
         for fixture in ("page_v2_empty_compressed.parquet",
                 "datapage_v2_empty_datapage.snappy.parquet")
             empty = Parquet.Table(columncorpus(fixture))
-            @test all(ismissing, first(values(empty.columns)))
+            @test all(ismissing, first(values(Parquet.Tables.columns(empty))))
             close(empty)
         end
 
         required = Parquet.Table(columncorpus("delta_encoding_required_column.parquet"))
-        firstrequired = first(values(required.columns))
+        firstrequired = first(values(Parquet.Tables.columns(required)))
         @test firstrequired[1:5] == Int32[105, 104, 103, 102, 101]
         @test firstrequired[(end - 2):end] == Int32[3, 2, 1]
         close(required)
         optional = Parquet.Table(columncorpus("delta_encoding_optional_column.parquet"))
-        firstoptional = first(values(optional.columns))
+        firstoptional = first(values(Parquet.Tables.columns(optional)))
         @test isequal(firstoptional[1:5], Union{Missing,Int64}[100, 99, 98, 97, 96])
         @test isequal(firstoptional[(end - 2):end], Union{Missing,Int64}[3, 2, 1])
         close(optional)
 
         delta = Parquet.Table(columncorpus("delta_byte_array.parquet"))
-        @test delta.columns.c_customer_id[1:3] ==
+        @test Parquet.Tables.columns(delta).c_customer_id[1:3] ==
             ["AAAAAAAAIODAAAAA", "AAAAAAAAHODAAAAA", "AAAAAAAAGODAAAAA"]
-        @test delta.columns.c_customer_id[(end - 2):end] ==
+        @test Parquet.Tables.columns(delta).c_customer_id[(end - 2):end] ==
             ["AAAAAAAADAAAAAAA", "AAAAAAAACAAAAAAA", "AAAAAAAABAAAAAAA"]
         close(delta)
         lengths = Parquet.Table(columncorpus("delta_length_byte_array.parquet"))
-        @test lengths.columns.FRUIT ==
+        @test Parquet.Tables.columns(lengths).FRUIT ==
             ["apple_banana_mango$((index - 1)^2)" for index in 1:1000]
         close(lengths)
 
         packed = Parquet.Table(columncorpus("delta_binary_packed.parquet"))
-        @test all(==(Int64(6374628540732951412)), packed.columns.bitwidth0)
-        @test packed.columns.bitwidth1[1:5] == Int64[0, -1, -1, -1, -1]
-        @test packed.columns.bitwidth1[(end - 2):end] == Int64[-102, -103, -104]
+        @test all(==(Int64(6374628540732951412)), Parquet.Tables.columns(packed).bitwidth0)
+        @test Parquet.Tables.columns(packed).bitwidth1[1:5] == Int64[0, -1, -1, -1, -1]
+        @test Parquet.Tables.columns(packed).bitwidth1[(end - 2):end] == Int64[-102, -103, -104]
         close(packed)
 
         split = Parquet.Table(columncorpus("byte_stream_split_extended.gzip.parquet"))
@@ -1275,7 +1275,7 @@ end
                 (:int32_plain, :int32_byte_stream_split),
                 (:int64_plain, :int64_byte_stream_split),
                 (:flba5_plain, :flba5_byte_stream_split))
-            @test isequal(getproperty(split.columns, plain), getproperty(split.columns, encoded))
+            @test isequal(getproperty(Parquet.Tables.columns(split), plain), getproperty(Parquet.Tables.columns(split), encoded))
         end
         close(split)
 

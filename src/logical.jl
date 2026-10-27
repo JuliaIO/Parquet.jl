@@ -194,7 +194,7 @@ function _logicalvalues(element::Metadata.SchemaElement, values::AbstractVector;
     kind = _logicalkind(element)
     kind === nothing && return values
     _checklimit(:container_elements, length(values), limits.max_container_elements)
-    if kind === :string && eltype(values) <: Union{Missing,AbstractVector{UInt8}}
+    if kind in (:string, :enum) && eltype(values) <: Union{Missing,AbstractVector{UInt8}}
         T = Missing <: eltype(values) ? Union{Missing,DataStrings.DataString} :
             DataStrings.DataString
         return _stringvalues(T, values, limits)

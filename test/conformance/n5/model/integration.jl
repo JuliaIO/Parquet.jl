@@ -46,7 +46,7 @@ function _n5normalize(node::N5Map, value)
 end
 
 function n5normalizetable(node::N5Node, table)
-    columns = values(table.columns)
+    columns = values(Parquet.Tables.columns(table))
     column = first(columns)
     output = []
     sizehint!(output, length(column))

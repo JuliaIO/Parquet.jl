@@ -427,9 +427,9 @@ function n5externalnormalize(value)
 end
 
 function n5externalnormalizerows(table::Parquet.Table)
-    columns = collect(pairs(table.columns))
-    output = Vector{Vector{Pair{String,Any}}}(undef, table.rows)
-    for row in 1:table.rows
+    columns = collect(pairs(Parquet.Tables.columns(table)))
+    output = Vector{Vector{Pair{String,Any}}}(undef, Parquet._tablerows(table))
+    for row in 1:Parquet._tablerows(table)
         values = Pair{String,Any}[]
         sizehint!(values, length(columns))
         for column in columns
@@ -443,16 +443,16 @@ end
 
 function n5externalpageversions(table::Parquet.Table)
     versions = Symbol[]
-    for group in table.metadata.row_groups
+    for group in Parquet._tablemetadata(table).row_groups
         for column in group.columns
             metadata = column.meta_data
             metadata === nothing && throw(ArgumentError(
                 "external column chunk has no metadata"))
             firstbyte, stop = Parquet._chunkrange(metadata,
-                table.file.footer.offset)
+                getfield(table, :file).footer.offset)
             position = firstbyte
             while position < stop
-                frame = Parquet.readpage(table.file.source, position, stop,
+                frame = Parquet.readpage(getfield(table, :file).source, position, stop,
                     Parquet.Limits())
                 kind = Parquet.pagekind(frame)
                 if kind === :data_v1
@@ -582,8 +582,8 @@ end
             try
                 expected = N5_EXTERNAL_EXPECTED_ROWS[
                     "$(fixture.producer)/$(fixture.case_id)"]
-                @test table.rows == fixture.rows == length(expected)
-                @test table.metadata.num_rows == fixture.rows
+                @test Parquet._tablerows(table) == fixture.rows == length(expected)
+                @test Parquet._tablemetadata(table).num_rows == fixture.rows
                 @test all(==(fixture.page_version),
                     n5externalpageversions(table))
                 actual = n5externalnormalizerows(table)
@@ -598,13 +598,13 @@ end
                     decoded = N5.n5decodefile(output.privatefirst)
                     @test decoded.metadata.num_rows == fixture.rows
                     @test N5.n5schemaexact(decoded.metadata.schema,
-                        table.metadata.schema)
+                        Parquet._tablemetadata(table).schema)
                     @test all(==(pageversion), decoded.pageversions)
                     rewritten = Parquet.Table(output.privatefirst)
                     try
-                        @test rewritten.rows == fixture.rows
-                        @test N5.n5schemaexact(rewritten.metadata.schema,
-                            table.metadata.schema)
+                        @test Parquet._tablerows(rewritten) == fixture.rows
+                        @test N5.n5schemaexact(Parquet._tablemetadata(rewritten).schema,
+                            Parquet._tablemetadata(table).schema)
                         @test all(==(pageversion),
                             n5externalpageversions(rewritten))
                         @test isequal(n5externalnormalizerows(rewritten),

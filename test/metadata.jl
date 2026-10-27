@@ -20,10 +20,11 @@ function metabytes(f)
 end
 
 function footermetadata(path)
-    file = Parquet.File(path)
-    bytes = copy(file.footer.bytes)
-    encrypted = file.footer.encrypted
-    close(file)
+    src = Parquet.source(path)
+    footer = Parquet.readfooter(src)
+    bytes = copy(footer.bytes)
+    encrypted = footer.encrypted
+    close(src)
     r = TH.Reader(bytes)
     value = TH.decode(r, encrypted ? MD.FileCryptoMetaData : MD.FileMetaData)
     return value, bytes, TH.consumed(r)

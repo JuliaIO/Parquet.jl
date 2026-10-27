@@ -1,3 +1,9 @@
+"""
+    Parquet.FormatError(message)
+
+The input is not a valid Parquet file: corrupt or inconsistent metadata, a page that
+does not decode, or a checksum mismatch. `message` says what is wrong.
+"""
 struct FormatError <: Exception
     message::String
 end
@@ -7,6 +13,13 @@ function Base.showerror(io::IO, err::FormatError)
     return
 end
 
+"""
+    Parquet.UnsupportedFeatureError(message)
+
+The file uses something this package does not read, such as encryption or LZO
+compression, or holds a value the requested Julia type cannot represent. `message`
+names it and, where one exists, the way to read the file.
+"""
 struct UnsupportedFeatureError <: Exception
     message::String
 end
@@ -16,6 +29,13 @@ function Base.showerror(io::IO, err::UnsupportedFeatureError)
     return
 end
 
+"""
+    Parquet.LimitError(resource, requested, maximum)
+
+A size or count exceeded a cap in [`Parquet.Limits`](@ref). `resource` names the
+quantity (for example `:page_bytes` for `max_page_bytes`); `requested` is the size
+the file asked for and `maximum` the cap. Raise the cap to read the file.
+"""
 struct LimitError <: Exception
     resource::Symbol
     requested::Int64

@@ -182,14 +182,14 @@ end
     ]
     close(file)
     table = Parquet.Table(bytes)
-    @test table.columns.integers == input.integers
-    @test reinterpret(UInt64, table.columns.floats) == reinterpret(UInt64, input.floats)
-    @test table.columns.strings == input.strings
-    @test table.columns.raw == input.raw
-    @test isequal(table.columns.optional, input.optional)
-    @test table.columns.flags == input.flags
-    table.columns.raw[1][1] = 0xaa
-    @test table.columns.raw[2] == rawvalue
+    @test Parquet.Tables.columns(table).integers == input.integers
+    @test reinterpret(UInt64, Parquet.Tables.columns(table).floats) == reinterpret(UInt64, input.floats)
+    @test Parquet.Tables.columns(table).strings == input.strings
+    @test Parquet.Tables.columns(table).raw == input.raw
+    @test isequal(Parquet.Tables.columns(table).optional, input.optional)
+    @test Parquet.Tables.columns(table).flags == input.flags
+    Parquet.Tables.columns(table).raw[1][1] = 0xaa
+    @test Parquet.Tables.columns(table).raw[2] == rawvalue
     close(table)
     boolean = Parquet._encodefile((value=fill(true, 2000),); dictionary=true)
     booleanfile = Parquet.File(boolean)
@@ -199,7 +199,7 @@ end
     @test booleanchunk.encodings == [MD.Encoding.PLAIN]
     close(booleanfile)
     booleantable = Parquet.Table(boolean)
-    @test booleantable.columns.value == fill(true, 2000)
+    @test Parquet.Tables.columns(booleantable).value == fill(true, 2000)
     close(booleantable)
     allmissing = Union{Missing,Int32}[missing for _ in 1:8]
     missingcolumn = Parquet._writecolumn(:value, allmissing)
@@ -219,7 +219,7 @@ end
     close(uniquefile)
     io = IOBuffer()
     Parquet.write(io, (value=fill(Int64(9), 100),); dictionary=true, checksum=false)
-    @test Parquet.Table(take!(io)).columns.value == fill(Int64(9), 100)
+    @test Parquet.Tables.columns(Parquet.Table(take!(io))).value == fill(Int64(9), 100)
 end
 
 @testset "adaptive dictionary V2 writer" begin
@@ -230,7 +230,7 @@ end
         bytes = Parquet._encodefile(input; dictionary=true, codec=codec, pageversion=:v2)
         plain = Parquet._encodefile(input; dictionary=false, codec=codec, pageversion=:v2)
         table = Parquet.Table(bytes)
-        @test table.columns.value == input.value
+        @test Parquet.Tables.columns(table).value == input.value
         close(table)
         pages, metadata = writtenpages(bytes, 1)
         _, plainmetadata = writtenpages(plain, 1)
@@ -269,7 +269,7 @@ end
         @test_throws Parquet.FormatError corpuscolumn(
             columncorpus("rle-dict-uncompressed-corrupt-checksum.parquet"), 1)
         indexed = Parquet.Table(columncorpus("data_index_bloom_encoding_with_length.parquet"))
-        @test indexed.columns.String == ["Hello", "This is", "a", "test", "How", "are you",
+        @test Parquet.Tables.columns(indexed).String == ["Hello", "This is", "a", "test", "How", "are you",
             "doing ", "today", "the quick", "brown fox", "jumps", "over", "the lazy", "dog"]
         close(indexed)
         alltypes = Parquet.File(columncorpus("alltypes_dictionary.parquet"))
@@ -293,7 +293,7 @@ end
         @test tinymeta.row_groups[1].columns[3].meta_data.dictionary_page_offset === nothing
         close(tiny)
         empty = Parquet.Table(columncorpus("column_chunk_key_value_metadata.parquet"))
-        @test length(empty) == 0
+        @test Parquet.Tables.rowcount(empty) == 0
         close(empty)
     end
 end

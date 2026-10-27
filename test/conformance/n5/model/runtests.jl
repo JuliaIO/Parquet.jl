@@ -146,7 +146,7 @@ function n5productioncheck(node, schema, streams, expectedrows,
         @test isequal(assembled, expectedrows)
         @test isequal(N5.n5normalizetable(node, table), assembled)
         expectedtree = N5.n5expectedvectortree(node, assembled)
-        @test N5.n5comparevectortree(expectedtree, table.columns)
+        @test N5.n5comparevectortree(expectedtree, Parquet.Tables.columns(table))
         actual, fields, rows = N5.n5productionstreams(table, compiled)
         @test rows == length(expectedrows)
         @test fields.elements == schema
@@ -266,7 +266,7 @@ end
 
 function n5propertycodecmetadata(table, codec::Symbol)
     expected = n5propertycodecenum(codec)
-    for rowgroup in table.metadata.row_groups
+    for rowgroup in Parquet._tablemetadata(table).row_groups
         for chunk in rowgroup.columns
             @test chunk.meta_data.codec == expected
         end
@@ -503,7 +503,7 @@ end
             length(standard.rows); pageversion=pageversion)
         table = Parquet.Table(bytes)
         try
-            duplicated = table.columns.attrs[4]
+            duplicated = Parquet.Tables.columns(table).attrs[4]
             @test Parquet.maplookup(duplicated, "a") == Int32(2)
             @test_throws KeyError Parquet.maplookup(duplicated, "absent")
         finally
@@ -606,7 +606,7 @@ end
             @test isequal(decoded.streams, control.streams)
             table = Parquet.Table(bytes)
             try
-                column = first(values(table.columns))
+                column = first(values(Parquet.Tables.columns(table)))
                 if control.expected === :list
                     @test column isa Parquet.ListVector
                 else
@@ -614,7 +614,7 @@ end
                 end
                 @test isequal(N5.n5normalizetable(node, table), control.rows)
                 expectedtree = N5.n5expectedvectortree(node, control.rows)
-                @test N5.n5comparevectortree(expectedtree, table.columns)
+                @test N5.n5comparevectortree(expectedtree, Parquet.Tables.columns(table))
                 actual, fields, rows = N5.n5productionstreams(table,
                     compiled)
                 @test rows == length(control.rows)
@@ -667,7 +667,7 @@ end
             @test isequal(decoded.streams, control.streams)
             table = Parquet.Table(bytes)
             try
-                column = first(values(table.columns))
+                column = first(values(Parquet.Tables.columns(table)))
                 if control.expected === :map
                     @test column isa Parquet.MapVector
                 elseif control.expected === :list
@@ -677,7 +677,7 @@ end
                 end
                 @test isequal(N5.n5normalizetable(node, table), control.rows)
                 expectedtree = N5.n5expectedvectortree(node, control.rows)
-                @test N5.n5comparevectortree(expectedtree, table.columns)
+                @test N5.n5comparevectortree(expectedtree, Parquet.Tables.columns(table))
                 actual, fields, rows = N5.n5productionstreams(table,
                     compiled)
                 @test rows == length(control.rows)
@@ -814,13 +814,13 @@ end
             for stream in decoded.streams)
         table = Parquet.Table(bytes)
         try
-            @test table.rows == 0
-            @test isempty(table.metadata.row_groups)
-            @test N5.n5schemaexact(table.metadata.schema,
+            @test Parquet._tablerows(table) == 0
+            @test isempty(Parquet._tablemetadata(table).row_groups)
+            @test N5.n5schemaexact(Parquet._tablemetadata(table).schema,
                 decoded.metadata.schema)
             @test isequal(N5.n5normalizetable(case.node, table), case.rows)
             expectedtree = N5.n5expectedvectortree(case.node, case.rows)
-            @test N5.n5comparevectortree(expectedtree, table.columns)
+            @test N5.n5comparevectortree(expectedtree, Parquet.Tables.columns(table))
         finally
             close(table)
         end
@@ -849,11 +849,11 @@ end
             source = N5.n5decodefile(independent)
             table = Parquet.Table(production)
             try
-                @test N5.n5schemaexact(table.metadata.schema,
+                @test N5.n5schemaexact(Parquet._tablemetadata(table).schema,
                     source.metadata.schema)
                 @test isequal(N5.n5normalizetable(case.node, table), case.rows)
                 expectedtree = N5.n5expectedvectortree(case.node, case.rows)
-                @test N5.n5comparevectortree(expectedtree, table.columns)
+                @test N5.n5comparevectortree(expectedtree, Parquet.Tables.columns(table))
             finally
                 close(table)
             end
@@ -884,11 +884,11 @@ end
         @test fixture.sha256 == bytes2hex(SHA.sha256(fixture.bytes))
         table = Parquet.Table(fixture.bytes)
         try
-            @test table.rows == length(case.rows)
-            @test N5.n5schemaexact(table.metadata.schema, fixture.schema)
+            @test Parquet._tablerows(table) == length(case.rows)
+            @test N5.n5schemaexact(Parquet._tablemetadata(table).schema, fixture.schema)
             @test isequal(N5.n5normalizetable(case.node, table), case.rows)
             expectedtree = N5.n5expectedvectortree(case.node, case.rows)
-            @test N5.n5comparevectortree(expectedtree, table.columns)
+            @test N5.n5comparevectortree(expectedtree, Parquet.Tables.columns(table))
             actual, fields, rows = N5.n5productionstreams(table,
                 N5.n5compile(case.node))
             @test rows == length(case.rows)
