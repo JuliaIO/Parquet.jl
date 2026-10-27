@@ -240,6 +240,19 @@ Parquet.write("bounded.parquet", table; limits=limits)
 Readers treat statistics as untrusted metadata. They validate physical widths,
 logical ordering, and declared sort order before exposing a bound.
 
+### Bloom filters
+
+`bloomfilter=true` writes a split-block bloom filter for every column chunk, and
+`bloomfilter=[:id, :name]` for the named columns (a leaf path tuple such as
+`("tags", "list", "element")` names a nested leaf). A reader such as DuckDB
+uses a filter to skip row groups that cannot hold a value it looks for. Each filter is
+sized from its chunk's distinct values for a 1% false-positive rate and is written
+after its row group's column chunks. BOOLEAN columns get none.
+
+```julia
+Parquet.write("indexed.parquet", table; bloomfilter=[:customer_id])
+```
+
 ## Logical values
 
 Use `Parquet.LogicalColumn` when a Julia element type does not contain the complete

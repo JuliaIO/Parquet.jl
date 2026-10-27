@@ -20,8 +20,8 @@ maps, including null containers, empty containers, and null elements. The reader
 handles the legacy list and map layouts covered by the pinned Apache corpus. The
 writer emits row-group statistics, column indexes, and offset indexes by default; the reader does not
 use page indexes yet. `Parquet.Table(path; scan=Tables.Scan(...))` reads only the
-columns a scan needs. Filter pushdown, datasets, bloom filters, encryption, Variant,
-and geospatial modules remain target work. LZO is not
+columns a scan needs. Bloom filters are written on request (`bloomfilter=`). Filter pushdown, datasets,
+encryption, Variant, and geospatial modules remain target work. LZO is not
 supported and is not planned, because every LZO implementation is GPL-2. INT96
 timestamps are read but not written, because the type is deprecated in the format.
 `NTuple{N,UInt8}` writer columns map to FIXED_LEN_BYTE_ARRAY, and `Parquet.Table`

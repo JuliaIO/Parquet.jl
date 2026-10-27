@@ -471,6 +471,10 @@ end
 # Resolves the encoding policy against the schema leaves before any value is read.
 function _preflightwriteencoding(semantic::_NestedSchemaPlan, encoding,
         dictionary::Bool)
+    return _writeencodingchoices(_writeleafplans(semantic), encoding, dictionary)
+end
+
+function _writeleafplans(semantic::_NestedSchemaPlan)
     emptyschema = Metadata.SchemaElement[]
     leaves = WriteLeafPlan[]
     sizehint!(leaves, length(semantic.leaves))
@@ -486,8 +490,40 @@ function _preflightwriteencoding(semantic::_NestedSchemaPlan, encoding,
             emptyschema)
         push!(leaves, WriteLeafPlan(node.column_index, node.path, column))
     end
-    return _writeencodingchoices(leaves, encoding, dictionary)
+    return leaves
 end
+
+"""
+    _bloomleaves(leaves, bloomfilter) -> Vector{Bool}
+
+Which leaves get bloom filters: all but BOOLEAN leaves for `true`, none for `false`, or
+the leaves a selector or collection of selectors names (column names, leaf path tuples,
+or leaf ordinals, as in encoding overrides).
+"""
+function _bloomleaves(leaves::Vector{WriteLeafPlan}, bloomfilter::Bool)
+    return Bool[bloomfilter && leaf.column.physical != Metadata.Type.BOOLEAN
+        for leaf in leaves]
+end
+
+_bloomleaves(leaves::Vector{WriteLeafPlan}, selector::Union{Symbol,AbstractString,Integer}) =
+    _bloomleaves(leaves, (selector,))
+
+function _bloomleaves(leaves::Vector{WriteLeafPlan},
+        selectors::Union{AbstractVector,AbstractSet,Tuple})
+    flags = fill(false, length(leaves))
+    for selector in selectors
+        index = _writeencodingleafindex(leaves, _writeencodingselector(selector);
+            policy="bloomfilter")
+        leaves[index].column.physical == Metadata.Type.BOOLEAN && throw(ArgumentError(
+            "bloom filters are not written for BOOLEAN columns; $(repr(selector)) is one"))
+        flags[index] = true
+    end
+    return flags
+end
+
+_bloomleaves(::Vector{WriteLeafPlan}, bloomfilter) = throw(ArgumentError(
+    "bloomfilter must be a Bool, a column selector, or a collection of selectors, got " *
+    "$(typeof(bloomfilter))"))
 
 # Scalar element types the flat column writer maps exactly as the nested writer does.
 function _flatwritetype(::Type{T}) where {T}
@@ -739,51 +775,52 @@ function _writepathmatches(path::Vector{String}, selector::Tuple)
     return true
 end
 
-function _singlewriteencodingmatch(matches::Vector{Int}, selector; kind::String)
+function _singlewriteencodingmatch(matches::Vector{Int}, selector; kind::String,
+        policy::String)
     isempty(matches) && throw(ArgumentError(
-        "unknown Parquet writer $kind $(repr(selector)) in encoding policy"))
+        "unknown Parquet writer $kind $(repr(selector)) in $policy"))
     length(matches) == 1 || throw(ArgumentError(
         "ambiguous Parquet writer $kind $(repr(selector)) selects multiple physical leaves; use a positive leaf ordinal"))
     return only(matches)
 end
 
 function _writeencodingleafindex(leaves::Vector{WriteLeafPlan},
-    selector::Tuple{Symbol,<:Integer})
+    selector::Tuple{Symbol,<:Integer}; policy::String="encoding policy")
     ordinal = selector[2]
     matches = Int[]
     for (index, leaf) in enumerate(leaves)
         leaf.ordinal == ordinal && push!(matches, index)
     end
     return _singlewriteencodingmatch(matches, ordinal;
-        kind="physical leaf ordinal")
+        kind="physical leaf ordinal", policy)
 end
 
 function _writeencodingleafindex(leaves::Vector{WriteLeafPlan},
-    selector::Tuple{Symbol,<:Tuple})
+    selector::Tuple{Symbol,<:Tuple}; policy::String="encoding policy")
     path = selector[2]
     matches = Int[]
     for (index, leaf) in enumerate(leaves)
         _writepathmatches(leaf.path, path) && push!(matches, index)
     end
     return _singlewriteencodingmatch(matches, path;
-        kind="physical leaf path")
+        kind="physical leaf path", policy)
 end
 
 function _writeencodingleafindex(leaves::Vector{WriteLeafPlan},
-    selector::Tuple{Symbol,String})
+    selector::Tuple{Symbol,String}; policy::String="encoding policy")
     name = selector[2]
     flat = Int[]
     for (index, leaf) in enumerate(leaves)
         length(leaf.path) == 1 && only(leaf.path) == name && push!(flat, index)
     end
     isempty(flat) || return _singlewriteencodingmatch(flat, name;
-        kind="column")
+        kind="column", policy)
     group = Int[]
     for (index, leaf) in enumerate(leaves)
         !isempty(leaf.path) && first(leaf.path) == name && push!(group, index)
     end
     return _singlewriteencodingmatch(group, name;
-        kind="top-level field")
+        kind="top-level field", policy)
 end
 
 function _mappedwriteencodingchoices(leaves::Vector{WriteLeafPlan}, entries,

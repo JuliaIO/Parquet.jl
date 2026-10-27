@@ -5,6 +5,7 @@ struct _WriteOptions
     rowgroupsize::Union{Nothing,Int}
     dictionary::Bool
     encoding::Any
+    bloomfilter::Any
     ntasks::Int
     nullable::Union{Nothing,Bool}
     metadata::Any
@@ -34,7 +35,7 @@ function _writepagesize(value)
 end
 
 function _writeoptions(; compress=:snappy, compresslevel::Union{Nothing,Integer}=nothing,
-        dictionary::Bool=true, encoding=nothing, rowgroupsize=1_048_576,
+        dictionary::Bool=true, encoding=nothing, bloomfilter=false, rowgroupsize=1_048_576,
         pagesize=1024 * 1024, pageversion=:v1, statistics::Bool=true, pageindex::Bool=true,
         checksum::Bool=false, ntasks::Integer=Threads.nthreads(), metadata=nothing,
         colmetadata=nothing, nullable::Union{Nothing,Bool}=nothing,
@@ -69,7 +70,8 @@ function _writeoptions(; compress=:snappy, compresslevel::Union{Nothing,Integer}
         target === nothing ? typemax(Int) : _PAGE_ROW_LIMIT, checksum, statistics,
         pageindex, statlimit, limits)
     return _WriteOptions(chunk, rowgroupsize === nothing ? nothing : Int(rowgroupsize),
-        dictionary, encoding, Int(ntasks), nullable, metadata, colmetadata, limits)
+        dictionary, encoding, bloomfilter, Int(ntasks), nullable, metadata, colmetadata,
+        limits)
 end
 
 ## Schema
@@ -115,9 +117,11 @@ function _flatelement(name::String, values::AbstractVector, optional::Bool,
 end
 
 function _leafspecs(schema::Schema, semantic::_NestedSchemaPlan, options::_WriteOptions)
-    choices = _preflightwriteencoding(semantic, options.encoding, options.dictionary)
+    plans = _writeleafplans(semantic)
+    choices = _writeencodingchoices(plans, options.encoding, options.dictionary)
+    blooms = _bloomleaves(plans, options.bloomfilter)
     leaves = _LeafSpec[]
-    for (node, choice) in zip(schema.leaves, choices)
+    for (node, choice, bloom) in zip(schema.leaves, choices, blooms)
         element = node.element
         element.type_ == Metadata.Type.INT96 && throw(UnsupportedFeatureError(
             "writing INT96 is not supported; write the table's columns (for example " *
@@ -125,7 +129,7 @@ function _leafspecs(schema::Schema, semantic::_NestedSchemaPlan, options::_Write
             "nanosecond TIMESTAMP"))
         push!(leaves, _LeafSpec(element, copy(node.path), Int(node.max_repetition_level),
             Int(node.max_definition_level), _statisticorder(element), choice.encoding,
-            choice.dictionary))
+            choice.dictionary, bloom))
     end
     return leaves
 end
@@ -414,6 +418,8 @@ struct _ChunkRecord
     meta::Metadata.ColumnMetaData
     columnindex::Union{Nothing,Metadata.ColumnIndex}
     offsetindex::Metadata.OffsetIndex
+    # A bloom filter waiting to be written after its row group's column chunks.
+    bloom::Vector{UInt8}
 end
 
 struct _GroupRecord
@@ -600,6 +606,7 @@ function _writetable!(writer::Writer, table, source)
                 field.name))
         end
         if fieldindex == fieldcount
+            _writeblooms!(writer, pending)
             grouprows = min(rows, group * size) - (group - 1) * size
             uncompressed = sum(record.meta.total_uncompressed_size for record in pending)
             compressed = sum(record.meta.total_compressed_size for record in pending)
@@ -620,6 +627,25 @@ end
     throw(ArgumentError("the table has columns $(given) but the file's columns are " *
         "$(names)"))
 end
+
+# Bloom filters follow their row group's column chunks (parquet-format BloomFilter.md
+# allows them between row groups), so the writer holds one row group's filters at most.
+function _writeblooms!(writer::Writer, records::Vector{_ChunkRecord})
+    for (index, record) in enumerate(records)
+        isempty(record.bloom) && continue
+        offset = writer.offset
+        Base.write(writer.io, record.bloom)
+        writer.offset += length(record.bloom)
+        records[index] = _ChunkRecord(_withbloom(record.meta, offset,
+            Int32(length(record.bloom))), record.columnindex, record.offsetindex, UInt8[])
+    end
+    return records
+end
+
+_withbloom(meta::Metadata.ColumnMetaData, offset::Int64, length::Int32) =
+    Metadata.ColumnMetaData((name === :bloom_filter_offset ? offset :
+        name === :bloom_filter_length ? length : getfield(meta, name)
+        for name in fieldnames(Metadata.ColumnMetaData))...)
 
 function _writemagic!(writer::Writer)
     iszero(writer.offset) || return
@@ -655,7 +681,7 @@ function _writechunk!(writer::Writer, leaf::_LeafSpec, chunk::_EncodedChunk,
         compressed_page_size=page.size, first_row_index=page.firstrow)
         for page in chunk.pages]
     return _ChunkRecord(meta, chunk.columnindex,
-        Metadata.OffsetIndex(page_locations=locations))
+        Metadata.OffsetIndex(page_locations=locations), chunk.bloom)
 end
 
 """
@@ -854,6 +880,9 @@ Keywords and defaults (pyarrow's):
   (`pagesize=nothing`: one page per column chunk).
 - `pageversion=:v1` or `:v2`; `statistics=true`; `pageindex=true` (column and offset
   indexes); `checksum=false` (page CRC32).
+- `bloomfilter=false`: `true` for every column, or column names (or leaf path tuples or
+  ordinals) whose column chunks get split-block bloom filters. Each filter is sized from
+  its chunk's distinct values for a 1% false-positive rate. BOOLEAN columns get none.
 - `metadata`, `colmetadata`: file and column key-value metadata, by default the table's
   DataAPI metadata. Column metadata is stored with each of the column's chunks.
 - `ntasks=Threads.nthreads()`: tasks encoding column chunks in parallel; the output does

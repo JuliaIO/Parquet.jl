@@ -343,6 +343,77 @@ end
 _dictionarycount(dictionary::_BytesDictionary) = length(dictionary.entries.starts)
 _dictionarybytes(dictionary::_BytesDictionary) = length(dictionary.entries.data)
 
+# The distinct XXH64 hashes of a column chunk's values: they size its bloom filter and
+# are inserted into it. Slots hold hashes; zero marks an empty slot, so a zero hash is
+# kept in `zero`.
+mutable struct _HashSet
+    slots::Vector{UInt64}
+    count::Int
+    shift::Int
+    zero::Bool
+end
+
+_HashSet() = _HashSet(zeros(UInt64, 1024), 0, 64 - 10, false)
+
+_hashcount(set::_HashSet) = set.count + set.zero
+
+function _resethashes!(set::_HashSet)
+    set.count = 0
+    set.zero = false
+    return _resetslots!(set)
+end
+
+function _addhash!(set::_HashSet, hash::UInt64)
+    iszero(hash) && (set.zero = true; return)
+    slots = set.slots
+    mask = length(slots) - 1
+    slot = Int(hash >> set.shift) + 1
+    @inbounds while true
+        entry = slots[slot]
+        entry == hash && return
+        if iszero(entry)
+            slots[slot] = hash
+            set.count += 1
+            2 * set.count > length(slots) && _rehash!(set)
+            return
+        end
+        slot = (slot & mask) + 1
+    end
+end
+
+function _rehash!(set::_HashSet)
+    slots = zeros(UInt64, 2 * length(set.slots))
+    shift = set.shift - 1
+    mask = length(slots) - 1
+    @inbounds for hash in set.slots
+        iszero(hash) && continue
+        slot = Int(hash >> shift) + 1
+        while !iszero(slots[slot])
+            slot = (slot & mask) + 1
+        end
+        slots[slot] = hash
+    end
+    set.slots = slots
+    set.shift = shift
+    return set
+end
+
+function _addhashes!(set::_HashSet, values::Vector{P}) where {P}
+    for value in values
+        _addhash!(set, _bloomhash(value))
+    end
+    return set
+end
+
+function _addhashes!(set::_HashSet, values::_BytesBuffer)
+    data = values.data
+    GC.@preserve data for index in eachindex(values.starts)
+        pointer, length = _bytesview(values, index)
+        _addhash!(set, _xxhash64(pointer, length))
+    end
+    return set
+end
+
 _newdictionary(::Vector{P}) where {P} = _NumberDictionary{P}()
 _newdictionary(buffer::_BytesBuffer) = _BytesDictionary(buffer)
 
@@ -658,6 +729,7 @@ struct _LeafSpec
     order::_Order
     encoding::Union{Nothing,Metadata.Encoding.T}
     dictionary::Bool
+    bloom::Bool
 end
 
 # A dictionary is probed on the chunk's first page with values: it is kept only when
@@ -697,6 +769,8 @@ mutable struct _ChunkWriter{B,D}
     found::Bool
     min::Vector{UInt8}
     max::Vector{UInt8}
+    # The distinct value hashes of a chunk that gets a bloom filter.
+    hashes::Union{Nothing,_HashSet}
 end
 
 function _pagebuffer(element::Metadata.SchemaElement, limits::Limits)
@@ -718,6 +792,7 @@ end
 struct _EncodeScratch
     buffers::Dict{Any,Any}
     dictionaries::Dict{Any,Any}
+    hashes::_HashSet
     definitions::Vector{UInt16}
     repetitions::Vector{UInt16}
     indices::Vector{UInt32}
@@ -728,8 +803,8 @@ end
 
 function _encodescratch()
     return get!(task_local_storage(), :ParquetEncodeScratch) do
-        _EncodeScratch(Dict{Any,Any}(), Dict{Any,Any}(), UInt16[], UInt16[], UInt32[],
-            UInt8[], UInt8[], UInt8[])
+        _EncodeScratch(Dict{Any,Any}(), Dict{Any,Any}(), _HashSet(), UInt16[], UInt16[],
+            UInt32[], UInt8[], UInt8[], UInt8[])
     end::_EncodeScratch
 end
 
@@ -770,14 +845,14 @@ function _resetdictionary!(dictionary::_BytesDictionary)
 end
 
 # Large tables shrink back so a reset never clears megabytes for a small chunk.
-function _resetslots!(dictionary)
-    if length(dictionary.slots) > 1 << 16
-        dictionary.slots = zeros(Int32, 1024)
-        dictionary.shift = 64 - 10
+function _resetslots!(table)
+    if length(table.slots) > 1 << 16
+        table.slots = zeros(eltype(table.slots), 1024)
+        table.shift = 64 - 10
     else
-        fill!(dictionary.slots, Int32(0))
+        fill!(table.slots, zero(eltype(table.slots)))
     end
-    return dictionary
+    return table
 end
 
 function _ChunkWriter(leaf::_LeafSpec, options::_ChunkOptions, scratch::_EncodeScratch)
@@ -790,7 +865,8 @@ function _ChunkWriter(leaf::_LeafSpec, options::_ChunkOptions, scratch::_EncodeS
         scratch.definitions, scratch.repetitions, scratch.indices, scratch.body,
         scratch.page, scratch.compressed, UInt8[], dictionary,
         usedictionary ? _DICT_PROBING : _DICT_OFF, _PageRecord[], Int32(0), Int32(0),
-        Int64(0), Int64(0), Int64(0), Int64(0), false, UInt8[], UInt8[])
+        Int64(0), Int64(0), Int64(0), Int64(0), false, UInt8[], UInt8[],
+        leaf.bloom ? _resethashes!(scratch.hashes) : nothing)
 end
 
 # A pooled chunk buffers dictionary indices instead of values.
@@ -966,6 +1042,7 @@ function _flushpage!(chunk::_ChunkWriter, rows::Int, firstrow::Int)
     chunk.entries += entries
     chunk.nulls += nulls
     chunk.uncompressed += length(headerbytes) + uncompressed
+    chunk.hashes === nothing || _addhashes!(chunk.hashes, chunk.values)
     _resetbuffer!(chunk.values)
     empty!(chunk.definitions)
     empty!(chunk.repetitions)
@@ -989,6 +1066,8 @@ struct _EncodedChunk
     statistics::Union{Nothing,Metadata.Statistics}
     pages::Vector{_PageRecord}
     columnindex::Union{Nothing,Metadata.ColumnIndex}
+    # The bloom filter as stored (header and bitset); empty when the chunk has none.
+    bloom::Vector{UInt8}
 end
 
 function _dictionaryframe(chunk::_ChunkWriter)
@@ -1075,8 +1154,31 @@ function _finishchunk(chunk::_ChunkWriter)
     columnindex = options.pageindex && options.statistics && leaf.order != _ORDER_NONE ?
         _columnindex(chunk) : nothing
     return _EncodedChunk(dictionary, chunk.data, encodings, stats, chunk.entries,
-        chunk.uncompressed + dictionarybytes, statistics, chunk.pages, columnindex)
+        chunk.uncompressed + dictionarybytes, statistics, chunk.pages, columnindex,
+        _chunkbloom(chunk))
 end
+
+# The false-positive probability of the bloom filters the writer sizes (parquet-mr's and
+# DuckDB's default).
+const _BLOOM_FPP = 0.01
+
+function _chunkbloom(chunk::_ChunkWriter)
+    hashes = chunk.hashes
+    hashes === nothing && return UInt8[]
+    # A pooled chunk buffers no values; its dictionary holds the values it uses.
+    chunk.state == _DICT_POOLED && _addhashes!(hashes, _dictionaryvalues(chunk.dictionary))
+    count = _hashcount(hashes)
+    iszero(count) && return UInt8[]
+    words = zeros(UInt32, _bloombytes(count, _BLOOM_FPP) >> 2)
+    hashes.zero && _bloominsert!(words, UInt64(0))
+    for hash in hashes.slots
+        iszero(hash) || _bloominsert!(words, hash)
+    end
+    return _bloomfilterbytes(words)
+end
+
+_dictionaryvalues(dictionary::_NumberDictionary) = dictionary.values
+_dictionaryvalues(dictionary::_BytesDictionary) = dictionary.entries
 
 function _chunkstatistics(chunk::_ChunkWriter)
     floating = chunk.leaf.order in (_ORDER_FLOAT, _ORDER_FLOAT16)

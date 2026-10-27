@@ -432,7 +432,7 @@ end
     )
     options = Parquet._writeoptions().chunk
     leaf = Parquet._LeafSpec(element, String["value"], 0, 0,
-        Parquet._statisticorder(element), nothing, false)
+        Parquet._statisticorder(element), nothing, false, false)
     rows = Parquet._FlatRows(Vector{UInt8}[UInt8[0x01]], 1, 1, identity, false, "value")
     @test_throws "FIXED_LEN_BYTE_ARRAY(2) value has 1 bytes" Parquet._encodechunk(leaf,
         rows, options)

@@ -60,12 +60,27 @@ function _xxhash64(pointer::Ptr{UInt8}, length::Int, seed::UInt64=UInt64(0))
         hash = bitrotate(hash, 11) * _XXH_P1
         position += 1
     end
+    return _xxhavalanche(hash)
+end
+
+@inline function _xxhavalanche(hash::UInt64)
     hash ⊻= hash >> 33
     hash *= _XXH_P2
     hash ⊻= hash >> 29
     hash *= _XXH_P3
     hash ⊻= hash >> 32
     return hash
+end
+
+# XXH64 (seed 0) of the 8 or 4 little-endian bytes of `value`.
+@inline function _xxhash64(value::UInt64)
+    hash = (_XXH_P5 + UInt64(8)) ⊻ _xxhround(UInt64(0), value)
+    return _xxhavalanche(bitrotate(hash, 27) * _XXH_P1 + _XXH_P4)
+end
+
+@inline function _xxhash64(value::UInt32)
+    hash = (_XXH_P5 + UInt64(4)) ⊻ (UInt64(value) * _XXH_P1)
+    return _xxhavalanche(bitrotate(hash, 23) * _XXH_P2 + _XXH_P3)
 end
 
 function _xxhash64(bytes::Union{Vector{UInt8},Base.CodeUnits{UInt8,String}},
