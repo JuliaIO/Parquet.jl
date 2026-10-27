@@ -26,8 +26,6 @@ Parquet.LimitError
 ```@docs
 LogicalColumn
 Decimal
-Timestamp
 JSONValue
 BSONValue
-Interval
 ```

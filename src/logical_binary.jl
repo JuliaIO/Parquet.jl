@@ -32,23 +32,6 @@ struct BSONValue
     end
 end
 
-"""A Parquet INTERVAL with independent unsigned month, day, and millisecond fields."""
-struct Interval
-    months::UInt32
-    days::UInt32
-    milliseconds::UInt32
-end
-
-function Interval(months::Integer, days::Integer, milliseconds::Integer)
-    0 <= months <= typemax(UInt32) ||
-        throw(ArgumentError("INTERVAL months must fit UInt32"))
-    0 <= days <= typemax(UInt32) ||
-        throw(ArgumentError("INTERVAL days must fit UInt32"))
-    0 <= milliseconds <= typemax(UInt32) ||
-        throw(ArgumentError("INTERVAL milliseconds must fit UInt32"))
-    return Interval(UInt32(months), UInt32(days), UInt32(milliseconds))
-end
-
 # `print` gives the document text; `show` wraps it like a constructor call.
 function Base.print(io::IO, value::JSONValue)
     Base.write(io, value.bytes)
@@ -97,25 +80,6 @@ end
 
 function Base.copy(value::BSONValue)
     return BSONValue(collect(value.bytes), Val(:validated))
-end
-
-function Base.:(==)(left::Interval, right::Interval)
-    return left.months == right.months && left.days == right.days &&
-        left.milliseconds == right.milliseconds
-end
-
-function Base.isequal(left::Interval, right::Interval)
-    return isequal(left.months, right.months) && isequal(left.days, right.days) &&
-        isequal(left.milliseconds, right.milliseconds)
-end
-
-function Base.hash(value::Interval, seed::UInt)
-    return hash((value.months, value.days, value.milliseconds),
-        hash(:Interval, seed))
-end
-
-function Base.copy(value::Interval)
-    return value
 end
 
 function _requirefixedlogical(element::Metadata.SchemaElement, width::Int,
@@ -270,23 +234,6 @@ function _intervalfrombytes(bytes::AbstractVector{UInt8}, element::Metadata.Sche
     return Durations.Duration(months, days, Int64(_readuint32le(bytes, 9)) * 1_000_000)
 end
 
-function _appenduint32le!(bytes::Vector{UInt8}, value::UInt32)
-    push!(bytes, UInt8(value & 0xff))
-    push!(bytes, UInt8((value >> 8) & 0xff))
-    push!(bytes, UInt8((value >> 16) & 0xff))
-    push!(bytes, UInt8(value >> 24))
-    return
-end
-
-function _intervalbytes(value::Interval)
-    bytes = UInt8[]
-    sizehint!(bytes, 12)
-    _appenduint32le!(bytes, value.months)
-    _appenduint32le!(bytes, value.days)
-    _appenduint32le!(bytes, value.milliseconds)
-    return bytes
-end
-
 function _taggedlogicalvalue(::Type{JSONValue}, value,
     element::Metadata.SchemaElement, limits::Limits)
     bytes = _requirelogicalbytes(value, element, :JSON)
@@ -376,11 +323,10 @@ function _binaryphysicalvalue(kind::Symbol, element::Metadata.SchemaElement, val
             throw(ArgumentError("BSON column $(repr(element.name)) contains an untagged value"))
         return _taggedphysicalvalue(value, limits)
     elseif kind === :interval
-        value isa Durations.Duration && (value = Interval(value))
-        value isa Interval ||
+        value isa Durations.Duration ||
             throw(ArgumentError("INTERVAL column $(repr(element.name)) contains " *
-                "a non-Interval value"))
-        return _intervalbytes(value)
+                "a non-Duration value"))
+        return collect(_IntervalBytes()(value))
     end
     return nothing
 end
@@ -451,12 +397,4 @@ end
 function _binaryphysicalvalues(node::SchemaNode, values::AbstractVector;
     limits::Limits=Limits())
     return _binaryphysicalvalues(node.element, values; limits=limits)
-end
-
-function Interval(value::Durations.Duration)
-    iszero(rem(value.nanoseconds, 1_000_000)) || throw(ArgumentError("Parquet INTERVAL requires exact milliseconds"))
-    return Interval(value.months, value.days, div(value.nanoseconds, 1_000_000))
-end
-function Durations.Duration(value::Interval)
-    return Durations.Duration(value.months, value.days, Int64(value.milliseconds) * 1_000_000)
 end

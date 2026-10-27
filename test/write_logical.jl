@@ -2,16 +2,6 @@ using Dates
 using Test
 using UUIDs
 
-# The value a written timestamp reads back as.
-wlreadback(value) = value
-function wlreadback(value::Parquet.Timestamp{U}) where {U}
-    P = U === :millis ? Dates.Millisecond : U === :micros ? Dates.Microsecond :
-        Dates.Nanosecond
-    local_ = Parquet.Durations.Timestamp{P}(Dates.UTInstant(P(value.ticks)))
-    value.is_adjusted_to_utc || return local_
-    return Parquet.Durations.ZonedTimestamp{P,:UTC}(local_, Dates.UTC)
-end
-
 function rewritelogicalschema(replacement::Function, bytes::Vector{UInt8},
     index::Int=2)
     file = Parquet.File(bytes)
@@ -65,20 +55,20 @@ end
         DateTime(1970, 1, 1),
         DateTime(2000, 2, 29, 12, 34, 56, 789),
     ]
-    micros = Union{Missing,Parquet.Timestamp{:micros}}[
-        Parquet.Timestamp(typemin(Int64), :micros, true),
+    micros = Union{Missing,Parquet.Durations.ZonedTimestamp{Microsecond,:UTC}}[
+        pqstamp(typemin(Int64), :micros, true),
         missing,
-        Parquet.Timestamp(typemax(Int64), :micros, true),
+        pqstamp(typemax(Int64), :micros, true),
     ]
-    nanos = Parquet.Timestamp{:nanos}[
-        Parquet.Timestamp(-1, :nanos, false),
-        Parquet.Timestamp(0, :nanos, false),
-        Parquet.Timestamp(1, :nanos, false),
+    nanos = Parquet.Durations.Timestamp{Nanosecond}[
+        pqstamp(-1, :nanos, false),
+        pqstamp(0, :nanos, false),
+        pqstamp(1, :nanos, false),
     ]
-    millis = Parquet.Timestamp{:millis}[
-        Parquet.Timestamp(typemin(Int64), :millis, true),
-        Parquet.Timestamp(0, :millis, true),
-        Parquet.Timestamp(typemax(Int64), :millis, true),
+    millis = Parquet.Durations.ZonedTimestamp{Millisecond,:UTC}[
+        pqstamp(typemin(Int64), :millis, true),
+        pqstamp(0, :millis, true),
+        pqstamp(typemax(Int64), :millis, true),
     ]
     input = (
         i8=Int8[-128, 0, 127],
@@ -99,7 +89,7 @@ end
         table = Parquet.Table(bytes)
         for name in keys(input)
             @test isequal(getproperty(Parquet.Tables.columns(table), name),
-                map(wlreadback, getproperty(input, name)))
+                getproperty(input, name))
         end
         close(table)
 
@@ -129,8 +119,8 @@ end
     end
 
     @test_throws ArgumentError Parquet._encodefile((value=[
-        Parquet.Timestamp(0, :nanos, true),
-        Parquet.Timestamp(1, :nanos, false),
+        pqstamp(0, :nanos, true),
+        pqstamp(1, :nanos, false),
     ],))
 end
 
@@ -155,12 +145,7 @@ end
         missing,
         Parquet.BSONValue(hex2bytes("090000000a00ff0000")),
     ]
-    intervals = Union{Missing,Parquet.Interval}[
-        Parquet.Interval(1, 2, 3),
-        missing,
-        Parquet.Interval(typemax(Int32), 0, 86_400_000),
-    ]
-    readintervals = Union{Missing,Parquet.Durations.Duration}[
+    intervals = Union{Missing,Parquet.Durations.Duration}[
         Parquet.Durations.Duration(1, 2, 3_000_000), missing,
         Parquet.Durations.Duration(typemax(Int32), 0, 86_400_000_000_000)]
     nulls = Missing[missing, missing, missing]
@@ -173,7 +158,7 @@ end
             reinterpret(UInt16, collect(skipmissing(halves)))
         @test isequal(Parquet.Tables.columns(table).json, json)
         @test isequal(Parquet.Tables.columns(table).bson, bson)
-        @test isequal(Parquet.Tables.columns(table).intervals, readintervals)
+        @test isequal(Parquet.Tables.columns(table).intervals, intervals)
         @test isequal(Parquet.Tables.columns(table).nulls, nulls)
         close(table)
 
@@ -431,18 +416,19 @@ end
 end
 
 @testset "empty and all-missing TIMESTAMP and DECIMAL columns" begin
-    # Without values the annotation cannot be inferred, so defaults apply: millisecond
-    # timestamps are UTC-adjusted, finer units local, decimals DECIMAL(1, 0).
+    # Without values the element type still gives the TIMESTAMP annotation
+    # (ZonedTimestamp is UTC-adjusted, Timestamp local); decimals default to DECIMAL(1, 0).
+    DT = Parquet.Durations
     flat = (
-        ms=Union{Missing,Parquet.Timestamp{:millis}}[missing, missing],
-        us=Union{Missing,Parquet.Timestamp{:micros}}[missing, missing],
-        ns=Union{Missing,Parquet.Timestamp{:nanos}}[missing, missing],
+        ms=Union{Missing,DT.ZonedTimestamp{Millisecond,:UTC}}[missing, missing],
+        us=Union{Missing,DT.Timestamp{Microsecond}}[missing, missing],
+        ns=Union{Missing,DT.Timestamp{Nanosecond}}[missing, missing],
         dec=Union{Missing,Parquet.Decimal}[missing, missing],
     )
     nested = (
-        ms=[Parquet.Timestamp{:millis}[] for _ in 1:2],
-        us=[Parquet.Timestamp{:micros}[] for _ in 1:2],
-        ns=[Union{Missing,Parquet.Timestamp{:nanos}}[missing] for _ in 1:2],
+        ms=[DT.ZonedTimestamp{Millisecond,:UTC}[] for _ in 1:2],
+        us=[DT.Timestamp{Microsecond}[] for _ in 1:2],
+        ns=[Union{Missing,DT.Timestamp{Nanosecond}}[missing] for _ in 1:2],
         dec=[Dict{String,Parquet.Decimal}() for _ in 1:2],
     )
     zero = map(column -> column[1:0], flat)

@@ -164,9 +164,9 @@ end
         fixed=NTuple{3,UInt8}[(0x01, 0x00, 0xff), (0x01, 0x01, 0x00)],
         date=Date[Date(1969, 12, 31), Date(2000, 2, 29)],
         time=Time[Time(0), Time(23, 59, 59, 999, 999, 999)],
-        timestamp=Parquet.Timestamp{:nanos}[
-            Parquet.Timestamp(-1, :nanos, false),
-            Parquet.Timestamp(1, :nanos, false),
+        timestamp=Parquet.Durations.Timestamp{Dates.Nanosecond}[
+            pqstamp(-1, :nanos, false),
+            pqstamp(1, :nanos, false),
         ],
         decimal32=Parquet.Decimal[
             Parquet.Decimal(-12, 1), Parquet.Decimal(34, 1)],
@@ -191,8 +191,9 @@ end
             Parquet.BSONValue(hex2bytes("0c0000001061000100000000")),
             Parquet.BSONValue(hex2bytes("090000000a00ff0000")),
         ],
-        interval=Parquet.Interval[
-            Parquet.Interval(0, 1, 2), Parquet.Interval(3, 4, 5)],
+        interval=Parquet.Durations.Duration[
+            Parquet.Durations.Duration(0, 1, 2_000_000),
+            Parquet.Durations.Duration(3, 4, 5_000_000)],
         unknown=Missing[missing, missing],
     )
     metadata = wsmetadata(Parquet._encodefile(input; statistics=true))

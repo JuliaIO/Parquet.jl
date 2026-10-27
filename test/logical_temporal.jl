@@ -283,28 +283,6 @@ end
     @test_throws ArgumentError Parquet._temporalphysicalvalue(micros,
         DT.Timestamp{Millisecond}(Dates.UTInstant(Millisecond(typemax(Int64)))))
 
-    @test isbitstype(Parquet.Timestamp{:millis})
-    @test isbitstype(Parquet.Timestamp{:micros})
-    @test isbitstype(Parquet.Timestamp{:nanos})
-    first = Parquet.Timestamp(Int64(1), :micros, true)
-    second = Parquet.Timestamp(Int64(1), :micros, true)
-    @test first == second
-    @test isequal(first, second)
-    @test hash(first) == hash(second)
-    @test sprint(show, first) == "Timestamp(1, :micros, true)"
-    @test sprint(show, Parquet.Timestamp(Int64(2), :millis, true)) ==
-        "Timestamp(2, :millis, true)"
-    @test_throws ArgumentError Parquet.Timestamp(Int64(1), :seconds, true)
-    # millis + adjusted=false is represented as Dates.DateTime, so the type rejects it
-    # at construction with a clear message instead of failing deep in conversion.
-    @test_throws ArgumentError Parquet.Timestamp(Int64(0), :millis, false)
-    @test Parquet.Timestamp(Int64(0), :micros, false) isa Parquet.Timestamp{:micros}
-    @test Parquet.Timestamp(Int64(0), :nanos, false) isa Parquet.Timestamp{:nanos}
-    @test_throws ArgumentError Parquet._temporalphysicalvalue(
-        temporaltesttimestamp(:micros, true), Parquet.Timestamp(1, :nanos, true))
-    @test_throws ArgumentError Parquet._temporalphysicalvalue(
-        temporaltesttimestamp(:micros, true), Parquet.Timestamp(1, :micros, false))
-
     optionalphysical = Union{Missing,Int64}[missing, typemin(Int64), typemax(Int64)]
     nanos = temporaltesttimestamp(:nanos, true)
     optional = Parquet._temporallogicalvalues(nanos, optionalphysical)
@@ -364,8 +342,7 @@ end
         temporaltesttime(:nanos), Int64[0, 1]; limits=limits)
     @test_throws Parquet.LimitError Parquet._temporalphysicalvalues(
         temporaltesttimestamp(:micros),
-        [Parquet.Timestamp(0, :micros, true),
-            Parquet.Timestamp(1, :micros, true)]; limits=limits)
+        [pqstamp(0, :micros, true), pqstamp(1, :micros, true)]; limits=limits)
     @test_throws Parquet.LimitError Parquet._temporallogicalvalues(
         temporaltestinteger(16, false), Int32[0, 1]; limits=limits)
 end

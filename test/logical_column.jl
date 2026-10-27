@@ -50,13 +50,12 @@ function logicalcolumntimestamp(unit::Symbol, adjusted::Bool)
     ticks = unit === :millis ? Int64(951_827_696_789) :
         unit === :micros ? Int64(951_827_696_789_123) :
         Int64(951_827_696_789_123_456)
-    return Parquet.Timestamp(ticks, unit, adjusted)
+    return pqstamp(ticks, unit, adjusted)
 end
 
 function logicalcolumntimestamptype(unit::Symbol, adjusted::Bool)
-    unit === :millis && return adjusted ? Parquet.Timestamp{:millis} : DateTime
-    unit === :micros && return Parquet.Timestamp{:micros}
-    return Parquet.Timestamp{:nanos}
+    unit === :millis && !adjusted && return DateTime
+    return logicalcolumnreadtype(unit, adjusted)
 end
 
 # The element type a TIMESTAMP column of `unit` reads as.
@@ -149,7 +148,7 @@ end
             adjusted=adjusted)
         bytes = Parquet._encodefile((value=column,); pageversion=pageversion,
             encoding=:plain)
-        @test logicalcolumnvalues(bytes) == map(wlreadback, expected)
+        @test logicalcolumnvalues(bytes) == expected
         element = logicalcolumnmetadata(bytes).schema[2]
         @test element.type_ == LCMD.Type.INT64
         @test element.repetition_type == LCMD.FieldRepetitionType.REQUIRED
@@ -265,7 +264,7 @@ end
         time=Parquet.LogicalColumn(fill(Time(1), 64), :time;
             unit=:micros, adjusted=false),
         timestamp=Parquet.LogicalColumn([
-            Parquet.Timestamp(index, :micros, false) for index in Int64(1):Int64(64)
+            pqstamp(index, :micros, false) for index in Int64(1):Int64(64)
         ], :timestamp; unit=:micros, adjusted=false),
         decimal=Parquet.LogicalColumn(fill(
             Parquet.Decimal(big"1234567890123456789", 2), 64), :decimal;
@@ -278,7 +277,7 @@ end
             encoding=policy)
         for name in keys(input)
             @test logicalcolumnvalues(bytes, name) ==
-                map(wlreadback, decimalexpected(collect(getproperty(input, name))))
+                decimalexpected(collect(getproperty(input, name)))
         end
         chunks = logicalcolumnmetadata(bytes).row_groups[1].columns
         @test LCMD.Encoding.RLE_DICTIONARY in chunks[1].meta_data.encodings
@@ -312,8 +311,10 @@ end
     @test_throws ArgumentError LC(DateTime[], :timestamp; adjusted=false)
     @test_throws ArgumentError LC(DateTime[], :timestamp; unit=:micros,
         adjusted=false)
-    @test_throws ArgumentError LC(Parquet.Timestamp{:nanos}[], :timestamp;
-        unit=:micros, adjusted=false)
+    @test_throws ArgumentError LC(Parquet.Durations.ZonedTimestamp{Nanosecond,:UTC}[],
+        :timestamp; unit=:micros, adjusted=false)
+    @test_throws ArgumentError LC(Parquet.Durations.Timestamp{Nanosecond}[],
+        :timestamp; unit=:micros, adjusted=true)
     @test_throws ArgumentError LC(DateTime[], :timestamp; unit=:millis,
         adjusted=false, scale=0)
 
@@ -339,11 +340,9 @@ end
     @test_throws ArgumentError Parquet._encodefile((value=millis,))
     @test_throws ArgumentError Parquet._encodefile((value=micros,))
 
-    timestampvalues = Parquet.Timestamp{:micros}[
-        Parquet.Timestamp(0, :micros, true)]
-    timestamp = Parquet.LogicalColumn(timestampvalues, :timestamp; unit=:micros,
-        adjusted=true)
-    timestampvalues[1] = Parquet.Timestamp(0, :micros, false)
+    # A finer value converts only when it is exact at the column's unit.
+    timestamp = Parquet.LogicalColumn([pqstamp(1, :nanos, false)], :timestamp;
+        unit=:micros, adjusted=false)
     @test_throws ArgumentError Parquet._encodefile((value=timestamp,))
 
     wrongscale = Parquet.LogicalColumn(

@@ -4,18 +4,21 @@
     @test !Base.isexported(Parquet, :Table)
     @test !Base.isexported(Parquet, :close!)
     @test !Base.isexported(Parquet, :write)
-    for name in (:BSONValue, :Decimal, :FormatError, :Interval, :JSONValue, :LimitError,
-        :LogicalColumn, :Timestamp, :UnsupportedFeatureError)
+    for name in (:BSONValue, :Decimal, :FormatError, :JSONValue, :LimitError,
+        :LogicalColumn, :UnsupportedFeatureError)
         @test !Base.isexported(Parquet, name)
     end
+    # Timestamps and INTERVAL values are Durations types.
+    @test !isdefined(Parquet, :Timestamp)
+    @test !isdefined(Parquet, :Interval)
     if VERSION >= v"1.11"
         @test Base.ispublic(Parquet, :File)
         @test Base.ispublic(Parquet, :Limits)
         @test Base.ispublic(Parquet, :Table)
         @test Base.ispublic(Parquet, :close!)
         @test Base.ispublic(Parquet, :write)
-        for name in (:BSONValue, :Decimal, :FormatError, :Interval, :JSONValue,
-            :LimitError, :LogicalColumn, :Timestamp, :UnsupportedFeatureError)
+        for name in (:BSONValue, :Decimal, :FormatError, :JSONValue,
+            :LimitError, :LogicalColumn, :UnsupportedFeatureError)
             @test Base.ispublic(Parquet, name)
         end
     end

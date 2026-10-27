@@ -4,9 +4,8 @@
 
 abstract type _NestedWriteShape end
 
-# TIMESTAMP UTC adjustment and DECIMAL scale/precision come from the values themselves.
+# DECIMAL scale/precision come from the values themselves.
 mutable struct _NestedWriteLeafAggregate
-    adjusted::Union{Nothing,Bool}
     scale::Union{Nothing,Int32}
     precision::Int32
 end
@@ -96,7 +95,7 @@ function _nestedwriteisscalar(value_type::Type)
     value_type === Missing && return true
     # Abstract scalar types are scalars here, so the concrete-type check names them.
     value_type <: Union{AbstractString,AbstractVector{UInt8},DataDecimals.AbstractDecimal,
-        Durations.Timestamp,Durations.ZonedTimestamp,Dates.Period,Timestamp} &&
+        Durations.Timestamp,Durations.ZonedTimestamp,Dates.Period} &&
         return true
     _writemap(value_type) === nothing || return true
     return _writevaluescanned(value_type)
@@ -104,7 +103,7 @@ end
 
 function _nestedwriteleafshape(name::String, value_type::Type, optional::Bool;
         explicit=nothing, fixed_width=nothing)
-    aggregate = _NestedWriteLeafAggregate(nothing, nothing, Int32(1))
+    aggregate = _NestedWriteLeafAggregate(nothing, Int32(1))
     if value_type <: DataDecimals.Decimal
         aggregate.scale = Int32(DataDecimals.scale(value_type))
         aggregate.precision = Int32(precision(value_type))
@@ -301,33 +300,21 @@ end
 function _nestedwritescan!(shape::_NestedWriteLeafShape, value)
     ismissing(value) && return
     aggregate = shape.aggregate
-    if shape.value_type <: Union{Decimal,DataDecimals.AbstractDecimal}
-        decimal = value isa DataDecimals.AbstractDecimal ?
-            Decimal(BigInt(DataDecimals.unscaled(value)), DataDecimals.scale(value)) :
-            value
-        decimal isa Decimal || throw(ArgumentError(
-            "DECIMAL field $(repr(shape.name)) contains $(typeof(value))"))
-        if aggregate.scale === nothing
-            aggregate.scale = decimal.scale
-        elseif aggregate.scale != decimal.scale
-            throw(ArgumentError("all values in DECIMAL field $(repr(shape.name)) " *
-                "must use the same scale"))
-        end
-        digits = _decimaldigits(decimal.unscaled)
-        digits <= typemax(Int32) || throw(ArgumentError(
-            "DECIMAL precision exceeds Int32"))
-        aggregate.precision = max(aggregate.precision, Int32(digits),
-            decimal.scale)
-    else
-        value isa Timestamp || throw(ArgumentError(
-            "TIMESTAMP field $(repr(shape.name)) contains $(typeof(value))"))
-        if aggregate.adjusted === nothing
-            aggregate.adjusted = value.is_adjusted_to_utc
-        elseif aggregate.adjusted != value.is_adjusted_to_utc
-            throw(ArgumentError("all values in TIMESTAMP field " *
-                "$(repr(shape.name)) must use the same UTC adjustment"))
-        end
+    decimal = value isa DataDecimals.AbstractDecimal ?
+        Decimal(BigInt(DataDecimals.unscaled(value)), DataDecimals.scale(value)) :
+        value
+    decimal isa Decimal || throw(ArgumentError(
+        "DECIMAL field $(repr(shape.name)) contains $(typeof(value))"))
+    if aggregate.scale === nothing
+        aggregate.scale = decimal.scale
+    elseif aggregate.scale != decimal.scale
+        throw(ArgumentError("all values in DECIMAL field $(repr(shape.name)) " *
+            "must use the same scale"))
     end
+    digits = _decimaldigits(decimal.unscaled)
+    digits <= typemax(Int32) || throw(ArgumentError(
+        "DECIMAL precision exceeds Int32"))
+    aggregate.precision = max(aggregate.precision, Int32(digits), decimal.scale)
     return
 end
 
@@ -368,19 +355,6 @@ function _nestedwritescan!(shape::_NestedWriteMapShape, value)
     return
 end
 
-function _nestedwritetimestampelement(shape::_NestedWriteLeafShape)
-    value_type = shape.value_type
-    adjusted = something(shape.aggregate.adjusted,
-        _timestampdefaultadjustment(value_type))
-    unit = _timestampwriteunit(value_type)
-    logical = Metadata.LogicalType(TIMESTAMP=Metadata.TimestampType(
-        isAdjustedToUTC=adjusted, unit=unit))
-    return _logicalwriteelement(shape.name, Metadata.Type.INT64, shape.optional;
-        logical=logical,
-        converted=_canonicalconverted(
-            _TimestampLogicalKind(_timestampwriteunitcode(value_type), adjusted)))
-end
-
 function _nestedwritedecimalelement(shape::_NestedWriteLeafShape,
         limits::Limits)
     aggregate = shape.aggregate
@@ -416,7 +390,6 @@ function _nestedwriteleafelement(shape::_NestedWriteLeafShape,
         width=shape.fixed_width)
     map = _writemap(value_type)
     map === nothing || return _writeelement(map, shape.name, shape.optional)
-    value_type <: Timestamp && return _nestedwritetimestampelement(shape)
     value_type <: Union{Decimal,DataDecimals.AbstractDecimal} &&
         return _nestedwritedecimalelement(shape, limits)
     throw(_writeunsupported(value_type, shape.name))
@@ -540,8 +513,8 @@ function _nestedwritebinarycheck(kind::Symbol,
             "BSON field $(repr(element.name)) contains an untagged value"))
         _validatebson(value.bytes, limits, ArgumentError)
     elseif kind === :interval
-        value isa Union{Interval,Durations.Duration} || throw(ArgumentError(
-            "INTERVAL field $(repr(element.name)) contains a non-Interval value"))
+        value isa Durations.Duration || throw(ArgumentError(
+            "INTERVAL field $(repr(element.name)) contains a non-Duration value"))
     elseif kind === :unknown
         throw(ArgumentError(
             "UNKNOWN field $(repr(element.name)) can contain only missing"))

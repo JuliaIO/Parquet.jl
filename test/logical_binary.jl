@@ -272,12 +272,9 @@ end
     @test_throws Parquet.FormatError Parquet._binarylogicalvalue(element, bytes[1:11])
     @test_throws Parquet.FormatError Parquet._binarylogicalvalue(element, bytes[1:1])
     @test_throws ArgumentError Parquet._binaryphysicalvalue(element, (1, 2, 3))
-    # Parquet.Interval values are still written.
-    interval = Parquet.Interval(UInt32(1), UInt32(0x01020304), typemax(UInt32))
-    @test Parquet._binaryphysicalvalue(element, interval) == bytes
-    @test isequal(copy(interval), interval) && hash(copy(interval)) == hash(interval)
-    @test_throws ArgumentError Parquet.Interval(-1, 0, 0)
-    @test_throws ArgumentError Parquet.Interval(0, typemax(UInt32) + UInt64(1), 0)
+    # Negative components and fractions of a millisecond do not fit INTERVAL.
+    @test_throws ArgumentError Parquet._binaryphysicalvalue(element, Duration(-1, 0, 0))
+    @test_throws ArgumentError Parquet._binaryphysicalvalue(element, Duration(0, 0, 1))
 end
 
 @testset "UNKNOWN always-null contract" begin

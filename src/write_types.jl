@@ -85,7 +85,6 @@ function (::_IntervalBytes)(x::Durations.Duration)
         "2^32; $x does not fit"))
     return _intervaltuple(UInt32(months), UInt32(days), UInt32(milliseconds))
 end
-(::_IntervalBytes)(x::Interval) = _intervaltuple(x.months, x.days, x.milliseconds)
 function (::_IntervalBytes)(x::Union{Dates.Month,Dates.Year})
     months = Dates.value(convert(Dates.Month, x))
     0 <= months <= typemax(UInt32) || throw(ArgumentError(
@@ -244,7 +243,6 @@ _writemap(::Type{Dates.Day}) = _WriteMap(Int64, Metadata.Type.INT64, _Ticks{8640
 _writemap(::Type{Dates.Week}) = _WriteMap(Int64, Metadata.Type.INT64, _Ticks{604800}())
 _writemap(::Type{<:Union{Dates.Month,Dates.Year}}) = _INTERVAL_MAP
 _writemap(::Type{Durations.Duration}) = _INTERVAL_MAP
-_writemap(::Type{Interval}) = _INTERVAL_MAP
 
 function _writemap(::Type{DataDecimals.Decimal{P,S,T}}) where {P,S,T}
     logical = Metadata.LogicalType(DECIMAL=Metadata.DecimalType(scale=Int32(S),
@@ -269,8 +267,8 @@ _writemap(::Type{BSONValue}) = _WriteMap(fieldtype(BSONValue, :bytes),
     logical=Metadata.LogicalType(BSON=Metadata.BsonType()),
     converted=Metadata.ConvertedType.BSON)
 
-# Types whose leaf annotation depends on the values (precision, scale, UTC flag).
-_writevaluescanned(T::Type) = T <: Union{Timestamp,Decimal,DataDecimals.DecimalValue}
+# Types whose leaf annotation depends on the values (precision and scale).
+_writevaluescanned(T::Type) = T <: Union{Decimal,DataDecimals.DecimalValue}
 
 """
     _writeunsupported(T, path)

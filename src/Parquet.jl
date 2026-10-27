@@ -45,7 +45,7 @@ include("precompile.jl")
 
 if VERSION >= v"1.11"
     Core.eval(@__MODULE__, Expr(:public, :BSONValue, :Decimal, :File, :FormatError,
-        :Interval, :JSONValue, :LimitError, :Limits, :LogicalColumn, :Table, :Timestamp,
+        :JSONValue, :LimitError, :Limits, :LogicalColumn, :Table,
         :UnsupportedFeatureError, :close!, :write))
 end
 

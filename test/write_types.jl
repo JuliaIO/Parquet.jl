@@ -32,11 +32,9 @@ end
 
 # The stored INT64 count of a timestamp value, whatever type the reader returns.
 wtticks(x::Missing) = missing
-wtticks(x::Parquet.Timestamp) = x.ticks
 wtticks(x::Union{WTD.Timestamp,WTD.ZonedTimestamp}) = Dates.value(x)
 wtticks(x::DateTime) = Dates.value(x) - Dates.value(DateTime(1970))
 
-wtinterval(x::Parquet.Interval) = (Int(x.months), Int(x.days), Int(x.milliseconds))
 wtinterval(x::WTD.Duration) = (Int(x.months), Int(x.days), Int(div(x.nanoseconds, 1_000_000)))
 
 function wterror(f)

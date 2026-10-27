@@ -447,10 +447,7 @@ end
     MD = Parquet.Metadata
     stamps = [DT.Timestamp{Dates.Microsecond}(Dates.UTInstant(Dates.Microsecond(
         Dates.value(DateTime(2025, 1, day) - DateTime(1970)) * 1000))) for day in 1:4]
-    # The writer stores these as TIMESTAMP(MICROS) through an explicit annotation.
-    column = Parquet.LogicalColumn([Parquet.Timestamp(Dates.value(stamp), :micros, false)
-        for stamp in stamps], :timestamp; unit=:micros, adjusted=false)
-    bytes = Parquet._encodefile((ts=column, raw=[UInt8[i, i] for i in 1:4],
+    bytes = Parquet._encodefile((ts=stamps, raw=[UInt8[i, i] for i in 1:4],
         long=[fill(UInt8(i), 20) for i in 1:4]))
     table = Parquet.Table(bytes)
     @test table.ts == stamps

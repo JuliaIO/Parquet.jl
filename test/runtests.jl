@@ -1,5 +1,14 @@
 using Parquet
 using Test
+import Dates
+
+# The Durations value of a Parquet TIMESTAMP holding `ticks` units since 1970.
+function pqstamp(ticks::Integer, unit::Symbol, adjusted::Bool)
+    P = unit === :millis ? Dates.Millisecond : unit === :micros ? Dates.Microsecond :
+        Dates.Nanosecond
+    local_ = Parquet.Durations.Timestamp{P}(Dates.UTInstant(P(ticks)))
+    return adjusted ? Parquet.Durations.ZonedTimestamp{P,:UTC}(local_, Dates.UTC) : local_
+end
 
 include("api.jl")
 include("limits.jl")

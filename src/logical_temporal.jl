@@ -8,64 +8,6 @@ const _MICROS_PER_DAY = Int64(86_400_000_000)
 const _NANOS_PER_DAY = Int64(86_400_000_000_000)
 const _PARQUET_DATETIME_EPOCH = Dates.value(Dates.DateTime(1970, 1, 1))
 
-"""
-    Timestamp(ticks, unit, is_adjusted_to_utc)
-
-An exact Parquet timestamp. `unit` is `:millis`, `:micros`, or `:nanos`. Millisecond
-columns with `isAdjustedToUTC=false` read as `Dates.DateTime` instead; `Timestamp`
-carries the UTC adjustment for every other combination.
-"""
-struct Timestamp{U}
-    ticks::Int64
-    is_adjusted_to_utc::Bool
-
-    function Timestamp(ticks::Int64, unit::Symbol, is_adjusted_to_utc::Bool)
-        if unit === :millis
-            # Millisecond timestamps without UTC adjustment are represented as
-            # Dates.DateTime, so Timestamp{:millis} only ever carries adjusted=true.
-            is_adjusted_to_utc || throw(ArgumentError(
-                "millisecond timestamps with isAdjustedToUTC=false are represented " *
-                "as Dates.DateTime; use a DateTime value instead"))
-            return new{:millis}(ticks, is_adjusted_to_utc)
-        end
-        unit === :micros && return new{:micros}(ticks, is_adjusted_to_utc)
-        unit === :nanos && return new{:nanos}(ticks, is_adjusted_to_utc)
-        throw(ArgumentError("Timestamp unit must be :millis, :micros, or :nanos"))
-    end
-end
-
-function _timestampunit(::Timestamp{:millis})
-    return :millis
-end
-
-function _timestampunit(::Timestamp{:micros})
-    return :micros
-end
-
-function _timestampunit(::Timestamp{:nanos})
-    return :nanos
-end
-
-function Base.:(==)(left::Timestamp, right::Timestamp)
-    return typeof(left) === typeof(right) && left.ticks == right.ticks &&
-        left.is_adjusted_to_utc == right.is_adjusted_to_utc
-end
-
-function Base.isequal(left::Timestamp, right::Timestamp)
-    return left == right
-end
-
-function Base.hash(value::Timestamp, hashvalue::UInt)
-    return hash(value.is_adjusted_to_utc,
-        hash(value.ticks, hash(_timestampunit(value), hashvalue)))
-end
-
-function Base.show(io::IO, value::Timestamp)
-    print(io, "Timestamp(", value.ticks, ", :", _timestampunit(value), ", ",
-        value.is_adjusted_to_utc, ")")
-    return
-end
-
 struct _TimeLogicalKind
     unit::UInt8
     is_adjusted_to_utc::Bool
@@ -345,20 +287,11 @@ function _toparquettimestamp(kind::_TimestampLogicalKind, value,
             (kind.is_adjusted_to_utc ? "ZonedTimestamp" : "Timestamp") * " values"))
         return _timestampticks(value, kind.unit, element)
     end
-    if kind.unit == _TEMPORAL_MILLIS && !kind.is_adjusted_to_utc
-        value isa Dates.DateTime ||
-            throw(ArgumentError("millisecond TIMESTAMP column $(repr(element.name)) " *
-                "contains a non-DateTime value"))
+    value isa Dates.DateTime && kind.unit == _TEMPORAL_MILLIS && !kind.is_adjusted_to_utc &&
         return _toparquetdatetime(value)
-    end
-    value isa Timestamp ||
-        throw(ArgumentError("TIMESTAMP column $(repr(element.name)) contains a " *
-            "non-Timestamp value"))
-    _timestampunit(value) == _temporalunitname(kind.unit) ||
-        throw(ArgumentError("TIMESTAMP column $(repr(element.name)) has the wrong unit"))
-    value.is_adjusted_to_utc == kind.is_adjusted_to_utc ||
-        throw(ArgumentError("TIMESTAMP column $(repr(element.name)) has the wrong UTC adjustment"))
-    return value.ticks
+    throw(ArgumentError("TIMESTAMP column $(repr(element.name)) contains a " *
+        "$(typeof(value)) value, not a " *
+        (kind.is_adjusted_to_utc ? "Durations.ZonedTimestamp" : "Durations.Timestamp")))
 end
 
 _timestampscale(::Durations.Timestamp{P}) where {P} = Int64(Dates.tons(oneunit(P)))

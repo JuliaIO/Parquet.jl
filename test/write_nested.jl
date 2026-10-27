@@ -826,8 +826,8 @@ end
         Parquet.LogicalColumn(Union{Missing,Time}[Time(0)], :time;
             unit=:micros, adjusted=true),
         Parquet.LogicalColumn(
-            Union{Missing,Parquet.Timestamp{:nanos}}[
-                Parquet.Timestamp(7, :nanos, false),
+            Union{Missing,Parquet.Durations.Timestamp{Dates.Nanosecond}}[
+                pqstamp(7, :nanos, false),
             ], :timestamp; unit=:nanos, adjusted=false),
         Parquet.LogicalColumn(Union{Missing,Parquet.Decimal}[
             Parquet.Decimal(12345, 4),
@@ -852,7 +852,7 @@ end
         value = Parquet.Tables.columns(table).logicals[1][1]
         @test value["enum"] == "alpha"
         @test value["time"] == Time(0)
-        @test value["timestamp"] == wlreadback(Parquet.Timestamp(7, :nanos, false))
+        @test value["timestamp"] == pqstamp(7, :nanos, false)
         @test value["decimal"] == decimalexpected(Parquet.Decimal(12345, 4))
     finally
         close(table)
@@ -1086,8 +1086,8 @@ end
 @testset "MAP values infer DECIMAL and TIMESTAMP annotations" begin
     decimals = Dict{String,Parquet.Decimal}[
         Dict("k" => Parquet.Decimal(Int128(1234), Int32(2)))]
-    stamps = Dict{String,Parquet.Timestamp{:micros}}[
-        Dict("k" => Parquet.Timestamp(Int64(5), :micros, true))]
+    stamps = Dict{String,Parquet.Durations.ZonedTimestamp{Dates.Microsecond,:UTC}}[
+        Dict("k" => pqstamp(5, :micros, true))]
     views = Parquet.MapVector(Int32[0, 1], String["k"],
         Parquet.Decimal[Parquet.Decimal(Int128(-56789), Int32(3))])
     for (source, check) in (
@@ -1110,7 +1110,7 @@ end
             @test isequal(
                 [plain(pair.first) => plain(pair.second)
                     for pair in only(Parquet.Tables.columns(table).m)],
-                [pair.first => wlreadback(pair.second) for pair in only(source)])
+                [pair.first => pair.second for pair in only(source)])
         finally
             close(table)
         end

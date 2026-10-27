@@ -102,12 +102,7 @@ function _logicalcolumncanonicaltype(::_TimeLogicalColumnSpec)
 end
 
 function _logicalcolumncanonicaltype(spec::_TimestampLogicalColumnSpec)
-    if spec.unit == _TEMPORAL_MILLIS
-        spec.adjusted || return Dates.DateTime
-        return Timestamp{:millis}
-    end
-    spec.unit == _TEMPORAL_MICROS && return Timestamp{:micros}
-    return Timestamp{:nanos}
+    return _temporaljuliatype(_TimestampLogicalKind(spec.unit, spec.adjusted))
 end
 
 function _logicalcolumncanonicaltype(::_DecimalLogicalColumnSpec)
@@ -126,15 +121,15 @@ end
 
 function _validatelogicalcolumnvaluetype(spec::_TimestampLogicalColumnSpec,
     value_type::Type)
-    expected = _logicalcolumncanonicaltype(spec)
-    value_type == expected && return
     # Durations values convert exactly to the column's unit when they are written.
     value_type <: (spec.adjusted ? Durations.ZonedTimestamp : Durations.Timestamp) &&
         return
+    !spec.adjusted && spec.unit == _TEMPORAL_MILLIS && value_type === Dates.DateTime &&
+        return
     throw(ArgumentError("$(_temporalunitname(spec.unit)) TIMESTAMP logical columns " *
         "with adjusted=$(spec.adjusted) require " *
-        "$(spec.adjusted ? "Durations.ZonedTimestamp" : "Durations.Timestamp") or " *
-        "$expected values, or missing"))
+        "$(spec.adjusted ? "Durations.ZonedTimestamp" : "Durations.Timestamp") values, " *
+        "or missing"))
 end
 
 function _validatelogicalcolumnvaluetype(::_DecimalLogicalColumnSpec,

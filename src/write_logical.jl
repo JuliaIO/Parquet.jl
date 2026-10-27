@@ -155,55 +155,6 @@ function _logicalwriteelement(name, physical::Metadata.Type.T, optional::Bool;
     )
 end
 
-function _timestampwriteadjustment(values::AbstractVector)
-    adjusted = nothing
-    for value in values
-        ismissing(value) && continue
-        value isa Timestamp || throw(ArgumentError(
-            "TIMESTAMP columns must contain Timestamp values or missing"))
-        if adjusted === nothing
-            adjusted = value.is_adjusted_to_utc
-        else
-            value.is_adjusted_to_utc == adjusted || throw(ArgumentError(
-                "all values in a TIMESTAMP column must use the same UTC adjustment"))
-        end
-    end
-    adjusted === nothing && return _timestampdefaultadjustment(
-        Base.nonmissingtype(eltype(values)))
-    return adjusted
-end
-
-# The annotation of a TIMESTAMP column without values: Timestamp{:millis} only holds
-# UTC-adjusted values, and the finer units default to local time, as pyarrow writes
-# timestamps without a time zone.
-function _timestampdefaultadjustment(value_type::Type)
-    return value_type == Timestamp{:millis}
-end
-
-function _timestampwriteunitcode(value_type::Type)
-    value_type == Timestamp{:millis} && return _TEMPORAL_MILLIS
-    value_type == Timestamp{:micros} && return _TEMPORAL_MICROS
-    value_type == Timestamp{:nanos} && return _TEMPORAL_NANOS
-    throw(ArgumentError("unsupported TIMESTAMP element type $value_type"))
-end
-
-function _timestampwriteunit(value_type::Type)
-    return _canonicaltimeunit(_timestampwriteunitcode(value_type))
-end
-
-function _temporalwriteelement(name, values::AbstractVector, value_type::Type,
-    optional::Bool)
-    value_type <: Timestamp || return nothing
-    adjusted = _timestampwriteadjustment(values)
-    unit = _timestampwriteunit(value_type)
-    logical = Metadata.LogicalType(
-        TIMESTAMP=Metadata.TimestampType(isAdjustedToUTC=adjusted, unit=unit))
-    return _logicalwriteelement(name, Metadata.Type.INT64, optional;
-        logical=logical,
-        converted=_canonicalconverted(
-            _TimestampLogicalKind(_timestampwriteunitcode(value_type), adjusted)))
-end
-
 function _decimalwriteparameters(values::AbstractVector)
     D = Base.nonmissingtype(eltype(values))
     D <: DataDecimals.Decimal && return (Int32(Base.precision(D)), Int32(DataDecimals.scale(D)))
@@ -267,16 +218,12 @@ function _decimalwriteelement(name, values::AbstractVector, optional::Bool,
         scale=scale, precision=precision)
 end
 
-# Columns whose annotation depends on their values: Parquet.Timestamp (UTC flag),
-# Parquet.Decimal and DataDecimals.DecimalValue (precision and scale).
+# Columns whose annotation depends on their values: Parquet.Decimal and
+# DataDecimals.DecimalValue (precision and scale).
 function _logicalwritecolumn(name, values::AbstractVector, value_type::Type,
     limits::Limits)
-    optional = Missing <: eltype(values)
-    element = _temporalwriteelement(name, values, value_type, optional)
-    if element === nothing && value_type <: Union{Decimal,DataDecimals.AbstractDecimal}
-        element = _decimalwriteelement(name, values, optional, limits)
-    end
-    element === nothing && return nothing
+    value_type <: Union{Decimal,DataDecimals.AbstractDecimal} || return nothing
+    element = _decimalwriteelement(name, values, Missing <: eltype(values), limits)
     return _writescalarlogicalcolumn(name, values, element, limits)
 end
 
