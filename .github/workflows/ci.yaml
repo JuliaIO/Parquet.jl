@@ -48,7 +48,9 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
   bounds:
-    timeout-minutes: 15
+    # The N5 conformance run plus the full suite with bounds checks takes about 14
+    # minutes on a hosted runner.
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
