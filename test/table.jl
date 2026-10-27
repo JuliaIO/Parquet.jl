@@ -822,3 +822,36 @@ end
     twice = Parquet.Table(bytes; scan=Tables.Scan(select=[:a, :a => :y]))
     @test twice.a == twice.y && twice.a !== twice.y
 end
+
+@testset "fixed-width DECIMAL pages of up to 8 bytes" begin
+    # pyarrow stores every decimal as FIXED_LEN_BYTE_ARRAY (DECIMAL(15, 2) in 7 bytes);
+    # values of up to 8 bytes decode with one load each, and a page's last values,
+    # whose 8-byte load would run past the page, take the per-value path.
+    MD = Parquet.Metadata
+    rng = Random.Xoshiro(11)
+    for width in 1:8
+        precision = min(18, floor(Int, (8width - 1) * log10(2)))
+        bound = Int64(10)^precision
+        values = Int64[rand(rng, (-bound + 1):(bound - 1)) for _ in 1:300]
+        values[1:4] .= (bound - 1, -(bound - 1), 0, -1)
+        encode(x) = ntuple(i -> UInt8((x >> (8 * (width - i))) & 0xff), width)
+        for pageversion in (:v1, :v2), dictionary in (false, true)
+            bytes = rewritelogicalschema(Parquet._encodefile(
+                (d=[encode(x) for x in values],); pageversion, dictionary, pagesize=512)) do element
+                withlogical(element; logical=MD.LogicalType(DECIMAL=MD.DecimalType(
+                    scale=Int32(2), precision=Int32(precision))),
+                    converted=MD.ConvertedType.DECIMAL, precision=Int32(precision),
+                    scale=Int32(2))
+            end
+            table = Parquet.Table(bytes)
+            @test [Parquet.DataDecimals.unscaled(x) for x in table.d] == values
+        end
+        # A value at 10^precision is past the declared precision.
+        over = rewritelogicalschema(Parquet._encodefile((d=[encode(Int64(1)), encode(bound)],))) do element
+            withlogical(element; logical=MD.LogicalType(DECIMAL=MD.DecimalType(
+                scale=Int32(2), precision=Int32(precision))),
+                converted=MD.ConvertedType.DECIMAL, precision=Int32(precision), scale=Int32(2))
+        end
+        bound < Int64(2)^(8width - 1) && @test_throws Parquet.FormatError Parquet.Table(over)
+    end
+end

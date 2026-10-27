@@ -169,11 +169,39 @@ function _plainbytes!(dest::Vector{L}, offset::Int, count::Int, convert::C,
             pointer(bytes, position), total)
         return position + total
     end
-    for index in 1:count
+    first = 1
+    if convert isa _DecimalValue && width <= 8
+        first = _plainshortdecimals!(dest, offset, count, convert, width, bytes, position)
+        position += (first - 1) * width
+    end
+    for index in first:count
         dest[offset + index] = _bytevalue(convert, view(bytes, position:(position + width - 1)))
         position += width
     end
     return position
+end
+
+# FIXED_LEN_BYTE_ARRAY decimals of at most 8 bytes: each value is one unaligned 8-byte
+# big-endian load, shifted down to its width (which sign-extends it). Returns the index of
+# the first value left for the per-value path: those whose 8-byte load would run past
+# `bytes`.
+function _plainshortdecimals!(dest::Vector{D}, offset::Int, count::Int,
+        convert::_DecimalValue{D,T}, width::Int, bytes::_ByteView,
+        position::Int) where {D,T}
+    T <: Union{Int32,Int64,Int128} || return 1
+    fast = clamp(fld(length(bytes) - 8 - position + 1, width) + 1, 0, count)
+    shift = 64 - 8width
+    bound = Int128(convert.bound)
+    GC.@preserve bytes begin
+        base = pointer(bytes, position)
+        @inbounds for index in 1:fast
+            raw = bswap(unsafe_load(Ptr{UInt64}(base + (index - 1) * width)))
+            value = reinterpret(Int64, raw) >> shift
+            (value < bound) & (value > -bound) || _decimalrangeerror(convert)
+            dest[offset + index] = reinterpret(D, value % T)
+        end
+    end
+    return fast + 1
 end
 
 function _bytevalue(::typeof(identity), bytes::_ByteView)
