@@ -215,7 +215,9 @@ end
     path = tempname() * ".parquet"
     try
         @test (file |> Parquet.write(path)) == path
-        table = Parquet.Table(path)
+        # Read a copy: a memory-mapped file stays mapped until garbage collection,
+        # and Windows refuses to delete a mapped file.
+        table = Parquet.Table(read(path))
         try
             columns = Tables.columns(table)
             @test Tables.getcolumn(columns, :id) == 1:rows
