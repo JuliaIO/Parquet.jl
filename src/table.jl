@@ -248,22 +248,27 @@ function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Sch
         options::_ReadOptions=_ReadOptions())
     fields = schema.root.children
     starts = _rowgroupstarts(metadata, rows)
-    columns = AbstractVector[]
     # STRING page buffers, per field and row group.
     pages = [Vector{Vector{UInt8}}[Vector{UInt8}[] for _ in starts] for _ in fields]
     tasks = Tuple{Int,Int}[]
+    backed = falses(length(fields))
     for (fieldindex, node) in enumerate(fields)
         node.max_definition_level in (0, 1) ||
             throw(FormatError("nested definition levels are not supported yet"))
-        backed = _flatchunksbacked(metadata, node)
-        column = _flatcolumnvector(node, backed ? rows : 0, limits, options)
-        backed || sizehint!(column, _claimcapacity(rows, _checkedsourcelength(file.source)))
-        push!(columns, column)
-        if backed
+        backed[fieldindex] = _flatchunksbacked(metadata, node)
+        if backed[fieldindex]
             append!(tasks, (fieldindex, rowindex) for rowindex in eachindex(starts))
         else
             push!(tasks, (fieldindex, 0))
         end
+    end
+    # Allocating a column zeroes part of it, so columns allocate on the read's tasks too.
+    columns = _readmap(eachindex(fields), _readtasks(file, ntasks, length(fields))) do fieldindex, _
+        column = _flatcolumnvector(fields[fieldindex], backed[fieldindex] ? rows : 0,
+            limits, options)
+        backed[fieldindex] || sizehint!(column,
+            _claimcapacity(rows, _checkedsourcelength(file.source)))
+        return column
     end
     _readmap(tasks, _readtasks(file, ntasks, length(tasks))) do (fieldindex, rowindex), buffers
         column = columns[fieldindex]
@@ -276,14 +281,13 @@ function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Sch
         end
         return nothing
     end
-    for (fieldindex, node) in enumerate(fields)
-        length(columns[fieldindex]) == rows || throw(FormatError(
-            "flat column $(node.column_index) has $(length(columns[fieldindex])) " *
-            "values for $rows rows"))
-        columns[fieldindex] = _finishflatcolumn(columns[fieldindex], node,
-            pages[fieldindex], starts)
+    return _readmap(eachindex(fields), _readtasks(file, ntasks, length(fields))) do fieldindex, _
+        node = fields[fieldindex]
+        column = columns[fieldindex]
+        length(column) == rows || throw(FormatError(
+            "flat column $(node.column_index) has $(length(column)) values for $rows rows"))
+        return _finishflatcolumn(column, node, pages[fieldindex], starts)
     end
-    return columns
 end
 
 # Copy of a Thrift struct with some fields replaced.
