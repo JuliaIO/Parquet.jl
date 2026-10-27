@@ -81,17 +81,6 @@ function _nestedwritesplittype(declared::Type; key::Bool=false, path::String="",
     return value_type, true
 end
 
-function _nestedwriteisfixedtuple(::Type{T}) where {T}
-    isconcretetype(T) || return false
-    T <: Tuple || return false
-    count = fieldcount(T)
-    count > 0 || return false
-    for field in fieldtypes(T)
-        field === UInt8 || return false
-    end
-    return true
-end
-
 function _nestedwriteisscalar(value_type::Type)
     value_type === Missing && return true
     # Abstract scalar types are scalars here, so the concrete-type check names them.
@@ -876,22 +865,6 @@ function _nestedwriteshredcolumn!(leaves::Vector{Any}, node::_NestedWriteNode,
     return
 end
 
-function _nestedwriteleaves(semantic::_NestedSchemaPlan,
-        nodes::Vector{_NestedWriteNode}, limits::Limits)
-    types = Vector{Type}(undef, length(semantic.leaves))
-    collect = function (node)
-        if node.plan isa _NestedLeafPlan
-            types[Int(first(node.leaves))] = node.value_type
-        else
-            foreach(collect, node.children)
-        end
-        return
-    end
-    foreach(collect, nodes)
-    return Any[_nestedwriteleaf(semantic.leaves[index], types[index], limits)
-        for index in eachindex(semantic.leaves)]
-end
-
 function _nestedwriteleaftypes!(types::Vector{Type}, node::_NestedWriteNode)
     if node.plan isa _NestedLeafPlan
         types[Int(first(node.leaves))] = node.value_type
@@ -920,42 +893,6 @@ function _nestedwriterows(semantic::_NestedSchemaPlan, node::_NestedWriteNode,
     return Any[leaves[Int(index)] for index in node.leaves]
 end
 
-function _nestedwriteshredall(semantic::_NestedSchemaPlan,
-        nodes::Vector{_NestedWriteNode}, columns, limits::Limits)
-    leaves = _nestedwriteleaves(semantic, nodes, limits)
-    for (node, column) in zip(nodes, columns)
-        _nestedwriteshredcolumn!(leaves, node, column)
-    end
-    return leaves
-end
-
-function _nestedwritecolumn(leaf::_NestedWriteLeaf, plan::_NestedLeafPlan,
-        rows::Int)
-    node = plan.source
-    element = node.element
-    optional = element.repetition_type == Metadata.FieldRepetitionType.OPTIONAL
-    return WriteColumn(element.name, leaf.values, element.type_,
-        element.type_length, optional, element.logicalType,
-        element.converted_type, copy(node.path), leaf.repetition,
-        leaf.definition, node.max_repetition_level,
-        node.max_definition_level, rows, Metadata.SchemaElement[])
-end
-
-# Groups shredded leaves into one field plan per top-level schema child.
-function _nestedwritefinishfields(fragments, semantic::_NestedSchemaPlan,
-        leaves::Vector{Any}, rows::Int)
-    fields = WriteFieldPlan[]
-    for (fragment, child) in zip(fragments, semantic.root.children)
-        range = _nestedleafrange(child)
-        isempty(range) && throw(ArgumentError(
-            "zero-leaf fields cannot be written to Parquet"))
-        columns = WriteColumn[_nestedwritecolumn(leaves[Int(index)],
-            semantic.leaves[Int(index)], rows) for index in range]
-        push!(fields, WriteFieldPlan(fragment, columns))
-    end
-    return fields
-end
-
 function _nestedwritebind(shape::_NestedWriteShape, plan::_NestedPlan)
     if shape isa _NestedWriteLeafShape
         return _NestedWriteNode(plan, shape.value_type, _NestedWriteNode[])
@@ -974,121 +911,6 @@ function _nestedwritebind(shape::_NestedWriteShape, plan::_NestedPlan)
     return _NestedWriteNode(plan, mapshape.value_type, _NestedWriteNode[
         _nestedwritebind(mapshape.key, mapplan.key),
         _nestedwritebind(mapshape.value, something(mapplan.value))])
-end
-
-function _nestedwriteinputname(column::Pair)
-    return String(first(column))
-end
-
-function _nestedwriteinputname(column)
-    hasproperty(column, :name) || throw(ArgumentError(
-        "nested writer input columns need name and values fields"))
-    return String(getproperty(column, :name))
-end
-
-function _nestedwriteinputvalues(column::Pair)
-    return last(column)
-end
-
-function _nestedwriteinputvalues(column)
-    hasproperty(column, :values) || throw(ArgumentError(
-        "nested writer input columns need name and values fields"))
-    return getproperty(column, :values)
-end
-
-function _nestedwritevalidatedinputs(input_columns::AbstractVector, rows::Int,
-        limits::Limits)
-    isempty(input_columns) && throw(ArgumentError(
-        "a Parquet table must have at least one column"))
-    _checklimit(:container_elements, length(input_columns),
-        limits.max_container_elements)
-    names = String[]
-    values = AbstractVector[]
-    seen = Set{String}()
-    for column in input_columns
-        name = _nestedwriteinputname(column)
-        occursin('\0', name) && throw(ArgumentError(
-            "Parquet top-level field names cannot contain NUL"))
-        name in seen && throw(ArgumentError(
-            "Parquet column names must be unique"))
-        push!(seen, name)
-        columnvalues = _nestedwriteinputvalues(column)
-        columnvalues isa AbstractVector || throw(ArgumentError(
-            "Parquet columns must be vectors"))
-        count = _nestedvectorcount(columnvalues, "Parquet column $(repr(name))")
-        count == rows || throw(ArgumentError(
-            "Parquet column $(repr(name)) has $count rows; expected $rows"))
-        push!(names, name)
-        push!(values, columnvalues)
-    end
-    return names, values
-end
-
-function _nestedwritecompile(fragments::Vector{Vector{Metadata.SchemaElement}},
-        limits::Limits)
-    length(fragments) <= typemax(Int32) || throw(ArgumentError(
-        "Parquet schema has more than Int32 top-level fields"))
-    elements = Metadata.SchemaElement[Metadata.SchemaElement(
-        name="schema", num_children=Int32(length(fragments)))]
-    for fragment in fragments
-        append!(elements, fragment)
-        _checklimit(:container_elements, length(elements),
-            limits.max_container_elements)
-    end
-    schema = Schema(elements; limits=limits)
-    return _nestedplan(schema; limits=limits)
-end
-
-"""
-    _nestedwritefields(input_columns, rows, limits; preflight=nothing)
-
-Infer a schema from each column's declared element type, then shred every value once.
-`input_columns` holds `name => values` pairs. `preflight`, when given, is called with the
-compiled schema plan before any value is read.
-"""
-function _nestedwritefields(input_columns::AbstractVector, rows::Integer,
-        limits::Limits; preflight=nothing)
-    rows >= 0 || throw(ArgumentError("Parquet row count must be nonnegative"))
-    rowcount = Int(rows)
-    _checklimit(:container_elements, rowcount, limits.max_container_elements)
-    names, values = _nestedwritevalidatedinputs(input_columns, rowcount,
-        limits)
-    shapes = _NestedWriteShape[_nestedwriteshape(names[index],
-        eltype(values[index]), values[index], limits)
-        for index in eachindex(names, values)]
-    for (shape, column) in zip(shapes, values)
-        _nestedwriteneedsscan(shape) || continue
-        for value in column
-            _nestedwritescan!(shape, value)
-        end
-    end
-    fragments = Vector{Metadata.SchemaElement}[_nestedwriteschema(shape, limits)
-        for shape in shapes]
-    semantic = _nestedwritecompile(fragments, limits)
-    preflight === nothing || preflight(semantic)
-    nodes = _NestedWriteNode[_nestedwritebind(shape, plan)
-        for (shape, plan) in zip(shapes, semantic.root.children)]
-    leaves = _nestedwriteshredall(semantic, nodes, values, limits)
-    return _nestedwritefinishfields(fragments, semantic, leaves, rowcount)
-end
-
-# Schema-bearing writes of a Parquet.Table keep its stored schema elements exactly.
-struct _ProvenanceWriteFields <: AbstractVector{WriteFieldPlan}
-    fields::Vector{WriteFieldPlan}
-    elements::Vector{Metadata.SchemaElement}
-    schema::Schema
-end
-
-function Base.IndexStyle(::Type{_ProvenanceWriteFields})
-    return IndexLinear()
-end
-
-function Base.size(fields::_ProvenanceWriteFields)
-    return size(fields.fields)
-end
-
-function Base.getindex(fields::_ProvenanceWriteFields, index::Int)
-    return fields.fields[index]
 end
 
 # The values a stored leaf takes back: what it reads as, including the time zone of a
@@ -1121,33 +943,4 @@ function _provenancenode(plan::_NestedPlan)
     mapplan.value === nothing || push!(children,
         _provenancenode(something(mapplan.value)))
     return _NestedWriteNode(plan, MapValue, children)
-end
-
-function _provenancewritefields(table::Table, limits::Limits, encoding,
-        dictionary::Bool)
-    rows = _tablerows(table)
-    rows >= 0 || throw(ArgumentError("Parquet row count must be nonnegative"))
-    _checklimit(:container_elements, rows, limits.max_container_elements)
-    elements = copy(_tablemetadata(table).schema)
-    schema = Schema(elements; limits=limits)
-    semantic = _nestedplan(schema; limits=limits)
-    children = semantic.root.children
-    names = Tables.columnnames(table)
-    columns = Base.values(_tablecolumns(table))
-    length(columns) == length(children) || throw(ArgumentError(
-        "table columns no longer match the stored Parquet schema"))
-    for (index, child) in enumerate(children)
-        String(names[index]) == child.source.element.name || throw(ArgumentError(
-            "table column name or order no longer matches the stored Parquet " *
-            "schema at position $index"))
-        length(columns[index]) == rows || throw(ArgumentError(
-            "table column $(repr(child.source.element.name)) has " *
-            "$(length(columns[index])) values for $rows rows"))
-    end
-    _preflightwriteencoding(semantic, encoding, dictionary)
-    nodes = _NestedWriteNode[_provenancenode(child) for child in children]
-    leaves = _nestedwriteshredall(semantic, nodes, columns, limits)
-    fragments = (Metadata.SchemaElement[] for _ in children)
-    fields = _nestedwritefinishfields(fragments, semantic, leaves, rows)
-    return _ProvenanceWriteFields(fields, elements, schema), rows
 end

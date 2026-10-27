@@ -6,7 +6,8 @@ function dictionarypage(values; width=nothing, encoding=MD.Encoding.PLAIN, crc=:
 end
 
 function dictionarydatapage(indices; levels=nothing, maxlevel=0,
-    bitwidth=Parquet._dictionarybitwidth(isempty(indices) ? 0 : Int(maximum(indices)) + 1),
+    bitwidth=isempty(indices) || maximum(indices) == 0 ? 0 :
+        64 - leading_zeros(UInt64(maximum(indices))),
     encoding=MD.Encoding.RLE_DICTIONARY, extra=UInt8[], omit_indices=false, crc=:valid)
     count = levels === nothing ? length(indices) : length(levels)
     payload = levels === nothing ? UInt8[] : columnlevels(levels, maxlevel)
@@ -30,9 +31,6 @@ end
     @test Parquet._isdictionaryencoding(MD.Encoding.PLAIN_DICTIONARY)
     @test Parquet._isdictionaryencoding(MD.Encoding.RLE_DICTIONARY)
     @test !Parquet._isdictionaryencoding(MD.Encoding.PLAIN)
-    @test [Parquet._dictionarybitwidth(count) for count in 0:9] == [0, 0, 1, 2, 2, 3, 3, 3, 3, 4]
-    @test Parquet._encodedictionaryindices(zeros(UInt64, 128), 0) == UInt8[0x00, 0x80, 0x02]
-    @test Parquet._encodedictionaryindices(fill(UInt64(0x123), 3), 9) == UInt8[0x09, 0x06, 0x23, 0x01]
     encoded = vcat(UInt8[0x02], Parquet.encode_hybrid(UInt64[0, 1, 2, 3, 2], 2))
     @test Parquet._decodedictionaryindices(encoded, 5, 1, Parquet.Limits()) ==
         (UInt64[0, 1, 2, 3, 2], length(encoded) + 1)
@@ -43,19 +41,22 @@ end
     values[1][1] = 0xff
     @test values[2] == UInt8[0x01]
     @test_throws Parquet.FormatError Parquet._lookupdictionary(dictionary, UInt64[1])
-    # Dictionary entries deduplicate by exact bits, so +0.0 and -0.0 stay distinct
-    # and two NaN payloads are not collapsed. `_dictionaryentries` is the shared
-    # entry point used by the chunk writer.
+    # Writer dictionaries deduplicate by exact bits, so +0.0 and -0.0 stay distinct
+    # and two NaN payloads are not collapsed.
     bits = UInt32[0x00000000, 0x80000000, 0x7fc00001, 0x7fc00002]
-    floats = reinterpret(Float32, bits)
-    floatvalues, _ = Parquet._dictionaryentries(
-        Parquet._writecolumn(:value, repeat(collect(floats), 8)))
-    @test reinterpret(UInt32, floatvalues) == bits
-    raw = Vector{UInt8}[UInt8[1, 2], UInt8[1, 2], UInt8[3], UInt8[1, 2]]
-    rawvalues, rawindices = Parquet._dictionaryentries(
-        Parquet._writecolumn(:value, raw))
-    @test rawvalues == Vector{UInt8}[UInt8[1, 2], UInt8[3]]
-    @test rawindices == UInt64[0, 0, 1, 0]
+    floats = repeat(reinterpret(Float32, bits), 8)
+    floatdictionary = Parquet._NumberDictionary{Float32}()
+    Parquet._dictionaryencode!(Vector{UInt32}(undef, length(floats)), floatdictionary,
+        floats, 1, length(floats))
+    @test reinterpret(UInt32, floatdictionary.values) == bits
+    raw = Parquet._BytesBuffer(true, 0, Int(typemax(Int32)))
+    foreach(value -> Parquet._appendvalue!(raw, value),
+        Vector{UInt8}[UInt8[1, 2], UInt8[1, 2], UInt8[3], UInt8[1, 2]])
+    rawdictionary = Parquet._BytesDictionary(raw)
+    rawindices = Parquet._dictionaryencode!(Vector{UInt32}(undef, 4), rawdictionary, raw,
+        1, 4)
+    @test Parquet._bytesviews(rawdictionary.entries) == Vector{UInt8}[UInt8[1, 2], UInt8[3]]
+    @test rawindices == UInt32[0, 0, 1, 0]
 end
 
 @testset "dictionary V1 decoding" begin

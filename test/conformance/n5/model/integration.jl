@@ -268,30 +268,34 @@ function _n5physicalexpected(values::Vector{Any}, leaf::N5LeafSpec)
     return values
 end
 
+# The production writer's level streams and values for each leaf of a stored-schema
+# `Parquet.Table`, before page encoding.
 function n5productionstreams(table, compiled::N5Compiled)
-    fields, rows = Parquet._writefields(table, Parquet.Limits())
-    columns = Parquet.WriteColumn[]
-    for field in fields
-        append!(columns, field.leaves)
-    end
-    length(columns) == length(compiled.leaves) || throw(ArgumentError(
-        "production pre-encode leaf count differs from N5 model"))
+    options = Parquet._writeoptions()
+    schema = Parquet._storedschema(table, options)
+    rows = Parquet._tablerows(table)
     streams = N5LeafStream[]
-    sizehint!(streams, length(columns))
-    for (column, leaf) in zip(columns, compiled.leaves)
-        entries = column.repetitions === nothing ?
-            column.definitions === nothing ? length(column.values) :
-                length(column.definitions) : length(column.repetitions)
-        repetition = _n5productionlevels(column.repetitions, entries)
-        definition = _n5productionlevels(column.definitions, entries)
-        # STRING leaves may hold strings rather than bytes before encoding.
-        values = Any[value isa AbstractString ?
-            Vector{UInt8}(codeunits(value)) : value for value in column.values]
-        push!(streams, N5LeafStream(repetition, definition, values,
-            Int(column.max_repetition_level),
-            Int(column.max_definition_level)))
+    for (index, column) in enumerate(values(Parquet._tablecolumns(table)))
+        node = Parquet._provenancenode(schema.semantic.root.children[index])
+        leaves = Parquet._nestedwriterows(schema.semantic, node, column, options.limits)
+        for (leafindex, leaf) in zip(node.leaves, leaves)
+            source = schema.schema.leaves[Int(leafindex)]
+            # STRING leaves may hold strings rather than bytes before encoding.
+            values = Any[value isa AbstractString ?
+                Vector{UInt8}(codeunits(value)) : value for value in leaf.values]
+            maxrep = Int(source.max_repetition_level)
+            maxdef = Int(source.max_definition_level)
+            entries = maxrep > 0 ? length(leaf.repetition) :
+                maxdef > 0 ? length(leaf.definition) : length(leaf.values)
+            push!(streams, N5LeafStream(
+                _n5productionlevels(maxrep > 0 ? leaf.repetition : nothing, entries),
+                _n5productionlevels(maxdef > 0 ? leaf.definition : nothing, entries),
+                values, maxrep, maxdef))
+        end
     end
-    return streams, fields, rows
+    length(streams) == length(compiled.leaves) || throw(ArgumentError(
+        "production pre-encode leaf count differs from N5 model"))
+    return streams, (elements=schema.elements,), rows
 end
 
 function n5compareproductionstreams(actual::Vector{N5LeafStream},

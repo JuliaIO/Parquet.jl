@@ -183,8 +183,13 @@ end
 # writes one consistent column.
 function wnchangingsource(large::String)
     source = WNChangingStrings(Ref(0), "x", large)
-    fields, rows = Parquet._writefields((value=source,), Parquet.Limits())
-    return source.calls[], rows, only(only(fields).leaves).values
+    table = Parquet.Table(Parquet._encodefile((value=source,)))
+    values = try
+        String.(collect(Parquet.Tables.getcolumn(table, :value)))
+    finally
+        close(table)
+    end
+    return source.calls[], length(values), values
 end
 
 function wninspect(bytes::Vector{UInt8})
@@ -975,11 +980,11 @@ end
 @testset "recursive writer resource preflight and arbitrary axes" begin
     rowlimits = Parquet.Limits(max_container_elements=1)
     source = WNTrackedRows{Base.HasLength}(Ref(0), 100_000)
-    @test_throws Parquet.LimitError Parquet._writefields(source, rowlimits)
+    @test_throws Parquet.LimitError Parquet._encodefile(source; limits=rowlimits)
     @test source.consumed[] == 0
 
     unknown = WNTrackedRows{Base.SizeUnknown}(Ref(0), 100_000)
-    @test_throws Parquet.LimitError Parquet._writefields(unknown, rowlimits)
+    @test_throws Parquet.LimitError Parquet._encodefile(unknown; limits=rowlimits)
     @test unknown.consumed[] == 2
 
     schemaless = WNSchemaLessRows([
@@ -995,11 +1000,11 @@ end
         close(table)
     end
     unnamed = WNSchemaLessRows(NTuple{3,Int32}[])
-    @test_throws ArgumentError Parquet._writefields(unnamed, rowlimits)
+    @test_throws ArgumentError Parquet._encodefile(unnamed; limits=rowlimits)
 
     wide = WNSchemaLessRows(
         NamedTuple{(:left,:right),Tuple{Int32,Int32}}[])
-    @test_throws Parquet.LimitError Parquet._writefields(wide, rowlimits)
+    @test_throws Parquet.LimitError Parquet._encodefile(wide; limits=rowlimits)
 
     # Row values are checked as they are collected, so the first oversized row
     # stops the read.
@@ -1007,7 +1012,7 @@ end
         max_decimal_bytes=50_000)
     for size in (Base.HasLength, Base.SizeUnknown)
         fresh = WNFreshStringRows{size}(Ref(0), 20, 100_000)
-        @test_throws Parquet.LimitError Parquet._writefields(fresh, valuelimits)
+        @test_throws Parquet.LimitError Parquet._encodefile(fresh; limits=valuelimits)
         @test fresh.consumed[] == 1
     end
 
@@ -1018,7 +1023,7 @@ end
         )
         fresh = WNFreshPayloadRows{type,typeof(maker)}(
             Ref(0), 20, 100_000, maker)
-        @test_throws Parquet.LimitError Parquet._writefields(fresh, valuelimits)
+        @test_throws Parquet.LimitError Parquet._encodefile(fresh; limits=valuelimits)
         @test fresh.consumed[] == 1
     end
 
@@ -1060,19 +1065,24 @@ end
     sources = (wndeepstruct(depth, 0), wndeepstruct(depth, 1))
     for (rows, source) in enumerate(sources)
         expectedrows = rows - 1
-        fields, written = Parquet._writefields((deep=source,), exactlimits)
-        field = only(fields)
-        leaf = only(field.leaves)
-        @test written == expectedrows
-        @test length(field.schema) == depth + 1
-        @test length(leaf.path) == depth + 1
-        @test leaf.values == (iszero(expectedrows) ? Int32[] : Int32[7])
+        bytes = Parquet._encodefile((deep=source,); limits=exactlimits)
+        # The reader declines a schema this deep, so check the footer itself.
+        footerlength = Int(reinterpret(UInt32, bytes[(end - 7):(end - 4)])[1])
+        metadata = Parquet.Thrift.decode(bytes[(end - 7 - footerlength):(end - 8)],
+            WNMD.FileMetaData; limits=exactlimits)
+        @test metadata.num_rows == expectedrows
+        @test length(metadata.schema) == depth + 2
+        if !iszero(expectedrows)
+            chunk = only(only(metadata.row_groups).columns).meta_data
+            @test length(chunk.path_in_schema) == depth + 1
+            @test chunk.num_values == 1
+        end
     end
 
     failurelimits = Parquet.Limits(max_metadata_depth=depth + 1,
         max_container_elements=100_000)
     caught = try
-        Parquet._writefields((deep=last(sources),), failurelimits)
+        Parquet._encodefile((deep=last(sources),); limits=failurelimits)
         nothing
     catch err
         err

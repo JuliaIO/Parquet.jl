@@ -342,33 +342,6 @@ end
     @test metadata.schema[2].logicalType.STRING !== nothing
     @test metadata.schema[2].converted_type == Parquet.Metadata.ConvertedType.DATE
 
-    raw = (Parquet.Thrift.RawField(42, Parquet.Thrift.I32, UInt8[0x02]),)
-    source = Parquet.Metadata.SchemaElement(
-        type_=Parquet.Metadata.Type.BYTE_ARRAY,
-        type_length=Int32(7),
-        repetition_type=Parquet.Metadata.FieldRepetitionType.OPTIONAL,
-        name="preserved",
-        num_children=Int32(0),
-        converted_type=Parquet.Metadata.ConvertedType.DATE,
-        scale=Int32(9),
-        precision=Int32(9),
-        field_id=Int32(17),
-        logicalType=Parquet.Metadata.LogicalType(
-            STRING=Parquet.Metadata.StringType()),
-        unknown_fields=raw,
-    )
-    canonical = Parquet._canonicalwriteelement(source)
-    @test canonical.type_ == source.type_
-    @test canonical.type_length == source.type_length
-    @test canonical.repetition_type == source.repetition_type
-    @test canonical.name == source.name
-    @test canonical.num_children == source.num_children
-    @test canonical.field_id == source.field_id
-    @test canonical.unknown_fields == source.unknown_fields
-    @test canonical.scale === nothing
-    @test canonical.precision === nothing
-    @test canonical.converted_type == Parquet.Metadata.ConvertedType.UTF8
-
     opaquebytes = Parquet._encodefile(
         (value=Vector{UInt8}[collect(codeunits("future"))],))
     opaque = Parquet.Metadata.LogicalType(unknown_fields=(

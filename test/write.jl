@@ -68,25 +68,7 @@ function minimalfootermetadata(; unknown_fields=())
     )
 end
 
-struct NestedPathTable{T}
-    table::T
-end
-
-Tables.istable(::Type{<:NestedPathTable}) = true
-Tables.columnaccess(::Type{<:NestedPathTable}) = true
-Tables.columns(source::NestedPathTable) = Tables.columns(source.table)
-
-# Send a scalar table through the nested shredder instead of the flat fast path.
-function Parquet._writefieldsencoded(source::NestedPathTable, limits::Parquet.Limits,
-        encoding, dictionary::Bool)
-    columns, rows = Parquet._writeinputcolumns(source.table, limits)
-    preflight = semantic -> Parquet._preflightwriteencoding(semantic, encoding,
-        dictionary)
-    return Parquet._nestedwritefields(columns, rows, limits;
-        preflight=preflight), rows
-end
-
-@testset "flat writer fast path matches the nested writer" begin
+@testset "row and column sources of every scalar type write the same bytes" begin
     E = Union{Missing,Int32}
     table = (
         i8=Int8[1, -2, 3], i16=Union{Missing,Int16}[missing, 2, -3],
@@ -120,14 +102,10 @@ end
     for options in ((;), (pageversion=:v2, codec=:zstd, dictionary=true, pagesize=16,
             rowgroupsize=1), (statistics=false, pageindex=false, codec=:snappy,
             encoding=(i32=:delta_binary_packed, f64=:byte_stream_split, s=:delta_byte_array)))
-        @test encode(table, options) == encode(NestedPathTable(table), options)
+        columns = Base.structdiff(table, (enum=nothing,))
+        @test encode(columns, options) == encode(Tables.rowtable(columns), options)
+        @test !isempty(encode(table, options))
     end
-end
-
-@testset "flat writer snapshots only non-Vector columns" begin
-    values = Int32[1, 2]
-    @test Parquet._flatsnapshot(values) === values
-    @test Parquet._flatsnapshot(Int32(1):Int32(3)) == Int32[1, 2, 3]
 end
 
 @testset "exact bounded footer encoding" begin
@@ -770,11 +748,11 @@ function checkencodedfile(input::NamedTuple, encoding::MD.Encoding.T, pageversio
 end
 
 function encodedvaluepayload(values::AbstractVector, encoding::MD.Encoding.T)
-    column = Parquet._writecolumn(:value, values)
-    element = only(column.schema)
+    map = Parquet._writemap(Base.nonmissingtype(eltype(values)))
+    element = Parquet._writeelement(map, "value", Missing <: eltype(values))
     buffer = Parquet._pagebuffer(element, Parquet.Limits())
-    for value in column.values
-        ismissing(value) || Parquet._appendvalue!(buffer, value)
+    for value in values
+        ismissing(value) || Parquet._appendvalue!(buffer, map.convert(value))
     end
     return Parquet._explicitpayload!(UInt8[], encoding, buffer, element)
 end

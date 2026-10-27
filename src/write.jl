@@ -17,11 +17,6 @@ struct WriteColumn{V}
     schema::Vector{Metadata.SchemaElement}
 end
 
-struct WriteFieldPlan
-    schema::Vector{Metadata.SchemaElement}
-    leaves::Vector{WriteColumn}
-end
-
 struct WriteLeafPlan
     ordinal::Int32
     path::Vector{String}
@@ -66,58 +61,6 @@ function WriteColumn(name::String, values, physical::Metadata.Type.T,
     ]
     return WriteColumn(name, values, physical, type_length, optional, logical, converted,
         String[name], nothing, nothing, Int16(0), definition, length(values), schema)
-end
-
-function _writecolumn(name, values::AbstractVector, limits::Limits)
-    type = eltype(values)
-    type == Missing && return _unknowncolumn(name, values, limits)
-    value_type = Base.nonmissingtype(type)
-    map = _writemap(value_type)
-    map === nothing || return _mappedcolumn(String(name), values, map)
-    logical = _logicalwritecolumn(name, values, value_type, limits)
-    logical === nothing || return logical
-    throw(_writeunsupported(value_type, String(name)))
-end
-
-function _writecolumn(name, values::FixedByteArrayVector, ::Limits)
-    optional = Missing <: eltype(values)
-    return WriteColumn(String(name), values, Metadata.Type.FIXED_LEN_BYTE_ARRAY,
-        values.width, optional, nothing, nothing)
-end
-
-function _writecolumn(name, values::AbstractVector)
-    return _writecolumn(name, values, Limits())
-end
-
-function _writecolumn(name, values::FixedByteArrayVector)
-    return _writecolumn(name, values, Limits())
-end
-
-function _mappedcolumn(name::String, values::AbstractVector, map::_WriteMap)
-    optional = Missing <: eltype(values)
-    element = _writeelement(map, name, optional)
-    physical = _mappedvalues(name, values, map)
-    return WriteColumn(name, physical, element.type_, element.type_length, optional,
-        element.logicalType, element.converted_type, String[name], nothing, nothing,
-        Int16(0), Int16(optional), length(values), Metadata.SchemaElement[element])
-end
-
-function _mappedvalues(name::String, values::AbstractVector,
-        map::_WriteMap{typeof(identity)})
-    return values
-end
-
-function _mappedvalues(name::String, values::AbstractVector, map::_WriteMap{F,P}) where {F,P}
-    output = Vector{Missing <: eltype(values) ? Union{Missing,P} : P}(undef, length(values))
-    try
-        for (index, value) in enumerate(values)
-            output[index] = ismissing(value) ? missing : map.convert(value)
-        end
-    catch err
-        err isa Union{ArgumentError,InexactError,OverflowError} || rethrow()
-        throw(_writevalueerror(name, err))
-    end
-    return output
 end
 
 function _writevalueerror(path::AbstractString, err)
@@ -468,12 +411,6 @@ function _writenarrowed(::Type{T}, value, name::String) where {T}
     return converted
 end
 
-# Resolves the encoding policy against the schema leaves before any value is read.
-function _preflightwriteencoding(semantic::_NestedSchemaPlan, encoding,
-        dictionary::Bool)
-    return _writeencodingchoices(_writeleafplans(semantic), encoding, dictionary)
-end
-
 function _writeleafplans(semantic::_NestedSchemaPlan)
     emptyschema = Metadata.SchemaElement[]
     leaves = WriteLeafPlan[]
@@ -537,53 +474,6 @@ end
 function _flatwritable(values::AbstractVector)
     values isa Union{LogicalColumn,FixedByteArrayVector} && return true
     return _flatwritetype(eltype(values))
-end
-
-# The flat writer reads a column several times (limits, statistics, pages), so a
-# source that is not a plain Vector is read once into one; every pass then sees the
-# same values.
-function _flatsnapshot(values::Vector)
-    return values
-end
-
-function _flatsnapshot(values::FixedByteArrayVector)
-    return values
-end
-
-function _flatsnapshot(values::AbstractVector)
-    return collect(values)
-end
-
-# Columns of scalars skip the nested shredder: every value is one PLAIN leaf entry.
-function _flatwritefields(columns::Vector{Pair{String,AbstractVector}},
-        limits::Limits)
-    fields = WriteFieldPlan[]
-    sizehint!(fields, length(columns))
-    for (name, source) in columns
-        occursin('\0', name) && throw(ArgumentError(
-            "Parquet top-level field names cannot contain NUL"))
-        values = _flatsnapshot(source)
-        push!(fields, _writefieldplan(_writecolumn(name, values, limits)))
-    end
-    return fields
-end
-
-function _writefieldsencoded(table, limits::Limits, encoding, dictionary::Bool)
-    Base.@nospecialize table
-    columns, rows = _writeinputcolumns(table, limits)
-    fields = if all(column -> _flatwritable(last(column)), columns)
-        _flatwritefields(columns, limits)
-    else
-        preflight = semantic -> _preflightwriteencoding(semantic, encoding,
-            dictionary)
-        _nestedwritefields(columns, rows, limits; preflight=preflight)
-    end
-    return fields, rows
-end
-
-function _writefields(table, limits::Limits)
-    Base.@nospecialize table
-    return _writefieldsencoded(table, limits, nothing, false)
 end
 
 function _writeencoding(::Nothing)
@@ -883,13 +773,6 @@ function _writeencodingchoices(::Vector{WriteLeafPlan}, encoding, ::Bool)
         "Parquet encoding must be nothing, a Symbol, string, Pair, NamedTuple, or AbstractDict, got $(typeof(encoding))"))
 end
 
-function _validatewritechoicecount(leaves::Vector{WriteLeafPlan},
-        choices::Vector{WriteEncodingChoice})
-    length(choices) == length(leaves) || throw(UnsupportedFeatureError(
-        "nested fields with multiple physical leaves need per-leaf encoding selection"))
-    return
-end
-
 function _validatewriteencoding(column::WriteColumn, encoding::Metadata.Encoding.T)
     physical = column.physical
     encoding == Metadata.Encoding.PLAIN && return
@@ -947,52 +830,6 @@ end
 
 function _writepageversion(pageversion)
     throw(ArgumentError("Parquet page version must be :v1 or :v2"))
-end
-
-function _withoutcolumnschema(column::WriteColumn, path::Vector{String}=column.path)
-    return WriteColumn(column.name, column.values, column.physical, column.type_length,
-        column.optional, column.logical, column.converted, copy(path), column.repetitions,
-        column.definitions, column.max_repetition_level, column.max_definition_level,
-        column.rows, Metadata.SchemaElement[])
-end
-
-function _writefieldplan(column::WriteColumn)
-    schema = column.schema
-    isempty(schema) && throw(ArgumentError(
-        "writer column $(repr(column.name)) has no top-level field schema"))
-    return WriteFieldPlan(copy(schema), WriteColumn[_withoutcolumnschema(column)])
-end
-
-function _writeschemaelementcount(fields::Vector{WriteFieldPlan}, limits::Limits)
-    total = 1
-    for field in fields
-        isempty(field.schema) && throw(ArgumentError("writer field has an empty schema"))
-        isempty(field.leaves) && throw(ArgumentError("writer field has no physical leaves"))
-        total = try
-            Base.checked_add(total, length(field.schema))
-        catch err
-            err isa OverflowError || rethrow()
-            throw(LimitError(:container_elements, typemax(Int64),
-                limits.max_container_elements))
-        end
-        _checklimit(:container_elements, total, limits.max_container_elements)
-    end
-    return total
-end
-
-function _flattenwriteschema(fields::Vector{WriteFieldPlan}, limits::Limits)
-    isempty(fields) && throw(ArgumentError("a Parquet table must have at least one column"))
-    length(fields) <= typemax(Int32) ||
-        throw(ArgumentError("Parquet schema has more than Int32 top-level fields"))
-    count = _writeschemaelementcount(fields, limits)
-    elements = Metadata.SchemaElement[
-        Metadata.SchemaElement(name="schema", num_children=Int32(length(fields))),
-    ]
-    sizehint!(elements, count)
-    for field in fields
-        append!(elements, field.schema)
-    end
-    return elements
 end
 
 function _writeschemaleafcount(node::SchemaNode)
@@ -1062,18 +899,4 @@ function _writetopfields(elements::Vector{Metadata.SchemaElement})
         push!(fields, elements[start:(index - 1)])
     end
     return fields
-end
-
-function _writepartitionmismatch(expected::Vector{Metadata.SchemaElement},
-        actual::Vector{Metadata.SchemaElement}, index::Int)
-    for (left, right) in zip(_writetopfields(expected), _writetopfields(actual))
-        name = first(left).name
-        first(right).name == name || throw(ArgumentError(
-            "partition $index has column $(repr(first(right).name)) where the " *
-            "first partition has $(repr(name))"))
-        left == right || throw(ArgumentError("column $(repr(name)) of partition " *
-            "$index does not have the type or nullability of the first partition"))
-    end
-    throw(ArgumentError("partition $index has $(length(_writetopfields(actual))) " *
-        "columns; the first partition has $(length(_writetopfields(expected)))"))
 end

@@ -239,15 +239,3 @@ function _logicalcolumnwriteelement(name, spec::_DecimalLogicalColumnSpec,
         logical=logical, converted=Metadata.ConvertedType.DECIMAL,
         scale=spec.scale, precision=spec.precision)
 end
-
-function _flatsnapshot(values::LogicalColumn)
-    values.values isa Vector && return values
-    return LogicalColumn{eltype(values),Vector{eltype(values.values)},
-        typeof(values.spec)}(collect(values.values), values.spec)
-end
-
-function _writecolumn(name, column::LogicalColumn, limits::Limits)
-    optional = Missing <: eltype(column)
-    element = _logicalcolumnwriteelement(name, column.spec, optional, limits)
-    return _writescalarlogicalcolumn(name, column, element, limits)
-end

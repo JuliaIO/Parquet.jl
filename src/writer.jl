@@ -548,6 +548,10 @@ function _writetable!(writer::Writer, table, source)
         names = String[String(name) for name in Tables.columnnames(table)]
         vectors = AbstractVector[column for column in values(_tablecolumns(table))]
         rows = _tablerows(table)
+        for (name, vector) in zip(names, vectors)
+            length(vector) == rows || throw(ArgumentError("Parquet.Table column " *
+                "$(repr(name)) has $(length(vector)) values for $rows rows"))
+        end
         columns = Pair{String,AbstractVector}[name => vector
             for (name, vector) in zip(names, vectors)]
     else

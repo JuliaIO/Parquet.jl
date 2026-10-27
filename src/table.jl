@@ -26,11 +26,6 @@ function _tablerows(table::Table)
     return getfield(table, :rows)
 end
 
-function _writefieldsencoded(table::Table, limits::Limits, encoding,
-        dictionary::Bool)
-    return _provenancewritefields(table, limits, encoding, dictionary)
-end
-
 function _writekeyvaluemetadata(table::Table, limits::Limits)
     metadata = _tablemetadata(table).key_value_metadata
     metadata === nothing && return nothing

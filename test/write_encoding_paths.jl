@@ -2,8 +2,10 @@ using Parquet
 using Test
 
 function selectorleaf(ordinal::Integer, path::Vector{String}, values::AbstractVector)
-    source = Parquet._writecolumn(Symbol(last(path)), values)
-    column = Parquet._withoutcolumnschema(source, path)
+    element = Parquet._writeelement(Parquet._writemap(eltype(values)), last(path), false)
+    column = Parquet.WriteColumn(last(path), values, element.type_, element.type_length,
+        false, element.logicalType, element.converted_type, copy(path), nothing, nothing,
+        Int16(0), Int16(0), length(values), Parquet.Metadata.SchemaElement[])
     return Parquet.WriteLeafPlan(Int32(ordinal), copy(path), column)
 end
 
