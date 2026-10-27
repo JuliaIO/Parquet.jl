@@ -370,8 +370,7 @@ end
     right = nrstream(plan, 2, [0], [1], Int32[1]; rows=1)
     tiny = Parquet.Limits(max_materialized_bytes=1)
     @test_throws Parquet.LimitError Parquet._assemblenested(
-        plan, [left, right], 1; limits=tiny,
-        budget=Parquet._LiveByteBudget(tiny))
+        plan, [left, right], 1; limits=tiny)
 
     validleft = nrstream(plan, 1, [0], [1], Int32[1]; rows=1)
     # The smallest budget that assembles the valid streams; one byte less fails while
@@ -379,8 +378,7 @@ end
     function fits(maximum)
         limits = Parquet.Limits(max_materialized_bytes=maximum)
         try
-            Parquet._assemblenested(plan, [validleft, right], 1; limits=limits,
-                budget=Parquet._LiveByteBudget(limits))
+            Parquet._assemblenested(plan, [validleft, right], 1; limits=limits)
             return true
         catch err
             err isa Parquet.LimitError || rethrow()
@@ -389,26 +387,17 @@ end
     end
     needed = findfirst(fits, 1:100_000)
     passlimits = Parquet.Limits(max_materialized_bytes=needed - 1)
-    invalidbudget = Parquet._LiveByteBudget(passlimits)
     @test_throws Parquet.FormatError Parquet._assemblenested(
-        plan, [left, right], 1; limits=passlimits,
-        budget=invalidbudget)
-    @test Parquet._budgetused(invalidbudget) == 0
-    finalbudget = Parquet._LiveByteBudget(passlimits)
+        plan, [left, right], 1; limits=passlimits)
     @test_throws Parquet.LimitError Parquet._assemblenested(
-        plan, [validleft, right], 1; limits=passlimits,
-        budget=finalbudget)
-    @test Parquet._budgetused(finalbudget) == 0
+        plan, [validleft, right], 1; limits=passlimits)
     @test_throws Parquet.FormatError Parquet._assemblenested(
         plan, [validleft], 1)
     @test_throws Parquet.FormatError Parquet._assemblenested(
         plan, [validleft, right], 2)
 
-    budget = Parquet._LiveByteBudget(Parquet.Limits())
-    output = Parquet._assemblenested(plan, [validleft, right], 1;
-        budget=budget)
+    output = Parquet._assemblenested(plan, [validleft, right], 1)
     @test output[1]["record"]["left"] == 1
-    @test Parquet._budgetused(budget) > 0
 end
 
 @testset "nested reader required leafless structs" begin

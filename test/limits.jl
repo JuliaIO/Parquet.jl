@@ -1,16 +1,23 @@
-@testset "shared live-byte budget" begin
-    limits = Parquet.Limits(max_materialized_bytes=10)
-    budget = Parquet._LiveByteBudget(limits)
-    @test Parquet._budgetused(budget) == 0
-    Parquet._reserve!(budget, 4)
-    @test Parquet._budgetused(budget) == 4
-    @test_throws Parquet.LimitError Parquet._reserve!(budget, 7)
-    @test Parquet._budgetused(budget) == 4
-    Parquet._release!(budget, 3)
-    @test Parquet._budgetused(budget) == 1
-    @test_throws ArgumentError Parquet._reserve!(budget, -1)
-    @test_throws ArgumentError Parquet._release!(budget, 2)
-    @test Parquet._budgetused(budget) == 1
+@testset "read byte budget" begin
+    budget = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=10))
+    Parquet._charge!(budget, 4)
+    @test budget.used == 4
+    @test_throws Parquet.LimitError Parquet._charge!(budget, 7)
+    @test_throws Parquet.LimitError Parquet._charge!(budget, typemax(Int64))
+    @test_throws ArgumentError Parquet._charge!(budget, -1)
+    uncapped = Parquet._ByteBudget(Parquet.Limits())
+    Parquet._charge!(uncapped, typemax(Int64))
+    @test uncapped.used == 0
+    # Tasks of one read share a budget; every charge is counted.
+    shared = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=1_000_000))
+    @sync for _ in 1:8
+        errormonitor(Threads.@spawn begin
+            for _ in 1:1000
+                Parquet._charge!(shared, 3)
+            end
+        end)
+    end
+    @test shared.used == 24_000
 end
 
 @testset "bounded schema-name interning" begin
@@ -70,14 +77,9 @@ end
             Parquet._internedschemanamebytes() == 0 || exit(16)
         end
         exact = Parquet.Limits(max_schema_name_bytes=charge)
-        budget = Parquet._LiveByteBudget(exact)
-        Parquet._reserve!(budget, Int64(64))
-        Parquet._internschemanames(String[name], exact, budget) ==
+        Parquet._internschemanames(String[name], exact) ==
             Symbol[Symbol(name)] || exit(17)
         Parquet._internedschemanamebytes() == charge || exit(18)
-        expected = Int64(64) +
-            Parquet._materializedarraybytes(Symbol, 1)
-        Parquet._budgetused(budget) == expected || exit(19)
         second = "__parquet_isolated_exact_schema_name_second__"
         secondcharge = Parquet._schemanamecharge(second, typemax(Int64))
         Parquet._internschemanames(String[second],
@@ -111,19 +113,12 @@ end
     two = (a=Int32[1, 2, 3, 4], b=Int32[5, 6, 7, 8])
     onebytes = Parquet._encodefile(one)
     twobytes = Parquet._encodefile(two)
+    # The byte cap applies to reads only.
+    @test Parquet._encodefile(one; limits=Parquet.Limits(max_materialized_bytes=0)) ==
+        onebytes
     for maximum in (0, 1)
         limits = Parquet.Limits(max_materialized_bytes=maximum)
         @test_throws Parquet.LimitError Parquet.Table(onebytes; limits=limits)
-    end
-
-    file = Parquet.File(onebytes)
-    metadata = Parquet.Thrift.decode(file.footer.bytes,
-        Parquet.Metadata.FileMetaData)
-    schema = Parquet.Schema(metadata)
-    close(file)
-    for maximum in (0, 1)
-        limits = Parquet.Limits(max_materialized_bytes=maximum)
-        @test_throws Parquet.LimitError Parquet._nestedplan(schema; limits=limits)
     end
 
     readone = minimummaterializedlimit() do limits
@@ -173,10 +168,7 @@ end
     maximum = Int64(128 + 4 * length(footer))
     limits = Parquet.Limits(max_materialized_bytes=maximum,
         max_container_elements=count + 10)
-    budget = Parquet._LiveByteBudget(limits)
-    @test_throws Parquet.LimitError Parquet._readfilemetadata(file, limits,
-        budget)
-    @test Parquet._budgetused(budget) == 0
+    @test_throws Parquet.LimitError Parquet._readfilemetadata(file, limits)
     close(file)
 end
 
@@ -184,32 +176,22 @@ end
     before = Parquet._internedschemanamebytes()
     first = "__parquet_new_name_rejected_before_set_growth__"
     names = fill(first, 100_000)
-    limits = Parquet.Limits(max_schema_name_bytes=0,
-        max_materialized_bytes=1024 * 1024)
-    budget = Parquet._LiveByteBudget(limits)
+    limits = Parquet.Limits(max_schema_name_bytes=0)
     @test_throws Parquet.UnsupportedFeatureError Parquet._internschemanames(
-        names, limits, budget)
-    @test Parquet._budgetused(budget) == 0
+        names, limits)
     @test Parquet._internedschemanamebytes() == before
-
-    Parquet._reserve!(budget, Int64(64))
     for invalid in (String[first, first], String["nul\0name"])
         @test_throws Parquet.UnsupportedFeatureError Parquet._internschemanames(
-            invalid, limits, budget)
-        @test Parquet._budgetused(budget) == 64
+            invalid, limits)
         @test Parquet._internedschemanamebytes() == before
     end
-    Parquet._release!(budget, Int64(64))
 
     firstatomic = "__parquet_atomic_batch_first__"
     secondatomic = "__parquet_atomic_batch_second__"
     firstcharge = Parquet._schemanamecharge(firstatomic, typemax(Int64))
     atomiclimits = Parquet.Limits(max_schema_name_bytes=firstcharge)
-    atomicbudget = Parquet._LiveByteBudget(atomiclimits)
-    Parquet._reserve!(atomicbudget, Int64(64))
     @test_throws Parquet.LimitError Parquet._internschemanames(
-        String[firstatomic, secondatomic], atomiclimits, atomicbudget)
-    @test Parquet._budgetused(atomicbudget) == 64
+        String[firstatomic, secondatomic], atomiclimits)
     @test Parquet._internedschemanamebytes() == before
     lock(Parquet._SCHEMA_NAME_REGISTRY.lock)
     try
@@ -219,17 +201,4 @@ end
     finally
         unlock(Parquet._SCHEMA_NAME_REGISTRY.lock)
     end
-
-    atomic = "__parquet_name_output_preflight_is_atomic__"
-    charge = Parquet._schemanamecharge(atomic, typemax(Int64))
-    temporary = Parquet._materializedarraybytes(String, 0) +
-        2 * Parquet._MATERIALIZED_OBJECT_BYTES +
-        Parquet._materializedarraybytes(String, 2; header=false)
-    tight = Parquet.Limits(max_schema_name_bytes=charge,
-        max_materialized_bytes=temporary)
-    tightbudget = Parquet._LiveByteBudget(tight)
-    @test_throws Parquet.LimitError Parquet._internschemanames(String[atomic],
-        tight, tightbudget)
-    @test Parquet._budgetused(tightbudget) == 0
-    @test Parquet._internedschemanamebytes() == before
 end

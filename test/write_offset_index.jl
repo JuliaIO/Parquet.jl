@@ -48,10 +48,8 @@ function oiframes(file::Parquet.File, chunk::OIMD.ColumnChunk)
     stop = Base.checked_add(start, metadata.total_compressed_size)
     output = []
     position = start
-    budget = Parquet._LiveByteBudget(Parquet.Limits())
     while position < stop
-        frame = Parquet.readpage(file.source, position, stop,
-            Parquet.Limits(); budget=budget)
+        frame = Parquet.readpage(file.source, position, stop, Parquet.Limits())
         frameend = Parquet.pageend(frame)
         push!(output, (
             offset=position,
@@ -60,7 +58,6 @@ function oiframes(file::Parquet.File, chunk::OIMD.ColumnChunk)
             payload=collect(frame.payload),
             frameend=frameend,
         ))
-        Parquet._release!(budget, frame.materializedcharge)
         position = frameend
     end
     @test position == stop

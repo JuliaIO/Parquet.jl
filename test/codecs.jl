@@ -199,17 +199,7 @@ end
     shiftedencoded = Parquet.compress(CC.SNAPPY, sample)
     shiftedsrc = Parquet.source(ShiftedCodecBytes(shiftedencoded))
     shiftedslice = Parquet.readrange(shiftedsrc, 0, length(shiftedencoded))
-    copycharge = Parquet._contiguouscopycharge(shiftedslice)
-    constrained = Parquet._LiveByteBudget(Parquet.Limits(
-        max_materialized_bytes=copycharge - 1))
-    @test_throws Parquet.LimitError Parquet.decompress(CC.SNAPPY,
-        shiftedslice, length(sample); budget=constrained)
-    @test Parquet._budgetused(constrained) == 0
-    sufficient = Parquet._LiveByteBudget(Parquet.Limits(
-        max_materialized_bytes=copycharge))
-    @test Parquet.decompress(CC.SNAPPY, shiftedslice, length(sample);
-        budget=sufficient) == sample
-    @test Parquet._budgetused(sufficient) == 0
+    @test Parquet.decompress(CC.SNAPPY, shiftedslice, length(sample)) == sample
     Parquet.close!(shiftedsrc)
     closedsource = Parquet.source(Parquet.compress(CC.ZSTD, sample))
     slice = Parquet.readrange(closedsource, 0, Parquet.sourcelength(closedsource))

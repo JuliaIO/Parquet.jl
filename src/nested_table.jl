@@ -70,7 +70,7 @@ end
 # leaf's logical conversion applied, and the page buffers of a STRING leaf's payloads.
 function _readnestedstream(file::File, metadata::Metadata.FileMetaData,
     schema::Schema, leaf::_NestedLeafPlan, rows::Int, limits::Limits,
-    budget::_LiveByteBudget, entries::Int, buffers::_PageBuffers)
+    budget::_ByteBudget, entries::Int, buffers::_PageBuffers)
     node = leaf.source
     T = _physicaleltype(node.element.type_)
     convert, L = _valueconverter(node.element, limits)
@@ -99,67 +99,18 @@ function _readnestedstream(file::File, metadata::Metadata.FileMetaData,
     return stream, convert isa _StringPayloads ? convert.buffers : nothing
 end
 
-function _nestedstreamlayout!(entries::Vector{Int},
-    metadata::Metadata.FileMetaData, plan::_NestedSchemaPlan,
-    limits::Limits)
-    structural = Int64(0)
-    for (index, leaf) in enumerate(plan.leaves)
-        count = _nestedstreamentrycount(metadata, leaf, limits)
-        entries[index] = count
-        T = _physicaleltype(leaf.source.element.type_)
-        charge = _materializedsum(_leaflevelbytes(count),
-            _materializedarraybytes(T, count))
-        structural = _materializedsum(structural, charge)
-    end
-    return structural
-end
-
 function _readnestedroot(file::File, metadata::Metadata.FileMetaData,
-    schema::Schema, plan::_NestedSchemaPlan, limits::Limits,
-    budget::_LiveByteBudget)
+    schema::Schema, plan::_NestedSchemaPlan, limits::Limits, budget::_ByteBudget,
+    ntasks::Int=Threads.nthreads())
     rows = _validatetablerowgroups(metadata, schema, limits)
-    count = length(plan.leaves)
-    streamcharge = _materializedsum(
-        _materializedarraybytes(LeafStream, count),
-        _materializedproduct(count, _MATERIALIZED_OBJECT_BYTES))
-    _reserve!(budget, streamcharge)
-    streams = LeafStream[]
-    sizehint!(streams, count)
-    accountingcharge = _materializedsum(_materializedarraybytes(Int, count),
-        _materializedarraybytes(Int64, count))
-    try
-        _reserve!(budget, accountingcharge)
-    catch
-        _release!(budget, streamcharge)
-        rethrow()
+    entries = Int[_nestedstreamentrycount(metadata, leaf, limits) for leaf in plan.leaves]
+    tasks = _readtasks(file, ntasks, length(plan.leaves))
+    results = _readmap(eachindex(plan.leaves), tasks) do index, buffers
+        return _readnestedstream(file, metadata, schema, plan.leaves[index], rows,
+            limits, budget, entries[index], buffers)
     end
-    entrycounts = zeros(Int, count)
-    structuralcharge = Int64(0)
-    structuralreserved = false
-    try
-        structuralcharge = _nestedstreamlayout!(entrycounts, metadata,
-            plan, limits)
-        _reserve!(budget, structuralcharge)
-        structuralreserved = true
-        parallel = _parallelread(file, limits, length(plan.leaves))
-        results = _readmap(eachindex(plan.leaves), parallel) do index, buffers
-            return _readnestedstream(file, metadata, schema, plan.leaves[index],
-                rows, limits, parallel ? _LiveByteBudget(limits) : budget,
-                entrycounts[index], buffers)
-        end
-        for (stream, _) in results
-            push!(streams, stream)
-        end
-        pages = Union{Nothing,Vector{Vector{UInt8}}}[last(result) for result in results]
-        root = _assemblenested(plan, streams, rows; limits=limits, budget=budget,
-            strings=pages)
-        _release!(budget, structuralcharge)
-        structuralreserved = false
-        _release!(budget, _materializedsum(streamcharge, accountingcharge))
-        return root
-    catch
-        structuralreserved && _release!(budget, structuralcharge)
-        _release!(budget, _materializedsum(streamcharge, accountingcharge))
-        rethrow()
-    end
+    streams = LeafStream[first(result) for result in results]
+    pages = Union{Nothing,Vector{Vector{UInt8}}}[last(result) for result in results]
+    return _assemblenested(plan, streams, rows; limits=limits, budget=budget,
+        strings=pages)
 end

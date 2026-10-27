@@ -139,14 +139,6 @@ end
     @test headerlength == length(page) - 12
     @test header.data_page_header.num_values == 3 && header.crc !== nothing
     @test Parquet.validatepageheader(header) === :data_v1
-    sharedbudget = Parquet._LiveByteBudget(Parquet.Limits())
-    sharedheader, sharedlength = Parquet.readpageheader(src, Int64(0),
-        Int64(length(page)), Parquet.Limits(); budget=sharedbudget)
-    @test sharedheader == header
-    @test sharedlength == headerlength
-    retainedcharge = Parquet._budgetused(sharedbudget)
-    @test retainedcharge > 0
-    Parquet._release!(sharedbudget, retainedcharge)
     frame = readframe(page)
     @test frame.offset == 0 && frame.headerlength == headerlength && Parquet.pageend(frame) == length(page)
     @test collect(frame.payload) == Parquet.encode_plain(Int32[1, 2, 3]) && Parquet.pagekind(frame) === :data_v1
@@ -221,11 +213,9 @@ end
         for faultread in 1:2
             malformed = PageContractSource(page; mode=mode,
                 faultread=faultread)
-            budget = Parquet._LiveByteBudget(Parquet.Limits())
             @test_throws ArgumentError Parquet.readpage(malformed, Int64(0),
-                Int64(length(page)), Parquet.Limits(); budget=budget)
+                Int64(length(page)), Parquet.Limits())
             @test length(malformed.reads) == faultread
-            @test Parquet._budgetused(budget) == 0
         end
     end
 
@@ -233,17 +223,15 @@ end
         sentinel = PageCallbackSentinel(faultread)
         throwing = PageContractSource(page; mode=:throw,
             faultread=faultread, sentinel=sentinel)
-        budget = Parquet._LiveByteBudget(Parquet.Limits())
         error = try
             Parquet.readpage(throwing, Int64(0), Int64(length(page)),
-                Parquet.Limits(); budget=budget)
+                Parquet.Limits())
             nothing
         catch err
             err
         end
         @test error === sentinel
         @test length(throwing.reads) == faultread
-        @test Parquet._budgetused(budget) == 0
     end
 
     for mode in (:length_type, :length_negative)
@@ -297,10 +285,10 @@ end
     compressed = Int64(frame.header.compressed_page_size)
     offset = typemax(Int64) - Int64(frame.headerlength) - compressed
     exact = Parquet.PageFrame(offset, frame.header, frame.headerlength,
-        frame.payload, frame.materializedcharge)
+        frame.payload)
     @test Parquet.pageend(exact) == typemax(Int64)
     beyond = Parquet.PageFrame(offset + 1, frame.header,
-        frame.headerlength, frame.payload, frame.materializedcharge)
+        frame.headerlength, frame.payload)
     frameerror = try
         Parquet.pageend(beyond)
         nothing
@@ -326,18 +314,15 @@ end
         data_page_header=data)
     bytes = TH.encode(header)
     src = Parquet.source(bytes)
-    limits = Parquet.Limits(max_materialized_bytes=700,
-        max_page_header_bytes=200_000)
+    limits = Parquet.Limits(max_page_header_bytes=50_000)
     function rejectlargestatistics()
-        budget = Parquet._LiveByteBudget(limits)
         @test_throws Parquet.LimitError Parquet.readpage(src, Int64(0),
-            Int64(length(bytes)), limits; budget=budget)
-        @test Parquet._budgetused(budget) == 0
+            Int64(length(bytes)), limits)
         return
     end
     rejectlargestatistics()
     GC.gc()
-    @test @allocated(rejectlargestatistics()) < 10_000
+    @test @allocated(rejectlargestatistics()) < 200_000
 end
 
 @testset "page CRC32" begin
@@ -361,25 +346,8 @@ end
     @test readframe(empty).header.crc == 0 && isempty(readframe(empty).payload)
 
     src = Parquet.source(page)
-    probe = Parquet._LiveByteBudget(Parquet.Limits())
-    probeframe = Parquet.readpage(src, Int64(0), Int64(length(page)),
-        Parquet.Limits(); budget=probe)
-    retained = Parquet._budgetused(probe)
-    scratch = Parquet._pagechecksumscratch(probeframe.payload)
-    Parquet._release!(probe, probeframe.materializedcharge)
-    constrainedlimits = Parquet.Limits(
-        max_materialized_bytes=retained + scratch - 1)
-    constrained = Parquet._LiveByteBudget(constrainedlimits)
-    @test_throws Parquet.LimitError Parquet.readpage(src, Int64(0),
-        Int64(length(page)), constrainedlimits; budget=constrained)
-    @test Parquet._budgetused(constrained) == 0
-    exactlimits = Parquet.Limits(max_materialized_bytes=retained + scratch)
-    exact = Parquet._LiveByteBudget(exactlimits)
-    exactframe = Parquet.readpage(src, Int64(0), Int64(length(page)),
-        exactlimits; budget=exact)
-    @test Parquet._budgetused(exact) == exactframe.materializedcharge == retained
-    Parquet._release!(exact, exactframe.materializedcharge)
-    @test Parquet._budgetused(exact) == 0
+    @test collect(Parquet.readpage(src, Int64(0), Int64(length(page)),
+        Parquet.Limits()).payload) == payload
     Parquet.close!(src)
 end
 

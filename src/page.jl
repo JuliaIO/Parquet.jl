@@ -6,7 +6,6 @@ struct PageFrame{B<:AbstractVector{UInt8}}
     header::Metadata.PageHeader
     headerlength::Int
     payload::B
-    materializedcharge::Int64
 end
 
 function pagekind(header::Metadata.PageHeader)
@@ -121,7 +120,7 @@ Decode the PageHeader at zero-based `offset`, never reading at or past `stop` an
 decoding more than `limits.max_page_header_bytes`.
 """
 function _readpageheader(src::AbstractSource, offset::Int64, stop::Int64,
-    limits::Limits, budget::_LiveByteBudget)
+    limits::Limits)
     0 <= offset < stop || throw(FormatError("page header offset $offset is outside the column chunk"))
     total = _checkedsourcelength(src)
     stop <= total || throw(FormatError(
@@ -129,30 +128,19 @@ function _readpageheader(src::AbstractSource, offset::Int64, stop::Int64,
     available = stop - offset
     window = min(Int64(limits.max_page_header_bytes), available)
     window > 0 || throw(LimitError(:page_header_bytes, 1, limits.max_page_header_bytes))
-    temporary = _reserveobjects!(budget, 2)
-    bytes = try
-        _contiguous(_readrangeexact(src, total, offset, window))
-    catch
-        _release!(budget, temporary)
-        rethrow()
-    end
-    reader = Thrift.Reader(bytes; limits=limits, budget=budget)
+    bytes = _contiguous(_readrangeexact(src, total, offset, window))
+    reader = Thrift.Reader(bytes; limits=limits)
     header = try
         Thrift.decode(reader, Metadata.PageHeader)
     catch err
-        charge = Thrift.materializedcharge(reader)
-        _release!(budget, _materializedsum(temporary, charge))
         _pageheaderfailure(err, reader, window, available, limits)
     end
-    charge = Thrift.materializedcharge(reader)
-    _release!(budget, temporary)
-    return header, Thrift.consumed(reader), charge, total
+    return header, Thrift.consumed(reader), total
 end
 
 function readpageheader(src::AbstractSource, offset::Int64, stop::Int64,
-    limits::Limits; budget::_LiveByteBudget=_LiveByteBudget(limits))
-    header, headerlength, _, _ = _readpageheader(src, offset, stop, limits,
-        budget)
+    limits::Limits)
+    header, headerlength, _ = _readpageheader(src, offset, stop, limits)
     return header, headerlength
 end
 
@@ -160,34 +148,22 @@ end
     readpage(src, offset, stop, limits) -> PageFrame
 
 Read one page whose header starts at `offset` and whose bytes must end at or before `stop`.
-Both page sizes are charged to `limits.max_page_bytes` before the payload is read, and the
-CRC32 of the on-disk payload is verified when the header carries one.
+Both page sizes are checked against `limits.max_page_bytes` before the payload is read,
+and the CRC32 of the on-disk payload is verified when the header carries one.
 """
-function readpage(src::AbstractSource, offset::Int64, stop::Int64, limits::Limits;
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    header, headerlength, headercharge, total = _readpageheader(src, offset,
-        stop, limits, budget)
-    framecharge = Int64(0)
-    try
-        validatepageheader(header)
-        compressed = Int64(header.compressed_page_size)
-        payloadoffset = _pageframeend(offset, headerlength, Int64(0))
-        compressed <= stop - payloadoffset || throw(FormatError(
-            "page payload of $compressed bytes extends past the column chunk end"))
-        _checklimit(:page_bytes, compressed, limits.max_page_bytes)
-        _checklimit(:page_bytes, header.uncompressed_page_size,
-            limits.max_page_bytes)
-        framecharge = _reserveobjects!(budget, 2)
-        payload = _contiguous(_readrangeexact(src, total, payloadoffset,
-            compressed))
-        crc = header.crc
-        crc === nothing || verifypagechecksum(crc, payload; budget=budget)
-        charge = _materializedsum(headercharge, framecharge)
-        return PageFrame(offset, header, headerlength, payload, charge)
-    catch
-        _release!(budget, _materializedsum(headercharge, framecharge))
-        rethrow()
-    end
+function readpage(src::AbstractSource, offset::Int64, stop::Int64, limits::Limits)
+    header, headerlength, total = _readpageheader(src, offset, stop, limits)
+    validatepageheader(header)
+    compressed = Int64(header.compressed_page_size)
+    payloadoffset = _pageframeend(offset, headerlength, Int64(0))
+    compressed <= stop - payloadoffset || throw(FormatError(
+        "page payload of $compressed bytes extends past the column chunk end"))
+    _checklimit(:page_bytes, compressed, limits.max_page_bytes)
+    _checklimit(:page_bytes, header.uncompressed_page_size, limits.max_page_bytes)
+    payload = _contiguous(_readrangeexact(src, total, payloadoffset, compressed))
+    crc = header.crc
+    crc === nothing || verifypagechecksum(crc, payload)
+    return PageFrame(offset, header, headerlength, payload)
 end
 
 function pageend(frame::PageFrame)
@@ -204,8 +180,7 @@ Page V2 stores repetition and definition levels outside its compressed value
 section; use the V2 reader path instead of passing the full V2 payload here.
 """
 function decompresspage(frame::PageFrame, codec::Metadata.CompressionCodec.T;
-        limits::Limits=Limits(),
-        budget::Union{Nothing,_LiveByteBudget}=nothing)
+        limits::Limits=Limits())
     return decompress(codec, frame.payload, frame.header.uncompressed_page_size;
-        limits=limits, budget=budget)
+        limits=limits)
 end

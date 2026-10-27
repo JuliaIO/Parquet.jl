@@ -59,10 +59,8 @@ mutable struct _SchemaParseFrame
     parent::Union{Nothing,_SchemaParseFrame}
 end
 
-function _schemapath(parent::Vector{String}, name::String,
-    budget::_LiveByteBudget)
+function _schemapath(parent::Vector{String}, name::String)
     count = length(parent) + 1
-    _reservearray!(budget, String, count)
     path = Vector{String}(undef, count)
     copyto!(path, 1, parent, 1, length(parent))
     path[end] = name
@@ -72,8 +70,7 @@ end
 function _schemaparsestart(elements::Vector{Metadata.SchemaElement}, index::Int,
         parentpath::Vector{String}, definition::Integer, repetition::Integer,
         depth::Int,
-        leaves::Vector{SchemaNode}, limits::Limits, budget::_LiveByteBudget,
-        parent; root::Bool=false)
+        leaves::Vector{SchemaNode}, limits::Limits, parent; root::Bool=false)
     index <= length(elements) || throw(FormatError("flattened schema ends before all declared children"))
     element = elements[index]
     children = _validateschemashape(element, limits)
@@ -87,7 +84,7 @@ function _schemaparsestart(elements::Vector{Metadata.SchemaElement}, index::Int,
     _checklimit(:metadata_depth, depth, limits.max_metadata_depth)
     nextdefinition <= typemax(Int16) || throw(FormatError("schema definition level exceeds Int16"))
     nextrepetition <= typemax(Int16) || throw(FormatError("schema repetition level exceeds Int16"))
-    path = root ? parentpath : _schemapath(parentpath, element.name, budget)
+    path = root ? parentpath : _schemapath(parentpath, element.name)
     if element.type_ !== nothing
         ordinal = try
             Base.checked_add(length(leaves), 1)
@@ -99,37 +96,30 @@ function _schemaparsestart(elements::Vector{Metadata.SchemaElement}, index::Int,
         ordinal <= typemax(Int32) || throw(LimitError(:container_elements,
             ordinal, Int64(typemax(Int32))))
         column = Int32(ordinal)
-        _reservearray!(budget, SchemaNode, 0)
-        _reserveobjects!(budget)
         node = SchemaNode(element, path, Int16(nextdefinition), Int16(nextrepetition), column, SchemaNode[])
         push!(leaves, node)
         return (node, nothing, index + 1)
     end
     _checklimit(:container_elements, children,
         limits.max_container_elements)
-    _reservearray!(budget, SchemaNode, children)
     nodes = SchemaNode[]
     sizehint!(nodes, children)
-    _reserveobjects!(budget)
     frame = _SchemaParseFrame(element, path, Int16(nextdefinition),
         Int16(nextrepetition), nodes, children, 0, parent)
     return (nothing, frame, index + 1)
 end
 
 function _parseschema(elements::Vector{Metadata.SchemaElement},
-        leaves::Vector{SchemaNode}, rootpath::Vector{String}, limits::Limits,
-        budget::_LiveByteBudget)
+        leaves::Vector{SchemaNode}, rootpath::Vector{String}, limits::Limits)
     node, frame, nextindex = _schemaparsestart(elements, 1, rootpath, 0, 0, 1,
-        leaves, limits, budget, nothing; root=true)
+        leaves, limits, nothing; root=true)
     node === nothing || throw(AssertionError("schema root parser returned a primitive"))
     current = frame::_SchemaParseFrame
     while true
         if current.completed == current.expected
-            _reserveobjects!(budget)
             completed = SchemaNode(current.element, current.path,
                 current.definition, current.repetition, Int32(0), current.children)
             parent = current.parent
-            _release!(budget, _MATERIALIZED_OBJECT_BYTES)
             parent === nothing && return (completed, nextindex)
             current = parent::_SchemaParseFrame
             push!(current.children, completed)
@@ -138,7 +128,7 @@ function _parseschema(elements::Vector{Metadata.SchemaElement},
         end
         child, childframe, nextindex = _schemaparsestart(elements, nextindex,
             current.path, current.definition, current.repetition,
-            length(current.path) + 2, leaves, limits, budget, current)
+            length(current.path) + 2, leaves, limits, current)
         if childframe === nothing
             push!(current.children, child::SchemaNode)
             current.completed += 1
@@ -148,41 +138,28 @@ function _parseschema(elements::Vector{Metadata.SchemaElement},
     end
 end
 
-function Schema(elements::Vector{Metadata.SchemaElement}; limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    start = _budgetused(budget)
-    try
-        isempty(elements) && throw(FormatError("file metadata has an empty schema"))
-        elements[1].type_ === nothing || throw(FormatError("schema root must be a group"))
-        rootrepetition = elements[1].repetition_type
-        (rootrepetition === nothing ||
-            rootrepetition == Metadata.FieldRepetitionType.REQUIRED) ||
-            throw(FormatError("schema root can only use the legacy REQUIRED marker"))
-        rootchildren = _validateschemashape(elements[1], limits)
-        rootchildren <= length(elements) - 1 || throw(FormatError(
-            "group schema element $(repr(elements[1].name)) declares more direct " *
-            "children than remain in the flattened schema"))
-        iszero(rootchildren) && length(elements) > 1 && throw(FormatError(
-            "flattened schema has unclaimed elements"))
-        _checklimit(:container_elements, length(elements), limits.max_container_elements)
-        _reservearray!(budget, SchemaNode, length(elements))
-        leaves = SchemaNode[]
-        sizehint!(leaves, length(elements))
-        _reservearray!(budget, String, 0)
-        rootpath = String[]
-        root, nextindex = _parseschema(elements, leaves, rootpath, limits, budget)
-        nextindex == length(elements) + 1 || throw(FormatError(
-            "flattened schema has unclaimed elements"))
-        _reserveobjects!(budget)
-        return Schema(root, leaves)
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
-    end
+function Schema(elements::Vector{Metadata.SchemaElement}; limits::Limits=Limits())
+    isempty(elements) && throw(FormatError("file metadata has an empty schema"))
+    elements[1].type_ === nothing || throw(FormatError("schema root must be a group"))
+    rootrepetition = elements[1].repetition_type
+    (rootrepetition === nothing ||
+        rootrepetition == Metadata.FieldRepetitionType.REQUIRED) ||
+        throw(FormatError("schema root can only use the legacy REQUIRED marker"))
+    rootchildren = _validateschemashape(elements[1], limits)
+    rootchildren <= length(elements) - 1 || throw(FormatError(
+        "group schema element $(repr(elements[1].name)) declares more direct " *
+        "children than remain in the flattened schema"))
+    iszero(rootchildren) && length(elements) > 1 && throw(FormatError(
+        "flattened schema has unclaimed elements"))
+    _checklimit(:container_elements, length(elements), limits.max_container_elements)
+    leaves = SchemaNode[]
+    sizehint!(leaves, length(elements))
+    root, nextindex = _parseschema(elements, leaves, String[], limits)
+    nextindex == length(elements) + 1 || throw(FormatError(
+        "flattened schema has unclaimed elements"))
+    return Schema(root, leaves)
 end
 
-function Schema(metadata::Metadata.FileMetaData; limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    return Schema(metadata.schema; limits=limits, budget=budget)
+function Schema(metadata::Metadata.FileMetaData; limits::Limits=Limits())
+    return Schema(metadata.schema; limits=limits)
 end

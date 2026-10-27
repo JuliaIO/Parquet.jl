@@ -24,12 +24,12 @@ function ntfixture(name::AbstractString)
 end
 
 function ntreadroot(input; limits::Parquet.Limits=Parquet.Limits())
-    budget = Parquet._LiveByteBudget(limits)
+    budget = Parquet._ByteBudget(limits)
     file = Parquet.File(input; limits=limits, budget=budget)
     try
         metadata = Parquet._readfilemetadata(file, limits, budget)
-        schema = Parquet.Schema(metadata; limits=limits, budget=budget)
-        plan = Parquet._nestedplan(schema; limits=limits, budget=budget)
+        schema = Parquet.Schema(metadata; limits=limits)
+        plan = Parquet._nestedplan(schema; limits=limits)
         root = Parquet._readnestedroot(file, metadata, schema, plan, limits,
             budget)
         return (; root, metadata, schema, plan, budget)
@@ -338,16 +338,13 @@ end
     end
 end
 
-@testset "whole-table nested materialization cleanup" begin
+@testset "whole-table nested reads respect the byte cap" begin
     fixture = ntfixture("list_columns.parquet")
     if isfile(fixture)
         setup = ntreadroot(fixture)
-        count = length(setup.plan.leaves)
-        initial = Parquet._materializedarraybytes(Parquet.LeafStream, count) +
-            Parquet._materializedarraybytes(Int, count) +
-            Parquet._materializedarraybytes(Int64, count)
+        initial = 100
         limits = Parquet.Limits(max_materialized_bytes=initial)
-        budget = Parquet._LiveByteBudget(limits)
+        budget = Parquet._ByteBudget(limits)
         file = Parquet.File(fixture)
         try
             error = try
@@ -360,7 +357,6 @@ end
             @test error isa Parquet.LimitError
             @test error.resource == :materialized_bytes
             @test error.requested > error.maximum == initial
-            @test Parquet._budgetused(budget) == 0
         finally
             close(file)
         end

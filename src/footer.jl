@@ -54,8 +54,7 @@ function readfooter(src::AbstractSource, limits::Limits=Limits())
     return Footer(footeroffset, footerlength, leadingmagic === :encrypted, bytes)
 end
 
-function File(input; limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
+function File(input; limits::Limits=Limits(), budget::_ByteBudget=_ByteBudget(limits))
     src = source(input; budget=budget)
     footer = try
         readfooter(src, limits)

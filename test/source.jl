@@ -179,24 +179,16 @@ end
 
 @testset "budgeted IO buffering" begin
     limits = Parquet.Limits(max_materialized_bytes=1000)
-    budget = Parquet._LiveByteBudget(limits)
     oversized = IOBuffer(zeros(UInt8, 2000))
-    @test_throws Parquet.LimitError Parquet.source(oversized; budget=budget)
-    @test Parquet._budgetused(budget) == 0
+    @test_throws Parquet.LimitError Parquet.source(oversized;
+        budget=Parquet._ByteBudget(limits))
     @test isopen(oversized)
     @test_throws Parquet.LimitError Parquet.Table(
         IOBuffer(zeros(UInt8, 2000)); limits=limits)
-
-    smallbudget = Parquet._LiveByteBudget(limits)
-    Parquet._reserve!(smallbudget, Int64(17))
-    src = Parquet.source(IOBuffer(zeros(UInt8, 12)); budget=smallbudget)
+    src = Parquet.source(IOBuffer(zeros(UInt8, 12)); budget=Parquet._ByteBudget(limits))
     @test Parquet.sourcelength(src) == 12
-    @test Parquet._budgetused(smallbudget) ==
-        17 + Parquet._materializedarraybytes(UInt8, 12)
     close(src)
-    @test Parquet._budgetused(smallbudget) == 17
     close(src)
-    @test Parquet._budgetused(smallbudget) == 17
 end
 
 @testset "mapped file source" begin
@@ -237,23 +229,18 @@ end
 end
 
 @testset "close guards are atomic" begin
-    # Regression: closed/materializedcharge were plain fields, so concurrent
-    # close! calls could both pass the guard and double-release the charge.
+    # Regression: closed was a plain field, so concurrent close! calls could both
+    # pass the guard.
     src = Parquet.source(UInt8[0x00])
     region = src.region
     @test Base.isfieldatomic(typeof(region), :closed)
-    @test Base.isfieldatomic(typeof(region), :materializedcharge)
     Parquet.close!(src)
     Parquet.close!(src)
-
-    limits = Parquet.Limits(max_materialized_bytes=1024)
-    budget = Parquet._LiveByteBudget(limits)
-    owned = Parquet.source(IOBuffer(zeros(UInt8, 12)); budget=budget)
-    @test Parquet._budgetused(budget) > 0
+    owned = Parquet.source(IOBuffer(zeros(UInt8, 12)))
     @sync for _ in 1:32
         errormonitor(Threads.@spawn Parquet.close!(owned))
     end
-    @test Parquet._budgetused(budget) == 0
+    @test_throws ArgumentError Parquet.readrange(owned, 0, 1)
 
     file = Parquet.File(Parquet._encodefile((a=Int32[1],)))
     @test Base.isfieldatomic(typeof(file), :closed)

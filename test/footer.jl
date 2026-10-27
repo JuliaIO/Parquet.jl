@@ -187,7 +187,7 @@ end
     @test throwinglength.closes == 0
 end
 
-@testset "File source ownership and copied IO budget" begin
+@testset "File source ownership and copied IO" begin
     input = parquetbytes(UInt8[0x01, 0x02, 0x03])
     failed = FooterProbeSource(UInt8[])
     @test_throws Parquet.FormatError Parquet.File(failed)
@@ -205,19 +205,15 @@ end
     @test tablefailure.closes == 1
 
     limits = Parquet.Limits(max_materialized_bytes=100_000)
-    budget = Parquet._LiveByteBudget(limits)
-    Parquet._reserve!(budget, Int64(23))
     invalidio = IOBuffer(UInt8[])
-    @test_throws Parquet.FormatError Parquet.File(invalidio; limits=limits,
-        budget=budget)
-    @test Parquet._budgetused(budget) == 23
+    @test_throws Parquet.FormatError Parquet.File(invalidio; limits=limits)
     @test isopen(invalidio)
 
     validio = IOBuffer(input)
-    copied = Parquet.File(validio; limits=limits, budget=budget)
-    @test Parquet._budgetused(budget) ==
-        23 + Parquet._materializedarraybytes(UInt8, length(input))
+    copied = Parquet.File(validio; limits=limits)
     close(copied)
-    @test Parquet._budgetused(budget) == 23
     @test isopen(validio)
+    # The copy of an IO source counts against the read's byte cap.
+    @test_throws Parquet.LimitError Parquet.File(IOBuffer(input);
+        limits=Parquet.Limits(max_materialized_bytes=length(input) - 1))
 end

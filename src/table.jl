@@ -21,44 +21,19 @@ function _writekeyvaluemetadata(table::Table, limits::Limits)
 end
 
 function _readfilemetadata(file::File, limits::Limits,
-    budget::_LiveByteBudget)
+    budget::_ByteBudget=_ByteBudget(limits))
     file.footer.encrypted && throw(FormatError("encrypted footers are not supported yet"))
-    readercharge = _reserveobjects!(budget)
     reader = Thrift.Reader(file.footer.bytes; limits=limits, budget=budget)
-    metadata = try
-        value = Thrift.decode(reader, Metadata.FileMetaData)
-        value.encryption_algorithm === nothing || throw(FormatError(
-            "plaintext-footer encryption is not supported yet"))
-        Thrift.remaining(reader) == 0 || throw(FormatError(
-            "file footer has trailing bytes"))
-        value
-    catch
-        charge = _materializedsum(readercharge,
-            Thrift.materializedcharge(reader))
-        _release!(budget, charge)
-        rethrow()
-    end
-    _release!(budget, readercharge)
+    metadata = Thrift.decode(reader, Metadata.FileMetaData)
+    metadata.encryption_algorithm === nothing || throw(FormatError(
+        "plaintext-footer encryption is not supported yet"))
+    Thrift.remaining(reader) == 0 || throw(FormatError("file footer has trailing bytes"))
     return metadata
 end
 
-function _readfilemetadata(file::File, limits::Limits)
-    return _readfilemetadata(file, limits, _LiveByteBudget(limits))
-end
-
-function _tablenames(schema::Schema, limits::Limits,
-    budget::_LiveByteBudget)
-    charge = _reservearray!(budget, String, length(schema.root.children))
-    try
-        names = String[]
-        sizehint!(names, length(schema.root.children))
-        for node in schema.root.children
-            push!(names, node.element.name)
-        end
-        return _internschemanames(names, limits, budget)
-    finally
-        _release!(budget, charge)
-    end
+function _tablenames(schema::Schema, limits::Limits)
+    return _internschemanames(String[node.element.name for node in schema.root.children],
+        limits)
 end
 
 function _validatetablerowgroupmetadata(group::Metadata.RowGroup,
@@ -109,12 +84,12 @@ function _validatetablechunkranges(metadata::Metadata.FileMetaData,
     return
 end
 
-# Decoding runs on parallel tasks when the source allows concurrent reads, Julia has
-# more than one thread, and no `max_materialized_bytes` cap needs exact shared
-# accounting; each task then charges a private, unlimited budget.
-function _parallelread(file::File, limits::Limits, count::Int)
-    return count > 1 && Threads.nthreads() > 1 && concurrentreads(file.source) &&
-        limits.max_materialized_bytes == typemax(Int64)
+# Tasks that decode `count` work items: up to `ntasks`, or one when the source does not
+# allow concurrent reads.
+function _readtasks(file::File, ntasks::Int, count::Int)
+    ntasks >= 1 || throw(ArgumentError("ntasks must be at least 1, got $ntasks"))
+    concurrentreads(file.source) || return 1
+    return max(1, min(ntasks, count))
 end
 
 struct _ReadFailure
@@ -126,17 +101,17 @@ mutable struct _ReadQueue
 end
 
 # `map(index -> f(index, buffers), indices)`, where `buffers` are the `_PageBuffers` of
-# the task that runs `f`. When `parallel`, `Threads.nthreads()` tasks take the indices in
-# order. An error from `f` is rethrown as itself rather than in a TaskFailedException.
-function _readmap(f, indices, parallel::Bool)
-    if !parallel
+# the task that runs `f`. With `ntasks > 1`, that many tasks take the indices in order.
+# An error from `f` is rethrown as itself rather than in a TaskFailedException.
+function _readmap(f, indices, ntasks::Int)
+    if ntasks <= 1
         buffers = _PageBuffers()
         return map(index -> f(index, buffers), indices)
     end
     items = collect(indices)
     results = Vector{Any}(undef, length(items))
     queue = _ReadQueue(1)
-    workers = map(1:min(Threads.nthreads(), length(items))) do _
+    workers = map(1:min(ntasks, length(items))) do _
         return errormonitor(Threads.@spawn _readworker(f, items, results, queue))
     end
     foreach(wait, workers)
@@ -195,7 +170,7 @@ end
 # the page buffers a STRING chunk's payloads point into, or `nothing`.
 function _readtablechunk!(column::Vector, offset::Int, file::File,
         metadata::Metadata.FileMetaData, rowindex::Int, node::SchemaNode,
-        limits::Limits, budget::_LiveByteBudget, buffers::_PageBuffers)
+        limits::Limits, budget::_ByteBudget, buffers::_PageBuffers)
     group = metadata.row_groups[rowindex]
     md = _chunkmetadata(group.columns[Int(node.column_index)], node)
     md.num_values == group.num_rows || throw(FormatError(
@@ -244,7 +219,7 @@ end
 # its column, one task per chunk; a column whose chunks are not all backed by their
 # bytes grows as its chunks decode in order, on one task.
 function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Schema,
-        rows::Int, limits::Limits, budget::_LiveByteBudget)
+        rows::Int, limits::Limits, budget::_ByteBudget, ntasks::Int=Threads.nthreads())
     fields = schema.root.children
     starts = _rowgroupstarts(metadata, rows)
     columns = AbstractVector[]
@@ -264,15 +239,13 @@ function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Sch
             push!(tasks, (fieldindex, 0))
         end
     end
-    parallel = _parallelread(file, limits, length(tasks))
-    _readmap(tasks, parallel) do (fieldindex, rowindex), buffers
+    _readmap(tasks, _readtasks(file, ntasks, length(tasks))) do (fieldindex, rowindex), buffers
         column = columns[fieldindex]
         node = fields[fieldindex]
-        taskbudget = parallel ? _LiveByteBudget(limits) : budget
         for index in (rowindex == 0 ? eachindex(starts) : (rowindex:rowindex))
             offset = rowindex == 0 ? length(column) : starts[index]
             kept = _readtablechunk!(column, offset, file, metadata, index, node, limits,
-                taskbudget, buffers)
+                budget, buffers)
             kept === nothing || (pages[fieldindex][index] = kept)
         end
         return nothing
@@ -355,7 +328,7 @@ function _isflattableplan(plan::_NestedSchemaPlan)
 end
 
 """
-    Parquet.Table(source; scan=nothing, limits=Parquet.Limits())
+    Parquet.Table(source; scan=nothing, ntasks=Threads.nthreads(), limits=Parquet.Limits())
 
 Read a Parquet file from a path, a byte vector, or an `IO` into Tables.jl columns.
 
@@ -364,21 +337,24 @@ filter references are read; the column chunks of every other column are skipped
 unread. The filter, row bounds, and renames are then applied to the columns read, and
 the result keeps their stored Parquet schema (renamed), so writing it preserves their
 annotations. Type overrides are not supported.
+
+Column chunks decode on up to `ntasks` tasks; `ntasks=1` reads on the calling task.
+The result does not depend on `ntasks`.
 """
 function Table(input; scan::Union{Nothing,Tables.Scan}=nothing,
-        limits::Limits=Limits())
-    budget = _LiveByteBudget(limits)
-    _reserveobjects!(budget, 2)
+        ntasks::Integer=Threads.nthreads(), limits::Limits=Limits())
+    ntasks >= 1 || throw(ArgumentError("ntasks must be at least 1, got $ntasks"))
+    budget = _ByteBudget(limits)
     file = File(input; limits=limits, budget=budget)
     try
         metadata = _readfilemetadata(file, limits, budget)
         metadata.num_rows >= 0 || throw(FormatError("file metadata has a negative row count"))
         metadata.num_rows <= typemax(Int) || throw(FormatError("file row count overflows Int"))
         _checklimit(:container_elements, metadata.num_rows, limits.max_container_elements)
-        schema = Schema(metadata; limits=limits, budget=budget)
+        schema = Schema(metadata; limits=limits)
         bound = nothing
         if scan !== nothing
-            sourcenames = _tablenames(schema, limits, budget)
+            sourcenames = _tablenames(schema, limits)
             bound = Tables.resolve(scan, sourcenames)
             any(column -> column.type !== nothing, bound.columns) && throw(ArgumentError(
                 "Parquet.Table does not apply scan type overrides; convert the " *
@@ -392,20 +368,20 @@ function Table(input; scan::Union{Nothing,Tables.Scan}=nothing,
         rows = _validatetablerowgroups(metadata, schema, limits)
         _checklimit(:container_elements, rows, limits.max_container_elements)
         _validatetablechunkranges(metadata, schema, file.footer.offset)
-        nested = _nestedplan(schema; limits=limits, budget=budget)
+        nested = _nestedplan(schema; limits=limits)
         nested.plan_count > 0 || throw(AssertionError(
             "nested schema plan has no root"))
-        names = _tablenames(schema, limits, budget)
+        names = _tablenames(schema, limits)
         if _isflattableplan(nested)
-            columns = _readflattable(file, metadata, schema, rows, limits, budget)
+            columns = _readflattable(file, metadata, schema, rows, limits, budget,
+                Int(ntasks))
         else
             root = _readnestedroot(file, metadata, schema, nested, limits,
-                budget)
+                budget, Int(ntasks))
             columns = root.children
         end
         length(columns) == length(names) || throw(AssertionError(
             "table column count does not match its names"))
-        _reserveobjects!(budget, 2)
         named = NamedTuple{Tuple(names)}(Tuple(columns))
         if bound !== nothing
             named, rows, metadata, schema = _scanresidual(named, rows, bound,

@@ -13,11 +13,6 @@ function _physicaleltype(type::Metadata.Type.T)
     throw(FormatError("unknown physical type $type"))
 end
 
-function _leaflevelbytes(count::Integer)
-    bytes = _materializedarraybytes(UInt64, count)
-    return _materializedsum(bytes, _materializedarraybytes(UInt64, count))
-end
-
 function _pageentrycount(frame::PageFrame)
     kind = pagekind(frame)
     kind === :data_v1 && return Int64(frame.header.data_page_header.num_values)
@@ -382,43 +377,35 @@ function _matrixvalues(matrix::Matrix{UInt8})
     return Vector{UInt8}[matrix[:, index] for index in axes(matrix, 2)]
 end
 
-# Values of the encodings other than PLAIN and dictionary as a physical vector, the
-# position after them, and their budget charge.
+# Values of the encodings other than PLAIN and dictionary as a physical vector, and the
+# position after them.
 function _decodeothervalues(::Type{T}, encoding::Metadata.Encoding.T,
-    bytes::_ByteView, count::Int, width, offset::Int, limits::Limits,
-    budget::_LiveByteBudget) where {T}
+    bytes::_ByteView, count::Int, width, offset::Int, limits::Limits) where {T}
     if encoding == Metadata.Encoding.DELTA_BINARY_PACKED
         T <: Union{Int32,Int64} || return _encodingerror(encoding, T)
-        return _decode_delta_binary_packed(T, bytes, count; offset=offset,
-            limits=limits, budget=budget)
+        return decode_delta_binary_packed(T, bytes, count; offset=offset, limits=limits)
     elseif encoding == Metadata.Encoding.DELTA_LENGTH_BYTE_ARRAY
         T == Vector{UInt8} && width === nothing || return _encodingerror(encoding, T)
-        return _decode_delta_length_byte_array(bytes, count; offset=offset,
-            limits=limits, budget=budget)
+        return decode_delta_length_byte_array(bytes, count; offset=offset, limits=limits)
     elseif encoding == Metadata.Encoding.DELTA_BYTE_ARRAY
         T == Vector{UInt8} || return _encodingerror(encoding, T)
-        if width === nothing
-            return _decode_delta_byte_array(bytes, count; offset=offset,
-                limits=limits, budget=budget)
-        end
-        matrix, position, charge = _decode_delta_byte_array_fixed(bytes, count,
-            width; offset=offset, limits=limits, budget=budget)
-        return _matrixvalues(matrix), position, charge
+        width === nothing && return decode_delta_byte_array(bytes, count;
+            offset=offset, limits=limits)
+        matrix, position = decode_delta_byte_array_fixed(bytes, count, width;
+            offset=offset, limits=limits)
+        return _matrixvalues(matrix), position
     elseif encoding == Metadata.Encoding.BYTE_STREAM_SPLIT
         if T <: Union{Int32,Int64,Float32,Float64}
-            values, position = decode_byte_stream_split(T, bytes, count;
-                offset=offset, limits=limits)
-            return values, position, Int64(0)
+            return decode_byte_stream_split(T, bytes, count; offset=offset, limits=limits)
         elseif T == Vector{UInt8} && width !== nothing
             matrix, position = decode_byte_stream_split_fixed(bytes, count, width;
                 offset=offset, limits=limits)
-            return _matrixvalues(matrix), position, Int64(0)
+            return _matrixvalues(matrix), position
         end
         return _encodingerror(encoding, T)
     elseif encoding == Metadata.Encoding.RLE
         T == Bool || return _encodingerror(encoding, T)
-        values, position = _decodebooleanrle(bytes, count, offset)
-        return values, position, Int64(0)
+        return _decodebooleanrle(bytes, count, offset)
     end
     throw(FormatError("data page encoding $encoding is not supported"))
 end
@@ -436,7 +423,7 @@ end
 function _pagevalues!(dest::Vector{L}, offset::Int, count::Int, ::Type{P}, convert,
         width, encoding::Metadata.Encoding.T, bytes::_ByteView, position::Int,
         stop::Int, dictionary::Vector{L}, hasdictionary::Bool, buffers::_PageBuffers,
-        limits::Limits, budget::_LiveByteBudget) where {L,P}
+        limits::Limits) where {L,P}
     if encoding == Metadata.Encoding.PLAIN
         P === Vector{UInt8} && return _plainbytes!(dest, offset, count, convert, width,
             bytes, position, limits)
@@ -447,13 +434,12 @@ function _pagevalues!(dest::Vector{L}, offset::Int, count::Int, ::Type{P}, conve
         return _dictionary!(dest, offset, count, dictionary, buffers.indices, bytes,
             position, stop)
     end
-    values, position, charge = _decodeothervalues(P, encoding, bytes, count, width,
-        position, limits, budget)
+    values, position = _decodeothervalues(P, encoding, bytes, count, width, position,
+        limits)
     _growto!(dest, offset + count)
     for index in 1:count
         dest[offset + index] = _convertvalue(convert, values[index])
     end
-    iszero(charge) || _release!(budget, charge)
     return position
 end
 
@@ -517,8 +503,8 @@ end
 
 function _datapagev1!(sink, ::Type{P}, convert, frame::PageFrame,
         md::Metadata.ColumnMetaData, node::SchemaNode, dictionary::Vector,
-        hasdictionary::Bool, remaining::Int, buffers::_PageBuffers, limits::Limits,
-        budget::_LiveByteBudget) where {P}
+        hasdictionary::Bool, remaining::Int, buffers::_PageBuffers,
+        limits::Limits) where {P}
     header = frame.header.data_page_header
     count = Int(header.num_values)
     count >= 0 || throw(FormatError("negative data page value count"))
@@ -539,7 +525,7 @@ function _datapagev1!(sink, ::Type{P}, convert, frame::PageFrame,
         buffers) do dest, offset
         return _pagevalues!(dest, offset, present, P, convert, _fixedwidth(node),
             header.encoding, bytes, valuestart, length(bytes) + 1, dictionary,
-            hasdictionary, buffers, limits, budget)
+            hasdictionary, buffers, limits)
     end
     finish == length(bytes) + 1 ||
         throw(FormatError("data page has $(length(bytes) - finish + 1) bytes after its values"))
@@ -579,8 +565,8 @@ end
 
 function _datapagev2!(sink, ::Type{P}, convert, frame::PageFrame,
         md::Metadata.ColumnMetaData, node::SchemaNode, dictionary::Vector,
-        hasdictionary::Bool, remaining::Int, buffers::_PageBuffers, limits::Limits,
-        budget::_LiveByteBudget) where {P}
+        hasdictionary::Bool, remaining::Int, buffers::_PageBuffers,
+        limits::Limits) where {P}
     header = frame.header.data_page_header_v2
     count = Int(header.num_values)
     rows = Int(header.num_rows)
@@ -613,15 +599,15 @@ function _datapagev2!(sink, ::Type{P}, convert, frame::PageFrame,
         buffers) do dest, offset
         return _pagevalues!(dest, offset, present, P, convert, _fixedwidth(node),
             header.encoding, bytes, 1, length(bytes) + 1, dictionary, hasdictionary,
-            buffers, limits, budget)
+            buffers, limits)
     end
     position == length(bytes) + 1 ||
         throw(FormatError("data page V2 has $(length(bytes) - position + 1) bytes after its values"))
     return count
 end
 
-# Budget charge of one page, kept for the whole read: its decompressed bytes (twice for
-# byte arrays, whose values copy them) and its decoded entries.
+# Budget charge of one page: its decompressed bytes (twice for byte arrays, whose values
+# may copy them) and its decoded entries.
 function _pagecharge(::Type{P}, frame::PageFrame, entries::Int64) where {P}
     uncompressed = Int64(max(frame.header.uncompressed_page_size, 0))
     P === Vector{UInt8} || return uncompressed + 16 * entries
@@ -633,7 +619,7 @@ end
 # are validated against the chunk metadata.
 function _readchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractSource,
         md::Metadata.ColumnMetaData, node::SchemaNode, start::Int64, stop::Int64,
-        limits::Limits, budget::_LiveByteBudget, buffers::_PageBuffers) where {P,L}
+        limits::Limits, budget::_ByteBudget, buffers::_PageBuffers) where {P,L}
     src isa MemorySource || (src = _ChunkSource(src, start, stop))
     count = Int(md.num_values)
     dictionary = _scratch(buffers.dictionary, L)
@@ -644,41 +630,35 @@ function _readchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractSource,
     framecount = Int64(0)
     position = start
     while position < stop
-        frame = readpage(src, position, stop, limits; budget=budget)
-        frameend = position
-        try
-            frameend = pageend(frame)
-            frameend > position || throw(FormatError(
-                "column chunk contains a nonadvancing page frame"))
-            frameend <= stop || throw(FormatError(
-                "page frame extends past the column chunk"))
-            kind = pagekind(frame)
-            dictionaryseen, seendata, indexseen = _chunkpageoffsetstate(md, position,
-                kind, hasdictionary, seendata, indexseen)
-            entries = _validatedpageentrycount(frame, limits)
-            if kind === :data_v1 || kind === :data_v2
-                entries <= count - produced || throw(FormatError(
-                    "data pages carry more values than declared by the column chunk"))
-            end
-            framecount = _nextpageframecount(framecount, limits)
-            _reserve!(budget, _pagecharge(P, frame, entries))
-            if kind === :data_v1
-                produced += _datapagev1!(sink, P, convert, frame, md, node, dictionary,
-                    hasdictionary, count - produced, buffers, limits, budget)
-            elseif kind === :data_v2
-                produced += _datapagev2!(sink, P, convert, frame, md, node, dictionary,
-                    hasdictionary, count - produced, buffers, limits, budget)
-            elseif kind === :dictionary
-                seendata && throw(FormatError(
-                    "dictionary page follows a data page in the column chunk"))
-                hasdictionary && throw(FormatError(
-                    "column chunk has more than one dictionary page"))
-                _dictionarypage!(dictionary, P, convert, frame, md, node, buffers,
-                    limits)
-                hasdictionary = true
-            end
-        finally
-            _release!(budget, frame.materializedcharge)
+        frame = readpage(src, position, stop, limits)
+        frameend = pageend(frame)
+        frameend > position || throw(FormatError(
+            "column chunk contains a nonadvancing page frame"))
+        frameend <= stop || throw(FormatError(
+            "page frame extends past the column chunk"))
+        kind = pagekind(frame)
+        dictionaryseen, seendata, indexseen = _chunkpageoffsetstate(md, position,
+            kind, hasdictionary, seendata, indexseen)
+        entries = _validatedpageentrycount(frame, limits)
+        if kind === :data_v1 || kind === :data_v2
+            entries <= count - produced || throw(FormatError(
+                "data pages carry more values than declared by the column chunk"))
+        end
+        framecount = _nextpageframecount(framecount, limits)
+        _charge!(budget, _pagecharge(P, frame, entries))
+        if kind === :data_v1
+            produced += _datapagev1!(sink, P, convert, frame, md, node, dictionary,
+                hasdictionary, count - produced, buffers, limits)
+        elseif kind === :data_v2
+            produced += _datapagev2!(sink, P, convert, frame, md, node, dictionary,
+                hasdictionary, count - produced, buffers, limits)
+        elseif kind === :dictionary
+            seendata && throw(FormatError(
+                "dictionary page follows a data page in the column chunk"))
+            hasdictionary && throw(FormatError(
+                "column chunk has more than one dictionary page"))
+            _dictionarypage!(dictionary, P, convert, frame, md, node, buffers, limits)
+            hasdictionary = true
         end
         position = frameend
     end
@@ -792,7 +772,7 @@ present values. `expected_rows` optionally validates the number of zero repetiti
 """
 function readleafstream(src::AbstractSource, chunk::Metadata.ColumnChunk,
     node::SchemaNode, footeroffset::Integer; expected_rows=nothing,
-    limits::Limits=Limits(), budget::_LiveByteBudget=_LiveByteBudget(limits),
+    limits::Limits=Limits(), budget::_ByteBudget=_ByteBudget(limits),
     buffers::_PageBuffers=_PageBuffers())
     md = _chunkmetadata(chunk, node)
     T = _physicaleltype(md.type_)
@@ -817,7 +797,7 @@ end
 # `output` as pages decode.
 function _readflatchunk!(output::Vector{O}, offset::Int, ::Type{P}, convert,
         src::AbstractSource, md::Metadata.ColumnMetaData, node::SchemaNode,
-        start::Int64, stop::Int64, limits::Limits, budget::_LiveByteBudget,
+        start::Int64, stop::Int64, limits::Limits, budget::_ByteBudget,
         buffers::_PageBuffers) where {O,P}
     L = Base.nonmissingtype(O)
     sink = _FlatSink{O,L,node.max_definition_level == 0}(output, offset,
@@ -835,7 +815,7 @@ vector. Optional columns yield `Vector{Union{Missing,T}}`; required columns yiel
 BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY values are `Vector{UInt8}` at this physical layer.
 """
 function readcolumn(src::AbstractSource, chunk::Metadata.ColumnChunk, node::SchemaNode, footeroffset::Integer;
-    limits::Limits=Limits(), budget::_LiveByteBudget=_LiveByteBudget(limits),
+    limits::Limits=Limits(), budget::_ByteBudget=_ByteBudget(limits),
     expected_rows=nothing)
     node.max_repetition_level == 0 ||
         throw(FormatError("repeated columns are not supported yet"))
@@ -864,15 +844,14 @@ end
 
 function readleafstream(file::File, metadata::Metadata.FileMetaData, schema::Schema,
     rowgroup::Integer, column::Integer; expected_rows=nothing, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits), buffers::_PageBuffers=_PageBuffers())
+    budget::_ByteBudget=_ByteBudget(limits), buffers::_PageBuffers=_PageBuffers())
     chunk, node = _columnselection(metadata, schema, rowgroup, column)
     return readleafstream(file.source, chunk, node, file.footer.offset;
         expected_rows=expected_rows, limits=limits, budget=budget, buffers=buffers)
 end
 
 function readcolumn(file::File, metadata::Metadata.FileMetaData, schema::Schema, rowgroup::Integer,
-    column::Integer; limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
+    column::Integer; limits::Limits=Limits(), budget::_ByteBudget=_ByteBudget(limits))
     chunk, node = _columnselection(metadata, schema, rowgroup, column)
     rows = metadata.row_groups[rowgroup].num_rows
     return readcolumn(file.source, chunk, node, file.footer.offset; limits=limits,

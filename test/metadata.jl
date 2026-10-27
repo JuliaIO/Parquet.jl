@@ -203,18 +203,14 @@ end
     @test TH.encode(kv) == bytes
 end
 
-@testset "empty unknown-field vectors are budgeted" begin
+@testset "decoded metadata is charged to the byte cap" begin
     bytes = TH.encode(MD.StringType())
-    vectorcharge = Parquet._materializedarraybytes(TH.RawField, 0)
-    exact = Parquet._materializedsum(Parquet._MATERIALIZED_OBJECT_BYTES,
-        vectorcharge)
-    @test_throws Parquet.LimitError TH.decode(bytes, MD.StringType;
-        limits=Parquet.Limits(max_materialized_bytes=exact - 1))
-    limits = Parquet.Limits(max_materialized_bytes=exact)
-    budget = Parquet._LiveByteBudget(limits)
-    value = TH.decode(bytes, MD.StringType; limits=limits, budget=budget)
+    tiny = Parquet.Limits(max_materialized_bytes=0)
+    @test_throws Parquet.LimitError TH.decode(bytes, MD.StringType; limits=tiny,
+        budget=Parquet._ByteBudget(tiny))
+    roomy = Parquet.Limits(max_materialized_bytes=1024)
+    value = TH.decode(bytes, MD.StringType; limits=roomy, budget=Parquet._ByteBudget(roomy))
     @test isempty(value.unknown_fields)
-    @test Parquet._budgetused(budget) == exact
 end
 
 @testset "parquet-testing corpus footers" begin

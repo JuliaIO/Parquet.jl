@@ -93,14 +93,12 @@ end
 
 function st_facts(leaf::STMD.SchemaElement, statistics=nothing;
     order=st_type_order(), created_by="Parquet.jl version 1.0.0",
-    total::Int64=4, limits=Parquet.Limits(), budget=nothing)
+    total::Int64=4, limits=Parquet.Limits())
     schema = st_schema(STMD.SchemaElement[leaf])
     orders = order === nothing ? nothing : STMD.ColumnOrder[order]
     metadata = st_metadata(leaf, statistics; total=total)
-    budget === nothing && return Parquet._statisticsfacts(schema, 1, created_by,
-        orders, metadata; limits=limits)
     return Parquet._statisticsfacts(schema, 1, created_by, orders, metadata;
-        limits=limits, budget=budget)
+        limits=limits)
 end
 
 function st_modern(lower, upper; nulls=nothing, nans=nothing, distinct=nothing,
@@ -327,22 +325,17 @@ end
     release = Channel{Nothing}(1)
     blocking = STBlockingOrders(STMD.ColumnOrder[st_type_order()], entered, release)
     single = st_schema(STMD.SchemaElement[leaves[1]])
-    budget = Parquet._LiveByteBudget(
-        Parquet.Limits(max_materialized_bytes=Int64(1024)))
     task = errormonitor(Threads.@spawn begin
         try
             return Parquet._statisticsfacts(single, 1, nothing, blocking,
-                st_metadata(leaves[1], nothing; path=["wrong"]); budget=budget)
+                st_metadata(leaves[1], nothing; path=["wrong"]))
         catch err
             return err
         end
     end)
     take!(entered)
-    Parquet._reserve!(budget, 100)
     put!(release, nothing)
     @test fetch(task) isa Parquet.FormatError
-    @test Parquet._budgetused(budget) == 100
-    Parquet._release!(budget, 100)
 
     badorders = STMD.ColumnOrder[st_type_order(), st_ieee_order()]
     @test Parquet._statisticsfacts(schema, 1, nothing, badorders, metadata).order.declared ==
@@ -439,14 +432,6 @@ end
     validjson = st_modern(validjsonlower, validjsonupper)
     @test st_facts(jsonleaf, validjson).lower.state == :known
     @test st_facts(jsonleaf, st_modern(UInt8[0x7b], UInt8[0x7b])).lower.state == :unknown
-    tinybudget = Parquet._LiveByteBudget(
-        Parquet.Limits(max_materialized_bytes=Int64(127)))
-    @test_throws Parquet.LimitError st_facts(jsonleaf, validjson; budget=tinybudget)
-    @test Parquet._budgetused(tinybudget) == 0
-    exactbudget = Parquet._LiveByteBudget(
-        Parquet.Limits(max_materialized_bytes=Int64(128)))
-    @test st_facts(jsonleaf, validjson; budget=exactbudget).lower.state == :known
-    @test Parquet._budgetused(exactbudget) == 0
     emptybson = UInt8[0x05, 0x00, 0x00, 0x00, 0x00]
     @test st_facts(bsonleaf, st_modern(emptybson, emptybson)).lower.state == :known
     @test st_facts(bsonleaf, st_modern(UInt8[0x00], UInt8[0x00])).lower.state == :unknown
@@ -485,17 +470,6 @@ end
     @test st_facts(fixedleaf, st_modern(UInt8[0xff, 0xff, 0xfc, 0x18],
         UInt8[0x00, 0x00, 0x03, 0xe8])).lower.state == :known
 
-    budget = Parquet._LiveByteBudget(Parquet.Limits(max_materialized_bytes=Int64(67)))
-    @test_throws Parquet.LimitError st_facts(byteleaf,
-        st_modern(UInt8[0x01, 0x02, 0x03, 0x04], UInt8[0x05]); budget=budget)
-    @test Parquet._budgetused(budget) == 0
-    retained = Parquet._LiveByteBudget(
-        Parquet.Limits(max_materialized_bytes=Int64(74)))
-    Parquet._reserve!(retained, 7)
-    @test_throws Parquet.LimitError st_facts(byteleaf,
-        st_modern(UInt8[0x01, 0x02, 0x03, 0x04], UInt8[0x05]); budget=retained)
-    @test Parquet._budgetused(retained) == 7
-    Parquet._release!(retained, 7)
 end
 
 @testset "reader statistics floating policies" begin

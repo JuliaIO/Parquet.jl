@@ -53,7 +53,6 @@ end
 
 mutable struct _NestedPlanBuilder
     limits::Limits
-    budget::_LiveByteBudget
     count::Int64
     leaves::Vector{_NestedLeafPlan}
     leafmaximum::Int
@@ -84,7 +83,6 @@ function _nestedclaim!(builder::_NestedPlanBuilder)
     end
     _checklimit(:container_elements, requested,
         builder.limits.max_container_elements)
-    _reserveobjects!(builder.budget)
     builder.count = requested
     return
 end
@@ -286,7 +284,6 @@ function _nestedframe(builder::_NestedPlanBuilder, node::SchemaNode, parent,
         entry::Union{Nothing,SchemaNode},
         children::Union{Nothing,Vector{_NestedPlan}}, expected::Int;
         optional_key::Bool=false, entry_has_map_key_value::Bool=false)
-    _reserveobjects!(builder.budget)
     return _NestedCompileFrame(node, parent, depth, mode, annotation, rule,
         parent_definition, present_definition, entry, children, nothing,
         nothing, expected, 0, optional_key, entry_has_map_key_value)
@@ -304,7 +301,6 @@ function _nestedstartroot(builder::_NestedPlanBuilder, node::SchemaNode)
     count = length(node.children)
     _checklimit(:container_elements, count,
         builder.limits.max_container_elements)
-    _reservearray!(builder.budget, _NestedPlan, count)
     children = _NestedPlan[]
     sizehint!(children, count)
     return _nestedframe(builder, node, nothing, 1, _NESTED_FRAME_ROOT,
@@ -347,7 +343,6 @@ function _nestedstartstruct(builder::_NestedPlanBuilder, node::SchemaNode,
     count = length(node.children)
     _checklimit(:container_elements, count,
         builder.limits.max_container_elements)
-    _reservearray!(builder.budget, _NestedPlan, count)
     children = _NestedPlan[]
     sizehint!(children, count)
     frame = _nestedframe(builder, node, parentframe, depth,
@@ -531,7 +526,6 @@ function _nestedcompileiterative(builder::_NestedPlanBuilder,
         if current.completed == current.expected
             pending = _nestedfinishframe(current)
             parent = current.parent
-            _release!(builder.budget, _MATERIALIZED_OBJECT_BYTES)
             parent === nothing && return pending::_NestedStructPlan
             current = parent::_NestedCompileFrame
             continue
@@ -563,34 +557,20 @@ function _nestedvalidateleafplans(schema::Schema, root::_NestedStructPlan,
     return
 end
 
-function _nestedplan(schema::Schema; limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    start = _budgetused(budget)
-    try
-        rootnode = schema.root
-        rootnode.element.type_ === nothing ||
-            throw(FormatError("schema root must be a group"))
-        _nestedrejectcollectionplacement(rootnode, "schema root")
-        kind, _ = _nestedgroupkind(rootnode)
-        kind === :struct || throw(FormatError(
-            "schema root must be an ordinary group"))
-        _nestedleafordinalcount(length(schema.leaves))
-        _reservearray!(budget, _NestedLeafPlan, length(schema.leaves))
-        leaves = _NestedLeafPlan[]
-        sizehint!(leaves, length(schema.leaves))
-        _reserveobjects!(budget)
-        builder = _NestedPlanBuilder(limits, budget, Int64(0), leaves,
-            length(schema.leaves), 0)
-        root = _nestedcompileiterative(builder, rootnode)
-        _nestedvalidateleafplans(schema, root, builder.leaves)
-        _reserveobjects!(budget)
-        plan = _NestedSchemaPlan(schema, root, builder.leaves, builder.count,
-            builder.depth)
-        _release!(budget, _MATERIALIZED_OBJECT_BYTES)
-        return plan
-    catch
-        used = _budgetused(budget)
-        used > start && _release!(budget, used - start)
-        rethrow()
-    end
+function _nestedplan(schema::Schema; limits::Limits=Limits())
+    rootnode = schema.root
+    rootnode.element.type_ === nothing ||
+        throw(FormatError("schema root must be a group"))
+    _nestedrejectcollectionplacement(rootnode, "schema root")
+    kind, _ = _nestedgroupkind(rootnode)
+    kind === :struct || throw(FormatError(
+        "schema root must be an ordinary group"))
+    _nestedleafordinalcount(length(schema.leaves))
+    leaves = _NestedLeafPlan[]
+    sizehint!(leaves, length(schema.leaves))
+    builder = _NestedPlanBuilder(limits, Int64(0), leaves, length(schema.leaves), 0)
+    root = _nestedcompileiterative(builder, rootnode)
+    _nestedvalidateleafplans(schema, root, builder.leaves)
+    return _NestedSchemaPlan(schema, root, builder.leaves, builder.count,
+        builder.depth)
 end

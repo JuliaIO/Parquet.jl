@@ -114,15 +114,15 @@ function _nestedreadlogicaltype(plan::_NestedLeafPlan)
     return _logicaleltype(plan.source, physical)
 end
 
+# Bytes of the objects a leaf's logical conversion creates.
 function _nestedreadpayloadbytes(plan::_NestedLeafPlan, stream::LeafStream)
     _logicalkind(plan.source) === nothing && return Int64(0)
     logical = _nestedreadlogicaltype(plan)
     isbitstype(logical) && return Int64(0)
     bytes = Int64(0)
     for value in stream.values
-        bytes = _materializedsum(bytes, _MATERIALIZED_OBJECT_BYTES)
-        value isa AbstractVector{UInt8} || continue
-        bytes = _materializedsum(bytes, length(value))
+        bytes += 64
+        value isa AbstractVector{UInt8} && (bytes += length(value))
     end
     return bytes
 end
@@ -144,15 +144,12 @@ function _nestedlisting(plan::_NestedPlan)
 end
 
 function _nestedshapebytes(slots::Integer, listing::Bool)
-    bytes = _materializedsum(_materializedbitbytes(slots),
-        _MATERIALIZED_OBJECT_BYTES)
-    listing || return bytes
-    return _materializedsum(bytes, _materializedarraybytes(Int, slots))
+    return Int64(cld(slots, 8)) + (listing ? 8 * Int64(slots) : Int64(0))
 end
 
 # Plan levels are schema levels, so they fit the UInt16 stream levels.
 function _nestedshape(stream::LeafStream, plan::_NestedPlan,
-        repetition::UInt64, parent::UInt64, budget::_LiveByteBudget)
+        repetition::UInt64, parent::UInt64, budget::_ByteBudget)
     reps = stream.repetition
     defs = stream.definition
     length(reps) == length(defs) || throw(FormatError(
@@ -167,8 +164,7 @@ function _nestedshape(stream::LeafStream, plan::_NestedPlan,
     @inbounds for i in eachindex(reps)
         slots += (reps[i] <= repetition) & (defs[i] >= parent)
     end
-    charge = _nestedshapebytes(slots, listing)
-    _reserve!(budget, charge)
+    _charge!(budget, _nestedshapebytes(slots, listing))
     presence = falses(slots)
     counts = listing ? zeros(Int, slots) : Int[]
     slot = 0
@@ -197,31 +193,26 @@ function _nestedshape(stream::LeafStream, plan::_NestedPlan,
             end
         end
     end
-    return _NestedShape(presence, counts), charge
+    return _NestedShape(presence, counts)
 end
 
 # Slots of `plan`, verified against every leaf beneath it and against the `expected`
-# slot count implied by its parent. Returns the shape tree and its budget charge.
+# slot count implied by its parent.
 function _nestedshapetree(plan::_NestedPlan, streams::Vector{LeafStream},
         repetition::UInt64, parent::UInt64, expected::Int, keyed::Bool,
-        budget::_LiveByteBudget)
+        budget::_ByteBudget)
     label = plan
     range = _nestedleafrange(plan)
-    charge = Int64(0)
     if isempty(range)
         plan isa _NestedStructPlan || throw(FormatError(
             "$(_nestedreadlabel(label)) has no leaf columns"))
-        charge = _nestedshapebytes(expected, false)
-        _reserve!(budget, charge)
+        _charge!(budget, _nestedshapebytes(expected, false))
         shape = _NestedShape(trues(expected), Int[])
     else
-        shape, charge = _nestedshape(streams[first(range)], plan, repetition,
-            parent, budget)
+        shape = _nestedshape(streams[first(range)], plan, repetition, parent, budget)
         for index in (first(range) + Int32(1)):last(range)
-            other, othercharge = _nestedshape(streams[index], plan, repetition,
-                parent, budget)
+            other = _nestedshape(streams[index], plan, repetition, parent, budget)
             same = other.present == shape.present && other.counts == shape.counts
-            _release!(budget, othercharge)
             same || throw(FormatError(
                 "$(_nestedreadlabel(label)) has misaligned sibling leaves"))
         end
@@ -236,10 +227,8 @@ function _nestedshapetree(plan::_NestedPlan, streams::Vector{LeafStream},
         inner = UInt64(plan.present_definition)
         present = count(shape.present)
         for child in plan.children
-            tree, childcharge = _nestedshapetree(child, streams, repetition,
-                inner, present, false, budget)
-            charge = _materializedsum(charge, childcharge)
-            push!(children, tree)
+            push!(children, _nestedshapetree(child, streams, repetition, inner,
+                present, false, budget))
         end
     elseif _nestedlisting(plan)
         level = UInt64(plan.repetition_level)
@@ -249,23 +238,21 @@ function _nestedshapetree(plan::_NestedPlan, streams::Vector{LeafStream},
             plan.value === nothing ? (plan.key,) : (plan.key, plan.value)
         for (index, child) in enumerate(members)
             iskey = plan isa _NestedMapPlan && index == 1
-            tree, childcharge = _nestedshapetree(child, streams, level, entry,
-                entries, iskey, budget)
-            charge = _materializedsum(charge, childcharge)
-            push!(children, tree)
+            push!(children, _nestedshapetree(child, streams, level, entry,
+                entries, iskey, budget))
         end
     end
-    return _NestedShapeTree(shape, children), charge
+    return _NestedShapeTree(shape, children)
 end
 
 function _nestedrequired(plan::_NestedPlan, keyed::Bool)
     return keyed || getfield(plan, :parent_definition) == getfield(plan, :present_definition)
 end
 
-function _nestedoffsets(counts::Vector{Int}, budget::_LiveByteBudget)
+function _nestedoffsets(counts::Vector{Int}, budget::_ByteBudget)
     total = sum(counts; init=0)
     I = _nestedindextype(total)
-    _reservearray!(budget, I, length(counts) + 1)
+    _chargearray!(budget, I, length(counts) + 1)
     offsets = Vector{I}(undef, length(counts) + 1)
     offsets[1] = zero(I)
     running = 0
@@ -276,10 +263,9 @@ function _nestedoffsets(counts::Vector{Int}, budget::_LiveByteBudget)
     return offsets
 end
 
-function _nestedvalidity(present::BitVector, required::Bool,
-        budget::_LiveByteBudget)
+function _nestedvalidity(present::BitVector, required::Bool, budget::_ByteBudget)
     required && return nothing
-    _reserve!(budget, _materializedbitbytes(length(present)))
+    _charge!(budget, cld(length(present), 8))
     return copy(present)
 end
 
@@ -303,7 +289,7 @@ function _nestedstrings(values::DataStrings.StringVector{DataStrings.DataString}
 end
 
 function _nestedbuild(plan::_NestedLeafPlan, tree::_NestedShapeTree,
-        logical::Vector{AbstractVector}, keyed::Bool, budget::_LiveByteBudget)
+        logical::Vector{AbstractVector}, keyed::Bool, budget::_ByteBudget)
     presence = tree.shape.present
     values = logical[Int(first(plan.leaf_range))]
     count(presence) == length(values) || throw(FormatError(
@@ -313,15 +299,13 @@ function _nestedbuild(plan::_NestedLeafPlan, tree::_NestedShapeTree,
         return _nestedstrings(values, presence, _nestedrequired(plan, keyed))
     T = _nestedreadlogicaltype(plan)
     output = if _nestedrequired(plan, keyed)
-        _reservearray!(budget, T, length(values))
         values isa Vector{T} ? values : convert(Vector{T}, values)
     else
-        _reservearray!(budget, Union{Missing,T}, length(presence))
+        _chargearray!(budget, Union{Missing,T}, length(presence))
         _nestedfill(Union{Missing,T}, presence, values)
     end
     if plan.source.element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
             _logicalkind(plan.source) === nothing
-        _reserveobjects!(budget)
         return FixedByteArrayVector{eltype(output)}(output,
             plan.source.element.type_length)
     end
@@ -343,12 +327,9 @@ function _nestedfill(::Type{T}, presence::BitVector, values::AbstractVector) whe
 end
 
 function _nestedbuild(plan::_NestedStructPlan, tree::_NestedShapeTree,
-        logical::Vector{AbstractVector}, keyed::Bool, budget::_LiveByteBudget)
+        logical::Vector{AbstractVector}, keyed::Bool, budget::_ByteBudget)
     presence = tree.shape.present
     count = length(presence)
-    _reserveobjects!(budget)
-    _reservearray!(budget, String, length(plan.children))
-    _reservearray!(budget, AbstractVector, length(plan.children))
     names = String[child.source.element.name for child in plan.children]
     children = Vector{AbstractVector}(undef, length(plan.children))
     for (index, child) in enumerate(plan.children)
@@ -359,7 +340,7 @@ function _nestedbuild(plan::_NestedStructPlan, tree::_NestedShapeTree,
         return StructVector{StructValue,Nothing}(names, nothing, children, count)
     end
     I = _nestedindextype(Base.count(presence))
-    _reservearray!(budget, I, count + 1)
+    _chargearray!(budget, I, count + 1)
     ranks = Vector{I}(undef, count + 1)
     ranks[1] = zero(I)
     for index in 1:count
@@ -370,8 +351,7 @@ function _nestedbuild(plan::_NestedStructPlan, tree::_NestedShapeTree,
 end
 
 function _nestedbuild(plan::_NestedListPlan, tree::_NestedShapeTree,
-        logical::Vector{AbstractVector}, keyed::Bool, budget::_LiveByteBudget)
-    _reserveobjects!(budget)
+        logical::Vector{AbstractVector}, keyed::Bool, budget::_ByteBudget)
     offsets = _nestedoffsets(tree.shape.counts, budget)
     validity = _nestedvalidity(tree.shape.present, _nestedrequired(plan, keyed),
         budget)
@@ -383,8 +363,7 @@ function _nestedbuild(plan::_NestedListPlan, tree::_NestedShapeTree,
 end
 
 function _nestedbuild(plan::_NestedMapPlan, tree::_NestedShapeTree,
-        logical::Vector{AbstractVector}, keyed::Bool, budget::_LiveByteBudget)
-    _reserveobjects!(budget)
+        logical::Vector{AbstractVector}, keyed::Bool, budget::_ByteBudget)
     offsets = _nestedoffsets(tree.shape.counts, budget)
     validity = _nestedvalidity(tree.shape.present, _nestedrequired(plan, keyed),
         budget)
@@ -405,10 +384,8 @@ end
 # Logical conversions of each leaf's dense values. The converted arrays are temporary
 # (leaf outputs charge their own arrays); the converted payload is retained.
 function _nestedreadlogicalvalues(plan::_NestedSchemaPlan,
-        streams::Vector{LeafStream}, limits::Limits, budget::_LiveByteBudget,
-        strings)
+        streams::Vector{LeafStream}, limits::Limits, budget::_ByteBudget, strings)
     output = Vector{AbstractVector}(undef, length(streams))
-    temporary = Int64(0)
     for (index, stream) in enumerate(streams)
         leaf = plan.leaves[index]
         if strings !== nothing && strings[index] !== nothing
@@ -422,42 +399,31 @@ function _nestedreadlogicalvalues(plan::_NestedSchemaPlan,
             output[index] = stream.values
             continue
         end
-        charge = _reservearray!(budget, logical, length(stream.values))
-        temporary = _materializedsum(temporary, charge)
-        _reserve!(budget, _nestedreadpayloadbytes(leaf, stream))
+        _chargearray!(budget, logical, length(stream.values))
+        _charge!(budget, _nestedreadpayloadbytes(leaf, stream))
         output[index] = _logicalvalues(leaf.source, stream.values; limits=limits)
     end
-    return output, temporary
+    return output
 end
 
 # `strings` holds, per leaf, the page buffers of a STRING leaf whose stream values are
 # DataStrings payloads (as `_readnestedstream` decodes them), or `nothing`.
 function _assemblenested(plan::_NestedSchemaPlan, streams::AbstractVector,
-    rows::Integer; limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits), strings=nothing)
+    rows::Integer; limits::Limits=Limits(), budget::_ByteBudget=_ByteBudget(limits),
+    strings=nothing)
     plan.depth <= _NESTED_READ_MAX_DEPTH || throw(LimitError(:nested_read_depth,
         Int64(plan.depth), Int64(_NESTED_READ_MAX_DEPTH)))
     rowcount = _nestedreadint(rows, "nested row count")
     _checklimit(:container_elements, rowcount, limits.max_container_elements)
     _nestedreadvalidatestreams(plan, streams, rowcount, limits)
     normalized = _nestedreadstreams(streams)
-    start = _budgetused(budget)
-    try
-        tree, temporary = _nestedshapetree(plan.root, normalized, UInt64(0),
-            UInt64(0), rowcount, false, budget)
-        logical, logicalcharge = _nestedreadlogicalvalues(plan, normalized,
-            limits, budget, strings)
-        root = _nestedbuild(plan.root, tree, logical, false, budget)
-        _release!(budget, _materializedsum(temporary, logicalcharge))
-        return root
-    catch
-        used = _budgetused(budget) - start
-        used > 0 && _release!(budget, used)
-        rethrow()
-    end
+    tree = _nestedshapetree(plan.root, normalized, UInt64(0), UInt64(0), rowcount,
+        false, budget)
+    logical = _nestedreadlogicalvalues(plan, normalized, limits, budget, strings)
+    return _nestedbuild(plan.root, tree, logical, false, budget)
 end
 
 function _assemblenested(plan::_NestedSchemaPlan, streams::AbstractVector,
-    rows::Integer, limits::Limits, budget::_LiveByteBudget)
+    rows::Integer, limits::Limits, budget::_ByteBudget)
     return _assemblenested(plan, streams, rows; limits=limits, budget=budget)
 end

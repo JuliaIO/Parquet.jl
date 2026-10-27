@@ -208,8 +208,7 @@ function _decodedeltablock!(output::AbstractVector{T}, index::Int, bytes::Abstra
 end
 
 function decode_delta_binary_packed!(output::AbstractVector{T}, bytes::AbstractVector{UInt8};
-    offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits)) where {T<:Union{Int32,Int64}}
+    offset::Integer=1, limits::Limits=Limits()) where {T<:Union{Int32,Int64}}
     count = length(output)
     header, position = _readdeltaheader(bytes, Int(offset), count, limits)
     count == 0 && return position
@@ -217,44 +216,23 @@ function decode_delta_binary_packed!(output::AbstractVector{T}, bytes::AbstractV
     output[firstindex(output)] = first
     count == 1 && return position
     _requirebytes(bytes, position, header.miniblocks + 1)
-    widthscharge = _reservearray!(budget, UInt8, header.miniblocks)
     widths = Vector{UInt8}(undef, header.miniblocks)
-    try
-        accumulator = reinterpret(UInt64, Int64(first))
-        index = firstindex(output) + 1
-        while index <= lastindex(output)
-            index, position, accumulator = _decodedeltablock!(output, index,
-                bytes, position, header, widths, accumulator, limits)
-        end
-    finally
-        _release!(budget, widthscharge)
+    accumulator = reinterpret(UInt64, Int64(first))
+    index = firstindex(output) + 1
+    while index <= lastindex(output)
+        index, position, accumulator = _decodedeltablock!(output, index,
+            bytes, position, header, widths, accumulator, limits)
     end
     return position
 end
 
-function _decode_delta_binary_packed(::Type{T}, bytes::AbstractVector{UInt8}, count::Integer;
-    offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits)) where {T<:Union{Int32,Int64}}
+function decode_delta_binary_packed(::Type{T}, bytes::AbstractVector{UInt8}, count::Integer;
+    offset::Integer=1, limits::Limits=Limits()) where {T<:Union{Int32,Int64}}
     count >= 0 || throw(ArgumentError("value count must be nonnegative"))
     _checklimit(:container_elements, count, limits.max_container_elements)
     _checkbytes(count, sizeof(T), limits)
-    outputcharge = _reservearray!(budget, T, count)
     output = Vector{T}(undef, _structural(count))
-    position = try
-        decode_delta_binary_packed!(output, bytes; offset=offset, limits=limits,
-            budget=budget)
-    catch
-        _release!(budget, outputcharge)
-        rethrow()
-    end
-    return output, position, outputcharge
-end
-
-function decode_delta_binary_packed(::Type{T}, bytes::AbstractVector{UInt8}, count::Integer;
-    offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits)) where {T<:Union{Int32,Int64}}
-    output, position, _ = _decode_delta_binary_packed(T, bytes, count;
-        offset=offset, limits=limits, budget=budget)
+    position = decode_delta_binary_packed!(output, bytes; offset=offset, limits=limits)
     return output, position
 end
 
@@ -330,102 +308,49 @@ function encode_delta_binary_packed(values::AbstractVector{T}) where {T<:Union{I
     return output
 end
 
-function _decode_delta_length_byte_array_offsets(bytes::AbstractVector{UInt8}, count::Integer;
-    offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
+function decode_delta_length_byte_array_offsets(bytes::AbstractVector{UInt8},
+    count::Integer; offset::Integer=1, limits::Limits=Limits())
     count >= 0 || throw(ArgumentError("value count must be nonnegative"))
     _checklimit(:container_elements, count, limits.max_container_elements)
     _checkbytes(count, 4, limits)
     size = _structural(count)
-    lengthscharge = _reservearray!(budget, Int32, size)
-    offsetscharge = try
-        _reservearray!(budget, Int, size + 1)
-    catch
-        _release!(budget, lengthscharge)
-        rethrow()
-    end
     lengths = Vector{Int32}(undef, size)
     offsets = Vector{Int}(undef, size + 1)
-    try
-        position = decode_delta_binary_packed!(lengths, bytes; offset=offset,
-            limits=limits, budget=budget)
-        offsets[1] = position
-        total = Int64(0)
-        @inbounds for index in 1:size
-            length = lengths[index]
-            length >= 0 || throw(FormatError(
-                "negative DELTA_LENGTH_BYTE_ARRAY length"))
-            _checklimit(:string_bytes, length, limits.max_string_bytes)
-            total += length
-            _checklimit(:page_bytes, total, limits.max_page_bytes)
-            offsets[index + 1] = _checkedposition(position, total)
-        end
-        last = _checkedposition(position, total)
-        _requirebytes(bytes, position, last - position)
-        _release!(budget, lengthscharge)
-        return offsets, last, offsetscharge
-    catch
-        _release!(budget, _materializedsum(lengthscharge, offsetscharge))
-        rethrow()
+    position = decode_delta_binary_packed!(lengths, bytes; offset=offset, limits=limits)
+    offsets[1] = position
+    total = Int64(0)
+    @inbounds for index in 1:size
+        length = lengths[index]
+        length >= 0 || throw(FormatError("negative DELTA_LENGTH_BYTE_ARRAY length"))
+        _checklimit(:string_bytes, length, limits.max_string_bytes)
+        total += length
+        _checklimit(:page_bytes, total, limits.max_page_bytes)
+        offsets[index + 1] = _checkedposition(position, total)
     end
+    last = _checkedposition(position, total)
+    _requirebytes(bytes, position, last - position)
+    return offsets, last
 end
 
-function decode_delta_length_byte_array_offsets(bytes::AbstractVector{UInt8},
-    count::Integer; offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    offsets, position, _ = _decode_delta_length_byte_array_offsets(bytes, count;
-        offset=offset, limits=limits, budget=budget)
-    return offsets, position
-end
-
-function _collectbytearrays(bytes::AbstractVector{UInt8}, offsets::Vector{Int},
-    budget::_LiveByteBudget)
+function _collectbytearrays(bytes::AbstractVector{UInt8}, offsets::Vector{Int})
     count = length(offsets) - 1
-    charge = _materializedarraybytes(Vector{UInt8}, count)
-    for index in 1:count
-        length = offsets[index + 1] - offsets[index]
-        length >= 0 || throw(FormatError("byte-array offsets are not monotonic"))
-        charge = _materializedsum(charge,
-            _materializedarraybytes(UInt8, length))
-    end
-    _reserve!(budget, charge)
     output = Vector{Vector{UInt8}}(undef, count)
-    try
-        for index in eachindex(output)
-            first = offsets[index]
-            length = offsets[index + 1] - first
-            value = Vector{UInt8}(undef, length)
-            length == 0 || copyto!(value, 1, bytes, first, length)
-            output[index] = value
-        end
-    catch
-        _release!(budget, charge)
-        rethrow()
+    for index in eachindex(output)
+        first = offsets[index]
+        length = offsets[index + 1] - first
+        length >= 0 || throw(FormatError("byte-array offsets are not monotonic"))
+        value = Vector{UInt8}(undef, length)
+        length == 0 || copyto!(value, 1, bytes, first, length)
+        output[index] = value
     end
-    return output, charge
-end
-
-function _decode_delta_length_byte_array(bytes::AbstractVector{UInt8}, count::Integer;
-    offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    offsets, position, offsetscharge = _decode_delta_length_byte_array_offsets(
-        bytes, count; offset=offset, limits=limits, budget=budget)
-    output, outputcharge = try
-        _collectbytearrays(bytes, offsets, budget)
-    catch
-        _release!(budget, offsetscharge)
-        rethrow()
-    end
-    _release!(budget, offsetscharge)
-    return output, position, outputcharge
+    return output
 end
 
 function decode_delta_length_byte_array(bytes::AbstractVector{UInt8}, count::Integer;
-    offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    output, position, _ = _decode_delta_length_byte_array(bytes, count;
-        offset=offset, limits=limits, budget=budget)
-    return output, position
+    offset::Integer=1, limits::Limits=Limits())
+    offsets, position = decode_delta_length_byte_array_offsets(bytes, count;
+        offset=offset, limits=limits)
+    return _collectbytearrays(bytes, offsets), position
 end
 
 function _bytearraylengths(values)
@@ -447,30 +372,24 @@ function encode_delta_length_byte_array(values)
 end
 
 function _deltabytearraylayout(prefixes::Vector{Int32},
-    suffixoffsets::Vector{Int}, limits::Limits, budget::_LiveByteBudget)
+    suffixoffsets::Vector{Int}, limits::Limits)
     count = length(prefixes)
-    offsetscharge = _reservearray!(budget, Int, count + 1)
     offsets = Vector{Int}(undef, count + 1)
-    try
-        offsets[1] = 1
-        previous = Int64(0)
-        total = Int64(0)
-        @inbounds for index in 1:count
-            prefix = Int64(prefixes[index])
-            0 <= prefix <= previous || throw(FormatError(
-                "DELTA_BYTE_ARRAY prefix length $prefix exceeds the previous value"))
-            length = prefix + (suffixoffsets[index + 1] - suffixoffsets[index])
-            _checklimit(:string_bytes, length, limits.max_string_bytes)
-            total += length
-            _checklimit(:page_bytes, total, limits.max_page_bytes)
-            offsets[index + 1] = _checkedposition(offsets[index], length)
-            previous = length
-        end
-        return offsets, _structural(total), offsetscharge
-    catch
-        _release!(budget, offsetscharge)
-        rethrow()
+    offsets[1] = 1
+    previous = Int64(0)
+    total = Int64(0)
+    @inbounds for index in 1:count
+        prefix = Int64(prefixes[index])
+        0 <= prefix <= previous || throw(FormatError(
+            "DELTA_BYTE_ARRAY prefix length $prefix exceeds the previous value"))
+        length = prefix + (suffixoffsets[index + 1] - suffixoffsets[index])
+        _checklimit(:string_bytes, length, limits.max_string_bytes)
+        total += length
+        _checklimit(:page_bytes, total, limits.max_page_bytes)
+        offsets[index + 1] = _checkedposition(offsets[index], length)
+        previous = length
     end
+    return offsets, _structural(total)
 end
 
 function _fillbytearrays!(data::Vector{UInt8}, offsets::Vector{Int}, prefixes::Vector{Int32},
@@ -485,106 +404,40 @@ function _fillbytearrays!(data::Vector{UInt8}, offsets::Vector{Int}, prefixes::V
     return
 end
 
-function _decode_delta_byte_array_buffer(bytes::AbstractVector{UInt8}, count::Integer;
-    offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
+function decode_delta_byte_array_buffer(bytes::AbstractVector{UInt8}, count::Integer;
+    offset::Integer=1, limits::Limits=Limits())
     count >= 0 || throw(ArgumentError("value count must be nonnegative"))
     _checklimit(:container_elements, count, limits.max_container_elements)
     _checkbytes(count, 4, limits)
-    size = _structural(count)
-    prefixescharge = _reservearray!(budget, Int32, size)
-    prefixes = Vector{Int32}(undef, size)
-    suffixcharge = Int64(0)
-    offsetscharge = Int64(0)
-    datacharge = Int64(0)
-    try
-        position = decode_delta_binary_packed!(prefixes, bytes; offset=offset,
-            limits=limits, budget=budget)
-        suffixoffsets, position, suffixcharge =
-            _decode_delta_length_byte_array_offsets(bytes, count; offset=position,
-                limits=limits, budget=budget)
-        offsets, total, offsetscharge = _deltabytearraylayout(prefixes,
-            suffixoffsets, limits, budget)
-        datacharge = _reservearray!(budget, UInt8, total)
-        data = Vector{UInt8}(undef, total)
-        _fillbytearrays!(data, offsets, prefixes, bytes, suffixoffsets)
-        _release!(budget, _materializedsum(prefixescharge, suffixcharge))
-        retained = _materializedsum(datacharge, offsetscharge)
-        return data, offsets, position, retained, offsetscharge
-    catch
-        charge = _materializedsum(prefixescharge, suffixcharge)
-        charge = _materializedsum(charge, offsetscharge)
-        charge = _materializedsum(charge, datacharge)
-        _release!(budget, charge)
-        rethrow()
-    end
-end
-
-function decode_delta_byte_array_buffer(bytes::AbstractVector{UInt8}, count::Integer;
-    offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    data, offsets, position, _, _ = _decode_delta_byte_array_buffer(bytes,
-        count; offset=offset, limits=limits, budget=budget)
+    prefixes = Vector{Int32}(undef, _structural(count))
+    position = decode_delta_binary_packed!(prefixes, bytes; offset=offset, limits=limits)
+    suffixoffsets, position = decode_delta_length_byte_array_offsets(bytes, count;
+        offset=position, limits=limits)
+    offsets, total = _deltabytearraylayout(prefixes, suffixoffsets, limits)
+    data = Vector{UInt8}(undef, total)
+    _fillbytearrays!(data, offsets, prefixes, bytes, suffixoffsets)
     return data, offsets, position
 end
 
-function _decode_delta_byte_array(bytes::AbstractVector{UInt8}, count::Integer;
-    offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    data, offsets, position, retained, _ = _decode_delta_byte_array_buffer(
-        bytes, count; offset=offset, limits=limits, budget=budget)
-    output, outputcharge = try
-        _collectbytearrays(data, offsets, budget)
-    catch
-        _release!(budget, retained)
-        rethrow()
-    end
-    _release!(budget, retained)
-    return output, position, outputcharge
-end
-
 function decode_delta_byte_array(bytes::AbstractVector{UInt8}, count::Integer;
-    offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    output, position, _ = _decode_delta_byte_array(bytes, count;
-        offset=offset, limits=limits, budget=budget)
-    return output, position
-end
-
-function _decode_delta_byte_array_fixed(bytes::AbstractVector{UInt8}, count::Integer,
-    width::Integer;
-    offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    width > 0 || throw(FormatError("fixed byte-array width must be positive"))
-    _checklimit(:string_bytes, width, limits.max_string_bytes)
-    data, offsets, position, retained, offsetscharge =
-        _decode_delta_byte_array_buffer(bytes, count; offset=offset,
-            limits=limits, budget=budget)
-    size = _structural(count)
-    fixedwidth = _structural(width)
-    objectcharge = Int64(0)
-    try
-        @inbounds for index in 1:size
-            offsets[index + 1] - offsets[index] == width || throw(FormatError(
-                "DELTA_BYTE_ARRAY value length differs from the fixed width $width"))
-        end
-        objectcharge = _reserveobjects!(budget)
-        output = reshape(data, fixedwidth, size)
-        _release!(budget, offsetscharge)
-        outputcharge = _materializedsum(retained - offsetscharge, objectcharge)
-        return output, position, outputcharge
-    catch
-        _release!(budget, _materializedsum(retained, objectcharge))
-        rethrow()
-    end
+    offset::Integer=1, limits::Limits=Limits())
+    data, offsets, position = decode_delta_byte_array_buffer(bytes, count;
+        offset=offset, limits=limits)
+    return _collectbytearrays(data, offsets), position
 end
 
 function decode_delta_byte_array_fixed(bytes::AbstractVector{UInt8}, count::Integer,
-    width::Integer; offset::Integer=1, limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
-    output, position, _ = _decode_delta_byte_array_fixed(bytes, count, width;
-        offset=offset, limits=limits, budget=budget)
-    return output, position
+    width::Integer; offset::Integer=1, limits::Limits=Limits())
+    width > 0 || throw(FormatError("fixed byte-array width must be positive"))
+    _checklimit(:string_bytes, width, limits.max_string_bytes)
+    data, offsets, position = decode_delta_byte_array_buffer(bytes, count;
+        offset=offset, limits=limits)
+    size = _structural(count)
+    @inbounds for index in 1:size
+        offsets[index + 1] - offsets[index] == width || throw(FormatError(
+            "DELTA_BYTE_ARRAY value length differs from the fixed width $width"))
+    end
+    return reshape(data, _structural(width), size), position
 end
 
 function _commonprefix(previous::AbstractVector{UInt8}, current::AbstractVector{UInt8})

@@ -1,8 +1,7 @@
 module Thrift
 
-import ..Parquet: Limits, FormatError, LimitError, _LiveByteBudget,
-    _MATERIALIZED_OBJECT_BYTES, _checklimit, _materializedsum,
-    _reserve!, _reservearray!, _reserveobjects!, _release!
+import ..Parquet: Limits, FormatError, LimitError, _ByteBudget, _UNCAPPED, _checklimit,
+    _charge!, _chargearray!
 
 # Thrift Compact Protocol type codes (field headers and container element types).
 const STOP = 0x00
@@ -58,50 +57,44 @@ mutable struct Reader{B<:AbstractVector{UInt8}}
     const start::Int
     const last::Int
     const limits::Limits
-    const budget::_LiveByteBudget
+    const budget::_ByteBudget
     pos::Int
     depth::Int
     headerpos::Int
     previd::Int16
-    materialized::Int64
 end
 
+# `budget` is charged for the strings, byte vectors, lists, and structs decoded.
 function Reader(bytes::AbstractVector{UInt8}, first::Integer, last::Integer;
-        limits::Limits=Limits(), budget::_LiveByteBudget=_LiveByteBudget(limits))
+        limits::Limits=Limits(), budget::_ByteBudget=_UNCAPPED)
     first >= firstindex(bytes) || throw(BoundsError(bytes, first))
     last <= lastindex(bytes) || throw(BoundsError(bytes, last))
     last >= first - 1 || throw(ArgumentError("Thrift reader range is reversed"))
     return Reader{typeof(bytes)}(bytes, Int(first), Int(last), limits, budget,
-        Int(first), 0, Int(first), Int16(0), Int64(0))
+        Int(first), 0, Int(first), Int16(0))
 end
 
 function Reader(bytes::AbstractVector{UInt8}; limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
+    budget::_ByteBudget=_UNCAPPED)
     return Reader(bytes, firstindex(bytes), lastindex(bytes); limits=limits,
         budget=budget)
 end
 
-function materializedcharge(r::Reader)
-    return r.materialized
-end
+const _OBJECT_BYTES = 64
 
 function _readercharge!(r::Reader, bytes::Integer)
-    _reserve!(r.budget, bytes)
-    r.materialized = Base.checked_add(r.materialized, Int64(bytes))
-    return Int64(bytes)
+    _charge!(r.budget, bytes)
+    return
 end
 
-function _readerarray!(r::Reader, ::Type{T}, count::Integer;
-    header::Bool=true) where {T}
-    bytes = _reservearray!(r.budget, T, count; header=header)
-    r.materialized = Base.checked_add(r.materialized, bytes)
-    return bytes
+function _readerarray!(r::Reader, ::Type{T}, count::Integer) where {T}
+    _chargearray!(r.budget, T, count)
+    return
 end
 
-function _readerobjects!(r::Reader, count::Integer=1)
-    bytes = _reserveobjects!(r.budget, count)
-    r.materialized = Base.checked_add(r.materialized, bytes)
-    return bytes
+function _readerobjects!(r::Reader)
+    _charge!(r.budget, _OBJECT_BYTES)
+    return
 end
 
 function remaining(r::Reader)
@@ -212,7 +205,7 @@ end
 
 function readstring(r::Reader)
     count = readbinarylength(r)
-    _readercharge!(r, _materializedsum(_MATERIALIZED_OBJECT_BYTES, count))
+    _readercharge!(r, _OBJECT_BYTES + count)
     out = String(view(r.bytes, r.pos:(r.pos + count - 1)))
     r.pos += count
     return out
@@ -553,14 +546,8 @@ end
 function decode end
 
 function decode(bytes::AbstractVector{UInt8}, ::Type{T}; limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits)) where {T}
-    reader = Reader(bytes; limits=limits, budget=budget)
-    try
-        return decode(reader, T)
-    catch
-        iszero(reader.materialized) || _release!(budget, reader.materialized)
-        rethrow()
-    end
+    budget::_ByteBudget=_UNCAPPED) where {T}
+    return decode(Reader(bytes; limits=limits, budget=budget), T)
 end
 
 struct _WriteCountOverflow <: Exception end

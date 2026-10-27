@@ -661,17 +661,7 @@ end
         limits=Parquet.Limits(max_metadata_depth=2,
             max_container_elements=2))
     @test exactdepth.plan_count == 2
-    retainedlimits = Parquet.Limits()
-    retainedbudget = Parquet._LiveByteBudget(retainedlimits)
-    Parquet._reserve!(retainedbudget, 64)
-    retained = Parquet._nestedplan(schema; limits=retainedlimits,
-        budget=retainedbudget)
-    expectedretained =
-        Parquet._materializedarraybytes(Parquet._NestedLeafPlan, 1) +
-        Parquet._materializedarraybytes(Parquet._NestedPlan, 1) +
-        3 * Parquet._MATERIALIZED_OBJECT_BYTES
-    @test retained.plan_count == 2
-    @test Parquet._budgetused(retainedbudget) == 64 + expectedretained
+    @test Parquet._nestedplan(schema).plan_count == 2
     deptherror = try
         Parquet._nestedplan(schema;
             limits=Parquet.Limits(max_metadata_depth=1))
@@ -706,17 +696,14 @@ end
         Parquet.SchemaNode[malformedleaf])
     limits = Parquet.Limits(max_metadata_depth=1,
         max_container_elements=1)
-    budget = Parquet._LiveByteBudget(limits)
-    Parquet._reserve!(budget, 64)
     malformederror = try
-        Parquet._nestedplan(malformed; limits=limits, budget=budget)
+        Parquet._nestedplan(malformed; limits=limits)
         nothing
     catch err
         err
     end
     @test malformederror isa Parquet.FormatError
     @test occursin("no valid repetition type", malformederror.message)
-    @test Parquet._budgetused(budget) == 64
 
     listschema = Parquet.Schema(MD.SchemaElement[
         nestedroot(1),
@@ -725,18 +712,14 @@ end
         nestedschemaelement("array"; repetition=MD.FieldRepetitionType.REPEATED,
             children=Int32(0)),
     ])
-    precedencebudget = Parquet._LiveByteBudget(limits)
-    Parquet._reserve!(precedencebudget, 64)
     precedenceerror = try
-        Parquet._nestedplan(listschema; limits=limits,
-            budget=precedencebudget)
+        Parquet._nestedplan(listschema; limits=limits)
         nothing
     catch err
         err
     end
     @test precedenceerror isa Parquet.FormatError
     @test occursin("zero-field repeated wrapper", precedenceerror.message)
-    @test Parquet._budgetused(precedencebudget) == 64
 
     firstleaf = Parquet.SchemaNode(nestedschemaelement("first";
         physical=MD.Type.INT32, repetition=required), path, Int16(0),
@@ -748,28 +731,19 @@ end
         Int32(0), Parquet.SchemaNode[firstleaf, secondleaf])
     partial = Parquet.Schema(partialroot,
         Parquet.SchemaNode[firstleaf, secondleaf])
-    partiallimits = Parquet.Limits()
-    partialbudget = Parquet._LiveByteBudget(partiallimits)
-    Parquet._reserve!(partialbudget, 64)
-    @test_throws Parquet.FormatError Parquet._nestedplan(partial;
-        limits=partiallimits, budget=partialbudget)
-    @test Parquet._budgetused(partialbudget) == 64
+    @test_throws Parquet.FormatError Parquet._nestedplan(partial)
 
     aliasedroot = Parquet.SchemaNode(nestedroot(2), path, Int16(0), Int16(0),
         Int32(0), Parquet.SchemaNode[firstleaf, firstleaf])
     aliased = Parquet.Schema(aliasedroot, Parquet.SchemaNode[firstleaf])
-    aliasbudget = Parquet._LiveByteBudget(partiallimits)
-    Parquet._reserve!(aliasbudget, 64)
     aliaserror = try
-        Parquet._nestedplan(aliased; limits=partiallimits,
-            budget=aliasbudget)
+        Parquet._nestedplan(aliased)
         nothing
     catch err
         err
     end
     @test aliaserror isa Parquet.FormatError
     @test occursin("more physical leaf occurrences", aliaserror.message)
-    @test Parquet._budgetused(aliasbudget) == 64
 end
 
 @testset "50,000-node iterative nested plan" begin
@@ -797,10 +771,8 @@ end
 
     faillimits = Parquet.Limits(max_metadata_depth=depth - 1,
         max_container_elements=depth, max_materialized_bytes=128 * 1024 * 1024)
-    failbudget = Parquet._LiveByteBudget(faillimits)
-    Parquet._reserve!(failbudget, 64)
     deptherror = try
-        Parquet._nestedplan(schema; limits=faillimits, budget=failbudget)
+        Parquet._nestedplan(schema; limits=faillimits)
         nothing
     catch err
         err
@@ -809,5 +781,4 @@ end
     @test deptherror.resource == :metadata_depth
     @test deptherror.requested == depth
     @test deptherror.maximum == depth - 1
-    @test Parquet._budgetused(failbudget) == 64
 end

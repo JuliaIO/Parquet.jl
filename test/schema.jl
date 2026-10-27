@@ -83,11 +83,9 @@ end
         schemaelement("root"; children=Int32(2)),
         schemaelement("leaf"; type=MD.Type.INT32, repetition=required),
     ])
-    malformedbudget = Parquet._LiveByteBudget(Parquet.Limits())
     @test_throws Parquet.FormatError Parquet.Schema([
         schemaelement("root"; children=Int32(1_000_000)),
-    ]; budget=malformedbudget)
-    @test Parquet._budgetused(malformedbudget) < 1024
+    ])
     @test_throws Parquet.FormatError Parquet.Schema([
         schemaelement("root"; children=Int32(0)),
         schemaelement("extra"; type=MD.Type.INT32, repetition=required),
@@ -134,22 +132,11 @@ end
     @test nodeerror.requested == 3
     @test nodeerror.maximum == 2
 
-    retainedlimits = Parquet.Limits()
-    retainedbudget = Parquet._LiveByteBudget(retainedlimits)
-    Parquet._reserve!(retainedbudget, 64)
     retained = Parquet.Schema(MD.SchemaElement[
         schemaelement("root"; children=Int32(1)),
         schemaelement("leaf"; type=MD.Type.INT32, repetition=required),
-    ]; limits=retainedlimits, budget=retainedbudget)
-    expectedretained =
-        Parquet._materializedarraybytes(Parquet.SchemaNode, 2) +
-        Parquet._materializedarraybytes(String, 0) +
-        Parquet._materializedarraybytes(Parquet.SchemaNode, 1) +
-        Parquet._materializedarraybytes(String, 1) +
-        Parquet._materializedarraybytes(Parquet.SchemaNode, 0) +
-        3 * Parquet._MATERIALIZED_OBJECT_BYTES
+    ])
     @test retained.leaves[1].column_index == 1
-    @test Parquet._budgetused(retainedbudget) == 64 + expectedretained
 
     unclaimed = MD.SchemaElement[
         schemaelement("root"; children=Int32(0)),
@@ -170,24 +157,16 @@ end
         schemaelement("bad"; repetition=required, children=Int32(1)),
     ]
     limits = Parquet.Limits(max_metadata_depth=1)
-    budget = Parquet._LiveByteBudget(limits)
-    Parquet._reserve!(budget, 64)
     malformederror = try
-        Parquet.Schema(malformed; limits=limits, budget=budget)
+        Parquet.Schema(malformed; limits=limits)
         nothing
     catch err
         err
     end
     @test malformederror isa Parquet.FormatError
     @test occursin("declares more direct children", malformederror.message)
-    @test Parquet._budgetused(budget) == 64
-
-    limitbudget = Parquet._LiveByteBudget(Parquet.Limits(
-        max_metadata_depth=2))
-    Parquet._reserve!(limitbudget, 64)
     @test_throws Parquet.LimitError Parquet.Schema(chain;
-        limits=Parquet.Limits(max_metadata_depth=2), budget=limitbudget)
-    @test Parquet._budgetused(limitbudget) == 64
+        limits=Parquet.Limits(max_metadata_depth=2))
 end
 
 @testset "official corpus schemas" begin

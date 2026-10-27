@@ -342,23 +342,16 @@ end
     TH.skiplist!(r)
     @test r.depth == 0 && TH.remaining(r) == 0
 
-    binarybudget = Parquet._LiveByteBudget(
-        Parquet.Limits(max_materialized_bytes=100))
+    binarybudget = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=99))
     binaryreader = TH.Reader(vcat(UInt8[0x64], fill(UInt8(0x61), 100));
         budget=binarybudget)
     @test_throws L TH.readbinary(binaryreader)
-    @test Parquet._budgetused(binarybudget) == 0
 
-    listbudget = Parquet._LiveByteBudget(
-        Parquet.Limits(max_materialized_bytes=70))
+    listbudget = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=7))
     listreader = TH.Reader(UInt8[0x25, 0x00, 0x00]; budget=listbudget)
     @test_throws L TH.readlist(listreader, Int32)
-    @test Parquet._budgetused(listbudget) == 0
 
-    decodebudget = Parquet._LiveByteBudget(Parquet.Limits())
-    @test_throws F TH.decode(UInt8[0x00], Parquet.Metadata.FileMetaData;
-        budget=decodebudget)
-    @test Parquet._budgetused(decodebudget) == 0
+    @test_throws F TH.decode(UInt8[0x00], Parquet.Metadata.FileMetaData)
 end
 
 @testset "reader ranges and byte sources" begin

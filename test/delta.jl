@@ -353,17 +353,6 @@ end
     bomb = vcat(Parquet.encode_delta_binary_packed(Int32[i - 1 for i in 1:count]), Parquet.encode_delta_length_byte_array(fill("x", count)))
     @test_throws L Parquet.decode_delta_byte_array(bomb, count; limits=Parquet.Limits(max_page_bytes=1000))
     @test_throws L Parquet.decode_delta_byte_array(bomb, count; limits=Parquet.Limits(max_string_bytes=100))
-    materialized = Parquet.Limits(max_materialized_bytes=5000)
-    function rejectmaterializedbomb()
-        budget = Parquet._LiveByteBudget(materialized)
-        @test_throws L Parquet.decode_delta_byte_array(bomb, count;
-            limits=materialized, budget=budget)
-        @test Parquet._budgetused(budget) == 0
-        return
-    end
-    rejectmaterializedbomb()
-    GC.gc()
-    @test @allocated(rejectmaterializedbomb()) < 10_000
     @test_throws L Parquet.decode_delta_byte_array_fixed(UInt8[], 0, big(typemax(Int64)) + 1)
     @test length(Parquet.decode_delta_byte_array(bomb, count)[1][end]) == count
     rng = MersenneTwister(11)

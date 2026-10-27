@@ -11,8 +11,6 @@ end
 mutable struct OwnerRegion{B<:AbstractVector{UInt8},I}
     bytes::B
     io::I
-    budget::Union{Nothing,_LiveByteBudget}
-    @atomic materializedcharge::Int64
     @atomic closed::Bool
 end
 
@@ -68,12 +66,7 @@ end
 
 function close!(region::OwnerRegion)
     (@atomicswap region.closed = true) && return
-    charge = @atomicswap region.materializedcharge = Int64(0)
-    try
-        region.io === nothing || close(region.io)
-    finally
-        iszero(charge) || _release!(something(region.budget), charge)
-    end
+    region.io === nothing || close(region.io)
     return
 end
 
@@ -87,83 +80,32 @@ function Base.close(source::MemorySource)
     return
 end
 
-function source(bytes::AbstractVector{UInt8};
-    budget::_LiveByteBudget=_LiveByteBudget(Limits()))
-    region = OwnerRegion(bytes, nothing, nothing, Int64(0), false)
-    return MemorySource(region)
+function source(bytes::AbstractVector{UInt8}; budget::_ByteBudget=_UNCAPPED)
+    return MemorySource(OwnerRegion(bytes, nothing, false))
 end
 
-function _readsourcebytes(io::IO, budget::_LiveByteBudget)
-    temporary = Int64(0)
-    outputcharge = Int64(0)
-    try
-        temporary = _materializedsum(temporary,
-            _reservearray!(budget, Vector{UInt8}, 0))
-        chunks = Vector{UInt8}[]
-        available = budget.maximum - _budgetused(budget)
-        fixed = 3 * _MATERIALIZED_ARRAY_HEADER_BYTES + 2 * Int64(sizeof(Ptr{Cvoid}))
-        blocksize = Int(min(Int64(64 * 1024), max(Int64(1),
-            (available - fixed) ÷ 3)))
-        temporary = _materializedsum(temporary,
-            _reservearray!(budget, UInt8, blocksize))
-        scratch = Vector{UInt8}(undef, blocksize)
-        total = Int64(0)
-        while !eof(io)
-            count = readbytes!(io, scratch, blocksize)
-            iszero(count) && continue
-            total = try
-                Base.checked_add(total, Int64(count))
-            catch err
-                err isa OverflowError || rethrow()
-                throw(LimitError(:materialized_bytes, typemax(Int64),
-                    budget.maximum))
-            end
-            charge = _reservearray!(budget, UInt8, count)
-            temporary = _materializedsum(temporary, charge)
-            chunk = Vector{UInt8}(undef, count)
-            copyto!(chunk, 1, scratch, 1, count)
-            pointercharge = _reservearray!(budget, Vector{UInt8}, 2;
-                header=false)
-            temporary = _materializedsum(temporary, pointercharge)
-            push!(chunks, chunk)
-        end
-        total <= typemax(Int) || throw(LimitError(:materialized_bytes,
-            typemax(Int64), budget.maximum))
-        outputcharge = _reservearray!(budget, UInt8, total)
-        bytes = Vector{UInt8}(undef, Int(total))
-        position = 1
-        for chunk in chunks
-            copyto!(bytes, position, chunk, 1, length(chunk))
-            position += length(chunk)
-        end
-        _release!(budget, temporary)
-        return bytes, outputcharge
-    catch
-        iszero(outputcharge) || _release!(budget, outputcharge)
-        iszero(temporary) || _release!(budget, temporary)
-        rethrow()
+# An `IO` is read into memory; its bytes are charged to `budget` as they are read.
+function _readsourcebytes(io::IO, budget::_ByteBudget)
+    bytes = UInt8[]
+    block = Vector{UInt8}(undef, 64 * 1024)
+    while !eof(io)
+        count = readbytes!(io, block)
+        _charge!(budget, count)
+        append!(bytes, view(block, 1:count))
     end
+    return bytes
 end
 
-function source(io::IO; budget::_LiveByteBudget=_LiveByteBudget(Limits()))
-    bytes, charge = _readsourcebytes(io, budget)
-    try
-        region = OwnerRegion(bytes, nothing, budget, charge, false)
-        return MemorySource(region)
-    catch
-        _release!(budget, charge)
-        rethrow()
-    end
+function source(io::IO; budget::_ByteBudget=_UNCAPPED)
+    return MemorySource(OwnerRegion(_readsourcebytes(io, budget), nothing, false))
 end
 
-function source(path::AbstractString;
-    budget::_LiveByteBudget=_LiveByteBudget(Limits()))
+function source(path::AbstractString; budget::_ByteBudget=_UNCAPPED)
     io = open(path, "r")
     try
         count = filesize(io)
         bytes = iszero(count) ? UInt8[] : Mmap.mmap(io, Vector{UInt8}, count)
-        region = OwnerRegion(bytes, io, nothing, Int64(0), false)
-        return MemorySource(region)
+        return MemorySource(OwnerRegion(bytes, io, false))
     catch
         try
             close(io)
@@ -173,8 +115,7 @@ function source(path::AbstractString;
     end
 end
 
-function source(src::AbstractSource;
-    budget::_LiveByteBudget=_LiveByteBudget(Limits()))
+function source(src::AbstractSource; budget::_ByteBudget=_UNCAPPED)
     return src
 end
 

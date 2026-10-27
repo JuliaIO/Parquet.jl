@@ -358,81 +358,70 @@ function _dividedecimalchunk!(magnitude::Vector{UInt8}, start::Int)
     return start, remainder
 end
 
-function _decimaldigitcount(raw::AbstractVector{UInt8}, budget::_LiveByteBudget)
+function _decimaldigitcount(raw::AbstractVector{UInt8})
     isempty(raw) && return nothing
-    charge = _reservearray!(budget, UInt8, length(raw))
-    try
-        magnitude = Vector{UInt8}(undef, length(raw))
-        _decimalmagnitude!(magnitude, raw)
-        start = firstindex(magnitude)
-        while start <= lastindex(magnitude) && iszero(magnitude[start])
-            start += 1
-        end
-        start > lastindex(magnitude) && return 1
-        chunks = 0
-        leading = UInt64(0)
-        while start <= lastindex(magnitude)
-            start, leading = _dividedecimalchunk!(magnitude, start)
-            chunks += 1
-        end
-        return (chunks - 1) * 9 + _decimalchunkdigits(leading)
-    finally
-        _release!(budget, charge)
+    magnitude = Vector{UInt8}(undef, length(raw))
+    _decimalmagnitude!(magnitude, raw)
+    start = firstindex(magnitude)
+    while start <= lastindex(magnitude) && iszero(magnitude[start])
+        start += 1
     end
+    start > lastindex(magnitude) && return 1
+    chunks = 0
+    leading = UInt64(0)
+    while start <= lastindex(magnitude)
+        start, leading = _dividedecimalchunk!(magnitude, start)
+        chunks += 1
+    end
+    return (chunks - 1) * 9 + _decimalchunkdigits(leading)
 end
 
 function _statisticdecimalvalid(element::Metadata.SchemaElement,
-    raw::AbstractVector{UInt8}, budget::_LiveByteBudget)
+    raw::AbstractVector{UInt8})
     precision, _ = something(_decimalparameters(element))
     physical = element.type_
     digits = if physical in (Metadata.Type.INT32, Metadata.Type.INT64)
         _decimaldigitcount(_statisticsignedvalue(element, raw))
     else
-        _decimaldigitcount(raw, budget)
+        _decimaldigitcount(raw)
     end
     digits === nothing && return false
     return digits <= precision
 end
 
 function _optionallogicaldocumentvalid(kind::Symbol, raw::AbstractVector{UInt8},
-    limits::Limits, budget::_LiveByteBudget)
-    charge = _reserveobjects!(budget)
+    limits::Limits)
     try
-        try
-            kind === :json && _validatejson(raw, limits, FormatError)
-            kind === :bson && _validatebson(raw, limits, FormatError)
-            return true
-        catch err
-            err isa Union{FormatError,LimitError} && return false
-            rethrow()
-        end
-    finally
-        _release!(budget, charge)
+        kind === :json && _validatejson(raw, limits, FormatError)
+        kind === :bson && _validatebson(raw, limits, FormatError)
+        return true
+    catch err
+        err isa Union{FormatError,LimitError} && return false
+        rethrow()
     end
 end
 
 function _statisticsemanticvalid(semantics::_StatisticLeafSemantics,
-    element::Metadata.SchemaElement, raw::AbstractVector{UInt8}, limits::Limits,
-    budget::_LiveByteBudget)
+    element::Metadata.SchemaElement, raw::AbstractVector{UInt8}, limits::Limits)
     logical = semantics.logical
     logical isa _IntegerLogicalKind &&
         return _statisticintegerfits(logical, element, raw)
     logical isa _TimeLogicalKind &&
         return _statistictimevalid(logical, element, raw)
-    logical === :decimal && return _statisticdecimalvalid(element, raw, budget)
+    logical === :decimal && return _statisticdecimalvalid(element, raw)
     logical in (:string, :enum) && return isvalid(String, raw)
     logical in (:json, :bson) &&
-        return _optionallogicaldocumentvalid(logical, raw, limits, budget)
+        return _optionallogicaldocumentvalid(logical, raw, limits)
     semantics.comparison === :boolean && return raw[1] in (0x00, 0x01)
     return true
 end
 
 function _validatestatisticbound(bound::_StatisticBoundFact,
     semantics::_StatisticLeafSemantics, element::Metadata.SchemaElement,
-    limits::Limits, budget::_LiveByteBudget)
+    limits::Limits)
     bound.state === :known || return bound
     raw = bound.raw::Vector{UInt8}
-    _statisticsemanticvalid(semantics, element, raw, limits, budget) && return bound
+    _statisticsemanticvalid(semantics, element, raw, limits) && return bound
     return _unknownbound(bound, :invalid_value)
 end
 
@@ -1050,7 +1039,7 @@ function _evaluatestatisticbounds(element::Metadata.SchemaElement,
     statistics::Union{Nothing,Metadata.Statistics}, family::Symbol,
     semantics::_StatisticLeafSemantics, order::_StatisticOrderFact,
     comparison::Symbol, trust::_StatisticTrustFact, occupancy::Symbol,
-    limits::Limits, budget::_LiveByteBudget)
+    limits::Limits)
     rawlower, rawupper, lowerflag, upperflag =
         _statisticfamilyvalues(statistics, family)
     limit = limits.max_statistics_value_bytes
@@ -1059,8 +1048,8 @@ function _evaluatestatisticbounds(element::Metadata.SchemaElement,
     gate = _statisticboundgate(family, order, semantics, trust, occupancy)
     gate === :none && return lower, upper
     gate === :valid || return _invalidateboundpair(lower, upper, gate)
-    lower = _validatestatisticbound(lower, semantics, element, limits, budget)
-    upper = _validatestatisticbound(upper, semantics, element, limits, budget)
+    lower = _validatestatisticbound(lower, semantics, element, limits)
+    upper = _validatestatisticbound(upper, semantics, element, limits)
     lower, upper = _normalizefloatingbounds(element, lower, upper, comparison, occupancy)
     _contradictorystatisticbounds(element, lower, upper, comparison) &&
         return _invalidateboundpair(lower, upper, :contradictory_bounds)
@@ -1081,8 +1070,7 @@ end
 function _statisticsfacts(schema::Schema, leafindex::Integer,
     createdby::Union{Nothing,String},
     orders::Union{Nothing,AbstractVector{Metadata.ColumnOrder}},
-    metadata::Metadata.ColumnMetaData; limits::Limits=Limits(),
-    budget::_LiveByteBudget=_LiveByteBudget(limits))
+    metadata::Metadata.ColumnMetaData; limits::Limits=Limits())
     _statisticlimit(limits)
     1 <= leafindex <= length(schema.leaves) || throw(ArgumentError(
         "leaf index $leafindex is outside 1:$(length(schema.leaves))"))
@@ -1110,7 +1098,7 @@ function _statisticsfacts(schema::Schema, leafindex::Integer,
         selectedcomparison, family, rawlower, rawupper,
         limits.max_statistics_value_bytes)
     lower, upper = _evaluatestatisticbounds(node.element, statistics, family,
-        semantics, order, selectedcomparison, trust, occupancy, limits, budget)
+        semantics, order, selectedcomparison, trust, occupancy, limits)
     return _ColumnStatisticFacts(lower, upper, nulls, nans, distinct, order,
         trust, family, selectedcomparison, occupancy)
 end

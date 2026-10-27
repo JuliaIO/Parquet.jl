@@ -21,15 +21,13 @@ function tablerewritefooter(bytes::Vector{UInt8}, metadata)
     return output
 end
 
-function tableprematerialized(bytes::Vector{UInt8};
-        limits::Parquet.Limits=Parquet.Limits())
-    budget = Parquet._LiveByteBudget(limits)
-    Parquet._reserveobjects!(budget, 2)
-    file = Parquet.File(bytes; limits=limits, budget=budget)
+# Bytes a read charges for the footer metadata of `bytes`, the first thing it decodes.
+function tableprematerialized(bytes::Vector{UInt8})
+    budget = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=typemax(Int64) - 1))
+    file = Parquet.File(bytes)
     try
-        metadata = Parquet._readfilemetadata(file, limits, budget)
-        Parquet.Schema(metadata; limits=limits, budget=budget)
-        return Parquet._budgetused(budget)
+        Parquet._readfilemetadata(file, Parquet.Limits(), budget)
+        return budget.used
     finally
         close(file)
     end
@@ -218,18 +216,15 @@ end
         ]
         schema = Parquet.Schema(elements)
         limits = Parquet.Limits(max_schema_name_bytes=0)
-        budget = Parquet._LiveByteBudget(limits)
-        Parquet._reserve!(budget, Int64(64))
         before = Parquet._internedschemanamebytes()
         error = try
-            Parquet._tablenames(schema, limits, budget)
+            Parquet._tablenames(schema, limits)
             nothing
         catch err
             err
         end
         @test error isa Parquet.UnsupportedFeatureError
         @test occursin(message, error.message)
-        @test Parquet._budgetused(budget) == 64
         @test Parquet._internedschemanamebytes() == before
     end
 
@@ -241,12 +236,8 @@ end
     ]
     schema = Parquet.Schema(elements)
     limits = Parquet.Limits(max_schema_name_bytes=0)
-    budget = Parquet._LiveByteBudget(limits)
-    Parquet._reserve!(budget, Int64(64))
     before = Parquet._internedschemanamebytes()
-    @test_throws Parquet.LimitError Parquet._tablenames(schema, limits,
-        budget)
-    @test Parquet._budgetused(budget) == 64
+    @test_throws Parquet.LimitError Parquet._tablenames(schema, limits)
     @test Parquet._internedschemanamebytes() == before
 end
 
@@ -675,9 +666,9 @@ end
 end
 
 @testset "parallel and sequential reads agree" begin
-    # Reads decode one task per column chunk when Julia has threads and no
-    # max_materialized_bytes cap needs exact shared accounting; a cap reads in order.
-    sequential = Parquet.Limits(max_materialized_bytes=typemax(Int64) - 1)
+    # Reads decode one task per column chunk; ntasks=1 decodes them in order on the
+    # calling task, and a byte cap is shared by all tasks.
+    capped = Parquet.Limits(max_materialized_bytes=typemax(Int64) - 1)
     rows = 1_000
     source = (id=collect(Int64, 1:rows), name=["n$(i % 17)" for i in 1:rows],
         score=Union{Missing,Float64}[isodd(i) ? i / 2 : missing for i in 1:rows],
@@ -687,8 +678,8 @@ end
     for table in (flat, source)
         bytes = Parquet._encodefile(table; rowgroupsize=150, pagesize=512,
             codec=:snappy)
-        parallel = Parquet.Table(bytes)
-        ordered = Parquet.Table(bytes; limits=sequential)
+        parallel = Parquet.Table(bytes; limits=capped)
+        ordered = Parquet.Table(bytes; ntasks=1)
         try
             @test keys(parallel.columns) == keys(ordered.columns) == keys(table)
             for name in keys(table)
@@ -712,5 +703,7 @@ end
     damaged = copy(bytes)
     damaged[(start + 1):stop] .= 0x00
     @test_throws Parquet.FormatError Parquet.Table(damaged)
-    @test_throws Parquet.FormatError Parquet.Table(damaged; limits=sequential)
+    @test_throws Parquet.FormatError Parquet.Table(damaged; ntasks=1)
+    @test_throws Parquet.FormatError Parquet.Table(damaged; limits=capped)
+    @test_throws ArgumentError Parquet.Table(bytes; ntasks=0)
 end

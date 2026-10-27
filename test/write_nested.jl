@@ -1022,10 +1022,6 @@ end
         @test fresh.consumed[] == 1
     end
 
-    UnionType = Union{Int32,Float32}
-    @test Parquet._materializedarraybytes(UnionType, 4; header=false) ==
-        4 * (Base.elsize(Vector{UnionType}) + 1)
-
     tracked = WNTrackedBytes(fill(UInt8(1), 100_000), Ref(0))
     pagelimits = Parquet.Limits(max_page_bytes=1)
     @test_throws Parquet.LimitError Parquet._encodefile(
