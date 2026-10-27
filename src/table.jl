@@ -492,8 +492,8 @@ end
                   limits=Parquet.Limits())
 
 Read a Parquet file from a path, a byte vector, an `IO`, or a
-[`Parquet.AbstractSource`](@ref) into Tables.jl columns. The table owns its columns; the
-file is closed (and unmapped) before `Table` returns.
+[`Parquet.AbstractSource`](@ref) into Tables.jl columns. The table owns its columns: a
+path is unmapped and closed before `Table` returns, and a source you pass stays open.
 
 - `select` keeps the given columns, in that order (names, indices, a regex, or a vector
   of them); `drop` keeps all but the given columns.
