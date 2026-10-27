@@ -6,7 +6,7 @@ on:
     tags: ['*']
 jobs:
   test:
-    # The N5 conformance run plus the full suite take 16-30 minutes on hosted runners.
+    # The suite (N5 conformance included) takes 16-30 minutes on hosted runners.
     timeout-minutes: 45
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
     runs-on: ${{ matrix.os }}
@@ -36,10 +36,6 @@ jobs:
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9 # v2
       - uses: julia-actions/julia-buildpkg@e3eb439fad4f9aba7da2667e7510e4a46ebc46e1 # v1
-      - name: Run N5 nested conformance
-        env:
-          PARQUET_TESTING_DIR: test/parquet-testing
-        run: julia --project=. test/conformance/n5/runtests.jl
       - uses: julia-actions/julia-runtest@6e050c8013b833b1195105ff2fce9cd802f53271 # v1
         env:
           JULIA_NUM_THREADS: 4
@@ -49,9 +45,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
   bounds:
-    # The N5 conformance run plus the full suite with bounds checks takes about 14
-    # minutes on a hosted runner.
-    timeout-minutes: 30
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -65,8 +59,4 @@ jobs:
           version: '1'
       - uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9 # v2
       - uses: julia-actions/julia-buildpkg@e3eb439fad4f9aba7da2667e7510e4a46ebc46e1 # v1
-      - name: Run N5 nested conformance
-        env:
-          PARQUET_TESTING_DIR: test/parquet-testing
-        run: julia --project=. test/conformance/n5/runtests.jl
       - run: julia --project --check-bounds=yes -e 'using Pkg; Pkg.test()'
