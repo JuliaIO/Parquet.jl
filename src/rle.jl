@@ -33,9 +33,36 @@ function _readpackedvalue(bytes::AbstractVector{UInt8}, offset::Int, bitoffset::
     return value
 end
 
+# Groups of 8 `W`-bit values (W bytes each) from `pointer` to `output[(offset + 1):]`,
+# unrolled for a constant width; every value is one unaligned 8-byte load.
+@inline function _unpackgroups!(output::Vector{U}, offset::Int, groups::Int,
+        pointer::Ptr{UInt8}, ::Val{W}) where {U,W}
+    mask = (UInt64(1) << W) - 1
+    @inbounds for group in 0:(groups - 1)
+        start = pointer + group * W
+        index = offset + 8 * group
+        Base.Cartesian.@nexprs 8 k -> begin
+            bit_k = (k - 1) * W
+            word_k = ltoh(unsafe_load(Ptr{UInt64}(start + (bit_k >> 3))))
+            output[index + k] = ((word_k >> (bit_k & 7)) & mask) % U
+        end
+    end
+    return
+end
+
+# The unrolled groups for a width of 1 to 32, chosen without dynamic dispatch.
+function _unpackgroups!(output::Vector{U}, offset::Int, groups::Int, pointer::Ptr{UInt8},
+        bitwidth::Int) where {U}
+    Base.Cartesian.@nif 33 width -> (bitwidth == width) width -> _unpackgroups!(output,
+        offset, groups, pointer, Val(width)) width -> throw(ArgumentError(
+            "unrolled unpacking takes widths 1 to 32, got $bitwidth"))
+    return
+end
+
 # Writes `count` values of a bit-packed run of `bitwidth`-bit values starting at
 # `bytes[base]` (least significant bit first) to `output[(offset + 1):(offset + count)]`.
-# A value is read with one unaligned 8-byte load while those 8 bytes lie inside `bytes`.
+# Whole groups of 8 values take an unrolled loop for widths up to 32; the rest read one
+# unaligned 8-byte load per value while those 8 bytes lie inside `bytes`.
 function _unpack!(output::Vector{U}, offset::Int, count::Int, bytes::_ByteView,
         base::Int, bitwidth::Int) where {U<:Unsigned}
     if bitwidth == 0
@@ -43,11 +70,17 @@ function _unpack!(output::Vector{U}, offset::Int, count::Int, bytes::_ByteView,
         return
     end
     mask = bitwidth == 64 ? typemax(UInt64) : (UInt64(1) << bitwidth) - 1
+    # Group g's last load starts at byte g * bitwidth + (7 * bitwidth) >> 3 past `base`.
+    room = length(bytes) - base + 1 - 8 - ((7 * bitwidth) >> 3)
+    groups = bitwidth > 32 || room < 0 ? 0 : min(count >> 3, room ÷ bitwidth + 1)
+    groups > 0 && GC.@preserve bytes _unpackgroups!(output, offset, groups,
+        pointer(bytes, base), bitwidth)
+    done = 8 * groups
     room = length(bytes) - 7 - base
-    fast = bitwidth > 56 || room < 0 ? 0 : min(count, (8 * room + 7) ÷ bitwidth + 1)
+    fast = bitwidth > 56 || room < 0 ? done : max(done, min(count, (8 * room + 7) ÷ bitwidth + 1))
     GC.@preserve bytes begin
         pointer0 = pointer(bytes, base)
-        @inbounds for index in 0:(fast - 1)
+        @inbounds for index in done:(fast - 1)
             bit = index * bitwidth
             word = ltoh(unsafe_load(Ptr{UInt64}(pointer0 + (bit >> 3))))
             output[offset + index + 1] = ((word >> (bit & 7)) & mask) % U
