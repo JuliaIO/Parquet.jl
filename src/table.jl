@@ -169,7 +169,7 @@ end
 
 function _flatcolumnvector(node::SchemaNode, rows::Int, limits::Limits,
         options::_ReadOptions)
-    _, L = _valueconverter(node.element, limits, options)
+    _, L = _valueconverter(node, limits, options)
     return Vector{_flatoutputtype(L, node)}(undef, rows)
 end
 
@@ -184,7 +184,7 @@ function _readtablechunk!(column::Vector, offset::Int, file::File,
         "flat column $(node.column_index) has $(md.num_values) values for " *
         "$(group.num_rows) rows"))
     start, stop = _chunkrange(md, file.footer.offset)
-    convert, _ = _valueconverter(node.element, limits, options)
+    convert, _ = _valueconverter(node, limits, options)
     _readflatchunk!(column, offset, _physicaleltype(md.type_), convert, file.source, md,
         node, start, stop, limits, budget, buffers)
     return convert isa _StringPayloads ? convert.buffers : nothing
@@ -423,6 +423,7 @@ function File(input; select=nothing, drop=nothing, filter=nothing, limit=nothing
         schema = Schema(metadata; limits=limits)
         _validatetablerowgroups(metadata, schema, limits)
         _validatetablechunkranges(metadata, schema, footer.offset)
+        options = _ReadOptions(options.int96, _arrowhints(metadata, schema, limits))
         plan = _readplan(metadata, schema, request, Int(ntasks), options, limits)
         file = File(src, footer, metadata, plan, owned, false)
         owned && finalizer(close!, file)

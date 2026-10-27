@@ -240,16 +240,39 @@ _bitcopy(::_DecimalValue) = true
 _aftercopy!(convert, dest::Vector, offset::Int, count::Int) = nothing
 
 # Element types a read produces where the file leaves a choice: `int96` is the
-# resolution of INT96 timestamps.
+# resolution of INT96 timestamps, and `arrow` the types the file's ARROW:schema gives
+# its leaves (see `_arrowhints`).
 struct _ReadOptions
     int96::DataType
+    arrow::Dict{Vector{String},Any}
 end
 
-function _ReadOptions(; int96::Type=Dates.Nanosecond)
+function _ReadOptions(; int96::Type=Dates.Nanosecond,
+        arrow::Dict{Vector{String},Any}=Dict{Vector{String},Any}())
     int96 in (Dates.Nanosecond, Dates.Microsecond, Dates.Millisecond) ||
         throw(ArgumentError("int96 must be Dates.Nanosecond, Dates.Microsecond, or " *
             "Dates.Millisecond, got $int96"))
-    return _ReadOptions(int96)
+    return _ReadOptions(int96, arrow)
+end
+
+# An Arrow duration stored as INT64: the count of its unit.
+struct _PeriodValue{P} end
+(::_PeriodValue{P})(value::Int64) where {P} = P(value)
+_bitcopy(::_PeriodValue) = true
+
+# The converter and element type of leaf `node`: its Parquet type, or the time zone or
+# duration unit the file's ARROW:schema records for it.
+function _valueconverter(node::SchemaNode, limits::Limits, options::_ReadOptions)
+    hint = get(options.arrow, node.path, nothing)
+    if hint isa String
+        kind = _temporallogicalkind(node.element)
+        L = Durations.ZonedTimestamp{_temporalperiod(kind.unit),Symbol(hint)}
+        return _TimestampValue{L}(), L
+    elseif hint isa Int16
+        P = _ARROW_TIME_UNITS[hint + 1]
+        return _PeriodValue{P}(), P
+    end
+    return _valueconverter(node.element, limits, options)
 end
 
 # Decimal, binary, and other annotations go through the general per-value conversion.

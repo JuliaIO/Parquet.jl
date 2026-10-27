@@ -556,6 +556,8 @@ function _nestedwritephysical(kind, element::Metadata.SchemaElement, value,
             return UInt8[byte for byte in value]
         end
         expected = _physicaleltype(physical)
+        physical == Metadata.Type.INT64 && value isa Dates.Period &&
+            return Int64(Dates.value(value))
         value isa expected || throw(ArgumentError(
             "physical field $(repr(element.name)) contains $(typeof(value)); " *
             "expected $expected"))
@@ -1054,6 +1056,15 @@ function Base.getindex(fields::_ProvenanceWriteFields, index::Int)
     return fields.fields[index]
 end
 
+# The values a stored leaf takes back: what it reads as, including the time zone of a
+# UTC-adjusted timestamp and the duration unit of an INT64 column that an ARROW:schema
+# gives on read.
+_provenancevaluetype(::Type{Durations.ZonedTimestamp{P,Z}}) where {P,Z} =
+    Durations.ZonedTimestamp{P}
+_provenancevaluetype(::Type{Int64}) = Union{Int64,Dates.Second,Dates.Millisecond,
+    Dates.Microsecond,Dates.Nanosecond}
+_provenancevaluetype(T::Type) = T
+
 function _provenancenode(plan::_NestedPlan)
     isempty(_nestedleafrange(plan)) && throw(ArgumentError(
         "schema-bearing writes do not support zero-leaf group " *
@@ -1061,7 +1072,7 @@ function _provenancenode(plan::_NestedPlan)
     if plan isa _NestedLeafPlan
         element = plan.source.element
         return _NestedWriteNode(plan,
-            _logicaleltype(element, _physicaleltype(element.type_)),
+            _provenancevaluetype(_logicaleltype(element, _physicaleltype(element.type_))),
             _NestedWriteNode[])
     elseif plan isa _NestedStructPlan
         return _NestedWriteNode(plan, StructValue,

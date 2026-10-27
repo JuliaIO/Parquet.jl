@@ -73,7 +73,7 @@ function _readnestedstream(file::File, metadata::Metadata.FileMetaData,
     budget::_ByteBudget, entries::Int, buffers::_PageBuffers, options::_ReadOptions)
     node = leaf.source
     T = _physicaleltype(node.element.type_)
-    convert, L = _valueconverter(node.element, limits, options)
+    convert, L = _valueconverter(node, limits, options)
     capacity = _claimcapacity(entries, _checkedsourcelength(file.source))
     sink = _StreamSink(sizehint!(UInt16[], capacity), sizehint!(UInt16[], capacity),
         sizehint!(L[], capacity))

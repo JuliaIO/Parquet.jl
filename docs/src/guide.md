@@ -32,10 +32,16 @@ calling task. `DataAPI.metadata(table)` gives the file's key-value metadata and
 | DECIMAL(p, s) | `DataDecimals.Decimal{p,s}`; `Parquet.Decimal` when p > 76 |
 | DATE, TIME | `Dates.Date`, `Dates.Time` |
 | TIMESTAMP(unit) | `Durations.Timestamp{unit}` (`Millisecond`, `Microsecond`, `Nanosecond`) |
-| TIMESTAMP(unit), adjusted to UTC | `Durations.ZonedTimestamp{unit,:UTC}` |
+| TIMESTAMP(unit), adjusted to UTC | `Durations.ZonedTimestamp{unit,:UTC}`, or the time zone the file's ARROW:schema gives |
+| INT64 that the ARROW:schema calls a duration | `Dates.Second`, `Millisecond`, `Microsecond`, or `Nanosecond` |
 | INT96 | `Durations.Timestamp{Nanosecond}`, or the resolution given by `int96` |
 | INTERVAL | `Durations.Duration` |
 | JSON, BSON | `Parquet.JSONValue`, `Parquet.BSONValue` |
+
+pyarrow, Polars, and other Arrow-based writers store their Arrow schema in the file's
+`ARROW:schema` metadata. A read takes the time zones of UTC-adjusted timestamps and the
+units of durations from it, including inside structs, lists, and maps; the Parquet
+schema decides everything else, and a schema that does not match the file is ignored.
 
 An optional column's elements are `Union{Missing,T}`. A local `Durations.Timestamp`
 compares with `Dates.DateTime`, so a filter such as
