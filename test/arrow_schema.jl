@@ -40,6 +40,13 @@ zoned(P, ticks) = DS.ZonedTimestamp{P,:UTC}(DS.Timestamp{P}(Dates.UTInstant(P(ti
             Parquet.Base64.base64encode(UInt8[0xff, 0xff, 0xff, 0xff, 0x10, 0x00, 0x00, 0x00]))
         @test_throws Parquet.FormatError Parquet._decodearrowschema(text, Parquet.Limits())
     end
+
+    # A zone name with a NUL byte (a corrupt footer) is ignored; the column reads as UTC.
+    bytes = Parquet._encodefile((ts=[zoned(Microsecond, 5)],))
+    schema = Parquet.Schema(Parquet.File(bytes).metadata)
+    text = Parquet._arrowschema(schema; hints=Dict{Vector{String},Any}(["ts"] => "Bad\0Zone"))
+    table = Parquet.Table(witharrowschema(bytes, text))
+    @test only(table.ts) == zoned(Microsecond, 5)
 end
 
 @testset "ARROW:schema read types" begin

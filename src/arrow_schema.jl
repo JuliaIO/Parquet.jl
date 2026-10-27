@@ -391,9 +391,12 @@ function _arrowhints!(hints, node::SchemaNode, field::_ArrowField)
             err isa Union{FormatError,UnsupportedFeatureError} || rethrow()
             return
         end
+        # A zone with a NUL byte cannot name a zone (or a Julia Symbol); the column then
+        # reads as UTC.
         if field.type == _ARROW_TIMESTAMP && kind isa _TimestampLogicalKind &&
                 kind.is_adjusted_to_utc && field.timezone !== nothing &&
-                !isempty(field.timezone) && field.timezone != "UTC"
+                !isempty(field.timezone) && field.timezone != "UTC" &&
+                !occursin('\0', field.timezone)
             hints[node.path] = field.timezone
         elseif field.type == _ARROW_DURATION && kind === nothing &&
                 element.type_ == Metadata.Type.INT64 && 0 <= field.unit <= 3
