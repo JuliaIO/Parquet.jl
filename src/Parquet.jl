@@ -40,6 +40,7 @@ include("table.jl")
 include("write_nested.jl")
 include("write_splitting.jl")
 include("page_index.jl")
+include("precompile.jl")
 
 if VERSION >= v"1.11"
     Core.eval(@__MODULE__, Expr(:public, :BSONValue, :Decimal, :File, :Interval,
