@@ -69,10 +69,12 @@ function validatepageheader(header::Metadata.PageHeader)
     return kind
 end
 
+# A header cut off by the `max_page_header_bytes` window, rather than by the end of the
+# column chunk, is too large, not malformed.
 function _pageheaderfailure(@nospecialize(err), reader::Thrift.Reader, window::Int64,
         available::Int64, limits::Limits)
     clipped = window < available
-    if err isa FormatError && clipped && Thrift.remaining(reader) == 0
+    if err isa FormatError && clipped && Thrift.truncated(reader)
         requested = window == typemax(Int64) ? window : window + 1
         throw(LimitError(:page_header_bytes, requested,
             limits.max_page_header_bytes))

@@ -62,6 +62,8 @@ mutable struct Reader{B<:AbstractVector{UInt8}}
     depth::Int
     headerpos::Int
     previd::Int16
+    # Bytes the read that ran past `last` needed, or 0.
+    shortfall::Int
 end
 
 # `budget` is charged for the strings, byte vectors, lists, and structs decoded.
@@ -71,7 +73,7 @@ function Reader(bytes::AbstractVector{UInt8}, first::Integer, last::Integer;
     last <= lastindex(bytes) || throw(BoundsError(bytes, last))
     last >= first - 1 || throw(ArgumentError("Thrift reader range is reversed"))
     return Reader{typeof(bytes)}(bytes, Int(first), Int(last), limits, budget,
-        Int(first), 0, Int(first), Int16(0))
+        Int(first), 0, Int(first), Int16(0), 0)
 end
 
 function Reader(bytes::AbstractVector{UInt8}; limits::Limits=Limits(),
@@ -107,7 +109,13 @@ end
 
 function _need(r::Reader, count::Integer)
     count <= remaining(r) && return
+    r.shortfall = Int(min(count, typemax(Int)))
     throw(FormatError("Thrift data is truncated: $count bytes needed, $(remaining(r)) available"))
+end
+
+# Whether decoding stopped because the bytes ran out (rather than on invalid data).
+function truncated(r::Reader)
+    return r.shortfall > 0
 end
 
 function readbyte(r::Reader)

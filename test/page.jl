@@ -322,7 +322,7 @@ end
     end
     rejectlargestatistics()
     GC.gc()
-    @test @allocated(rejectlargestatistics()) < 200_000
+    @test @allocated(rejectlargestatistics()) < 10_000
 end
 
 @testset "page CRC32" begin
