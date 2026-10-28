@@ -79,8 +79,11 @@ declines. Ordinary nesting is far below either bound.
 Reads use statistics, the page index, bloom filters, and dictionary pages only to skip
 data a filter cannot match, and only where the column's sort order defines them. Bounds
 that fail validation (physical width, logical range, or the known statistics bugs of a
-writer, such as binary statistics from parquet-mr before 1.8 and float statistics from
-Polars) are ignored.
+writer) are ignored, as are the statistics of a column whose annotation its physical
+type cannot carry. The writer bugs are binary statistics from parquet-mr before 1.8;
+from parquet-mr before 1.10 and parquet-cpp before 1.3, statistics of unsigned integers
+and of byte arrays, decimals stored as bytes among them, unless the minimum equals the
+maximum; and Polars' float statistics.
 
 ## Not supported
 
