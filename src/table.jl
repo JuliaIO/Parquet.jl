@@ -1020,8 +1020,9 @@ function Base.show(io::IO, ::MIME"text/plain", metadata::Metadata.FileMetaData)
             element = _subtreeend(schema, element) + 1
         end
     end
-    print(io, "Parquet file metadata: ", metadata.num_rows, " rows in ", length(groups),
-        " row groups, ", length(names), " columns")
+    plural(n, noun) = string(n, " ", noun, n == 1 ? "" : "s")
+    print(io, "Parquet file metadata: ", plural(metadata.num_rows, "row"), " in ",
+        plural(length(groups), "row group"), ", ", plural(length(names), "column"))
     isempty(names) || print(io, "\n  columns: ", join(first(names, 10), ", "),
         length(names) > 10 ? ", … ($(length(names) - 10) more)" : "")
     metadata.created_by === nothing || print(io, "\n  created by: ", metadata.created_by)
