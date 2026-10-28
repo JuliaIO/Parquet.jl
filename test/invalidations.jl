@@ -22,6 +22,12 @@
     invalidated = parse(Int, read(`$(Base.julia_cmd()) --startup-file=no
         --project=$project -e $script`, String))
     # Thousands were invalidated when kernels were also inferred for abstract types;
-    # the bound leaves room for small changes in those packages.
-    @test invalidated < 100
+    # the bound leaves room for small changes in those packages. A prerelease Julia
+    # adds its own Base code to what those packages invalidate, so there the count is
+    # only reported.
+    if isempty(VERSION.prerelease)
+        @test invalidated < 100
+    else
+        @info "Parquet method instances invalidated on Julia $VERSION: $invalidated"
+    end
 end
