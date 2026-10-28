@@ -370,8 +370,10 @@ function _PageBuffers()
         IdDict{Type,Vector}(), BitVector[], Vector{Int}[])
 end
 
-function _scratch(vectors::IdDict{Type,Vector}, ::Type{L}) where {L}
-    return get!(() -> L[], vectors, L)::Vector{L}
+function _scratch(vectors::IdDict{Type,Vector}, ::Type{L}, key::Type=L) where {L}
+    vector = get(vectors, key, nothing)
+    vector === nothing && (vectors[key] = vector = L[])
+    return vector::Vector{L}
 end
 
 # BYTE_ARRAY values as DataStrings payloads: up to 12 bytes inline, longer ones as views
@@ -1072,27 +1074,27 @@ _filltags!(tags::Ptr{UInt8}, tag::UInt8, count::Int) =
 # (checked when the package compiles, which is once per Julia build).
 function _checkuniontags()
     try
-        for (L, value) in ((Int8, Int8(-3)), (Int32, Int32(7)), (Float64, 2.5),
-                (NTuple{3,Int64}, (1, 2, 3)))
-            O = Union{Missing,L}
-            output = Vector{O}(undef, 6)
-            popfirst!(output)
-            tags = _uniontags(output)
-            GC.@preserve output for index in 1:5
-                if isodd(index)
-                    unsafe_store!(Ptr{L}(pointer(output)), value, index)
-                    unsafe_store!(tags, _uniontag(O, L), index)
-                else
-                    unsafe_store!(tags, _uniontag(O, Missing), index)
-                end
-            end
-            all(index -> output[index] === (isodd(index) ? value : missing), 1:5) ||
-                return false
-        end
-        return true
+        return _checkuniontag(Int8(-3)) && _checkuniontag(Int32(7)) &&
+            _checkuniontag(2.5) && _checkuniontag((1, 2, 3))
     catch
         return false
     end
+end
+
+function _checkuniontag(value::L) where {L}
+    O = Union{Missing,L}
+    output = Vector{O}(undef, 6)
+    popfirst!(output)
+    tags = _uniontags(output)
+    GC.@preserve output for index in 1:5
+        if isodd(index)
+            unsafe_store!(Ptr{L}(pointer(output)), value, index)
+            unsafe_store!(tags, _uniontag(O, L), index)
+        else
+            unsafe_store!(tags, _uniontag(O, Missing), index)
+        end
+    end
+    return all(index -> output[index] === (isodd(index) ? value : missing), 1:5)
 end
 
 const _UNIONTAGS = _checkuniontags()
@@ -1320,7 +1322,7 @@ function _readflatchunk!(output::Vector{O}, offset::Int, ::Type{P}, convert,
     L = Base.nonmissingtype(O)
     sink = _FlatSink{O,L,node.max_definition_level == 0}(output, offset,
         _scratch(buffers.dense, L), UInt16(node.max_definition_level))
-    _readchunk!(sink, P, L, convert, src, md, node, start, stop, limits, budget,
+    _barrier(_readchunk!, sink, P, L, convert, src, md, node, start, stop, limits, budget,
         buffers; checksum=checksum)
     return output
 end

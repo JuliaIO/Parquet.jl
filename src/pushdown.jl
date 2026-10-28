@@ -236,7 +236,8 @@ _negate(result::Union{Nothing,Bool}) = result === nothing ? nothing : !result
 # `op(x, value)` as the filter evaluates it, or `nothing` when that throws or is not a Bool.
 function _holds(op, x, value)
     result = try
-        op(x, value)
+        # Statistics and filter values have types known at run time.
+        _barrier(op, x, value)
     catch err
         err isa InterruptException && rethrow()
         return nothing
@@ -303,6 +304,7 @@ function _strcan(expr::Tables.StrPred, range::_ValueRange)
     lo, hi = range.lo, range.hi
     (expr.kind == Tables.STR_STARTSWITH && lo isa String && hi isa String) ||
         return _CAN_TRUE | _CAN_FALSE
+    lo, hi = lo::String, hi::String
     prefix = codeunits(expr.s)
     lowprefix = view(codeunits(lo), 1:min(length(prefix), ncodeunits(lo)))
     # Values with the prefix sort from the prefix itself up to the prefix followed by
@@ -345,8 +347,8 @@ end
 
 # What pruning needs about one read: the file, its plan, the prepared filter, and the
 # read's fields (`nothing` for nested ones).
-struct _PruneContext
-    file::File
+struct _PruneContext{F<:File}
+    file::F
     plan::_ReadPlan
     pred::_Pred
     leaves::Vector{_PredLeaf}
@@ -499,7 +501,7 @@ function _physicalkeys(field::_PruneField, value)
     convert = field.convert
     if convert isa _StringPayloads
         convert isa _StringPayloads{true} && value isa AbstractString || return nothing
-        return (codeunits(String(value)),)
+        return (codeunits(String(value)::String),)
     end
     physical = element.type_
     if physical in (Metadata.Type.FLOAT, Metadata.Type.DOUBLE)
@@ -605,7 +607,9 @@ function _dictionaryvalues(ctx::_PruneContext, field::_PruneField,
         _charge!(ctx.budget, _pagecharge(P, frame, entries))
         convert, L = _valueconverter(node, limits, ctx.plan.options)
         values = Base.nonmissingtype(_flatoutputtype(L, node))[]
-        _dictionarypage!(values, P, convert, frame, md, node, _PageBuffers(), limits)
+        # The value types are known at run time.
+        _barrier(_dictionarypage!, values, P, convert, frame, md, node, _PageBuffers(),
+            limits)
         convert isa _StringPayloads ?
             _payloadvector(node, false, values, convert.buffers) : values
     catch err
@@ -902,7 +906,7 @@ function _filterpart(ctx::_PruneContext, index::Int)
     _refinecans!(cans, ctx, group)
     _has(_can(ctx.pred, cans), _CAN_TRUE) || return nothing
     pages = Union{Nothing,Tuple{Vector{Int},Vector{UInt8}}}[nothing for _ in ctx.leaves]
-    ranges = Dict{Int,Any}()
+    ranges = Dict{Int,Union{Nothing,Tuple{Vector{Int},Vector{_ValueRange}}}}()
     for leaf in ctx.leaves
         leaf.field == 0 && continue
         field = ctx.fields[leaf.field]
@@ -1327,27 +1331,36 @@ function _decodechunk(file::File, group::Metadata.RowGroup, wanted::Vector{UnitR
         "$(group.num_rows) rows"))
     start, stop = _chunkrange(md, file.footer.offset)
     convert, L = _valueconverter(node, limits, options)
-    O = _flatoutputtype(L, node)
-    # A gather keeps one page at a time in a scratch vector of the task (keyed apart from
-    # the sinks' own scratch, which is keyed by element type).
-    values = gather === nothing ?
-        sizehint!(O[], _claimcapacity(_rowcount(wanted), stop - start)) :
-        empty!(get!(() -> O[], buffers.dense, Tuple{O})::Vector{O})
     pages === missing &&
         (pages = _chunkpages(file, chunk, Int(group.num_rows), start, stop, limits, budget))
     # A planned source holds the pages the offset index leads to; without an index the
     # chunk is read whole.
     src = file.source
     src isa MemorySource || pages !== nothing || (src = _ChunkSource(src, start, stop))
-    sink = _FlatSink{O,Base.nonmissingtype(O),node.max_definition_level == 0}(values, 0,
-        _scratch(buffers.dense, Base.nonmissingtype(O)), UInt16(node.max_definition_level))
-    rows, dictionary = _readselectedchunk!(sink, _physicaleltype(md.type_),
-        Base.nonmissingtype(O), convert, src, md, node, start, stop, limits, budget,
-        buffers, wanted, pages, gather; checksum=options.checksum)
+    return _barrier(_decodechunk, _flatoutputtype(L, node), convert, src, md, node, start,
+        stop, limits, budget, buffers, wanted, pages, gather,
+        options.checksum)::Union{Nothing,_DecodedPart}
+end
+
+function _decodechunk(::Type{O}, convert, src::AbstractSource, md::Metadata.ColumnMetaData,
+        node::SchemaNode, start::Int64, stop::Int64, limits::Limits, budget::_ByteBudget,
+        buffers::_PageBuffers, wanted::Vector{UnitRange{Int}},
+        pages::Union{Nothing,_ChunkPages}, gather, checksum::UInt8) where {O}
+    L = Base.nonmissingtype(O)
+    # A gather keeps one page at a time in a scratch vector of the task (keyed apart from
+    # the sinks' own scratch, which is keyed by element type).
+    values = gather === nothing ?
+        sizehint!(O[], _claimcapacity(_rowcount(wanted), stop - start)) :
+        empty!(_scratch(buffers.dense, O, Tuple{O}))
+    sink = _FlatSink{O,L,node.max_definition_level == 0}(values, 0,
+        _scratch(buffers.dense, L), UInt16(node.max_definition_level))
+    rows, dictionary = _barrier(_readselectedchunk!, sink, _physicaleltype(md.type_), L,
+        convert, src, md, node, start, stop, limits, budget, buffers, wanted, pages,
+        gather; checksum=checksum)::Tuple{Vector{UnitRange{Int}},Int}
     if gather isa _PageFilter
         # The kept values (only those that matched) and the buffers they point into,
         # all of which stay.
-        kept = something(gather.values, O[])
+        kept = something(gather.values, O[])::Vector{O}
         return _DecodedPart(kept, gather.rows,
             convert isa _StringPayloads ? gather.buffers : nothing, length(gather.buffers))
     end
@@ -1385,6 +1398,10 @@ function _alignedvalues(decoded::_DecodedPart, wanted::Vector{UnitRange{Int}})
     _gatherrows!(values, 0, decoded.values, decoded.rows, wanted)
     return values
 end
+
+# The values of `decoded` for the rows of `wanted`, as a filter sees them.
+_filtervalues(decoded::_DecodedPart, wanted::Vector{UnitRange{Int}}, node::SchemaNode) =
+    _filtercolumn(_alignedvalues(decoded, wanted), decoded, node)
 
 # The column a filter sees: STRING payloads as a StringVector over their pages.
 function _filtercolumn(values::AbstractVector, decoded::_DecodedPart, node::SchemaNode)
@@ -1429,18 +1446,20 @@ function _evalmask(expr, columns::NamedTuple, rows::Int)
             expr isa Tables.IsNull || return falses(rows), falses(rows)
             return expr.negated ? (falses(rows), trues(rows)) : (trues(rows), falses(rows))
         end
+        # The column and the value are known only at run time: the masks compute behind
+        # `_barrier`, compiled for their concrete types.
         t, f = BitVector(undef, rows), BitVector(undef, rows)
         if expr isa Tables.IsNull
-            _nullmask!(t, f, column, expr.negated)
+            _barrier(_nullmask!, t, f, column, expr.negated)
         elseif expr isa Tables.Cmp
-            value = _columnvalue(Base.nonmissingtype(eltype(column)), expr.rhs)
-            _leafmask!(t, f, column, Base.Fix2(_CMPOPS[Int(expr.op)], value))
+            value = _barrier(_columnvalue, Base.nonmissingtype(eltype(column)), expr.rhs)
+            _barrier(_leafmask!, t, f, column, Base.Fix2(_CMPOPS[Int(expr.op)], value))
         elseif expr isa Tables.In
-            _leafmask!(t, f, column, Base.Fix2(in, expr.values))
+            _barrier(_leafmask!, t, f, column, Base.Fix2(in, expr.values))
         else
             predicate = expr.kind == Tables.STR_STARTSWITH ? startswith :
                 expr.kind == Tables.STR_ENDSWITH ? endswith : contains
-            _leafmask!(t, f, column, Base.Fix2(predicate, expr.s))
+            _barrier(_leafmask!, t, f, column, Base.Fix2(predicate, expr.s))
         end
         return t, f
     end
@@ -1461,8 +1480,12 @@ function _columnvalue(::Type{T}, value) where {T}
     return converted isa T && _holds(==, converted, value) === true ? converted : value
 end
 
+# The masks and the column have the same indices. (Two-argument `eachindex` would check
+# that too, but its error path goes through code that loading CategoricalArrays
+# invalidates.)
 function _leafmask!(t::BitVector, f::BitVector, column::AbstractVector, predicate::F) where {F}
-    @inbounds for index in eachindex(t, column)
+    _checkmaskaxes(t, column)
+    @inbounds for index in eachindex(t)
         value = column[index]
         result = ismissing(value) ? missing : predicate(value)
         t[index] = result === true
@@ -1472,13 +1495,18 @@ function _leafmask!(t::BitVector, f::BitVector, column::AbstractVector, predicat
 end
 
 function _nullmask!(t::BitVector, f::BitVector, column::AbstractVector, negated::Bool)
-    @inbounds for index in eachindex(t, column)
+    _checkmaskaxes(t, column)
+    @inbounds for index in eachindex(t)
         null = ismissing(column[index])
         t[index] = null != negated
         f[index] = null == negated
     end
     return
 end
+
+_checkmaskaxes(mask::BitVector, column::AbstractVector) = axes(column) == axes(mask) ||
+    throw(DimensionMismatch("a filter column has $(length(column)) values for " *
+        "$(length(mask)) rows"))
 
 # The rows (0-based ranges of the group) where `mask`, over the rows of `rows` in order,
 # is true.
@@ -1565,8 +1593,8 @@ function _readselectedflat(file::File, plan::_ReadPlan, parts::Vector{_GroupRows
     _readmap(tasks, _readtasks(file, plan.ntasks, length(tasks))) do (fieldindex, task), buffers
         for index in (task == 0 ? eachindex(parts) : (task:task))
             counts[index] > 0 || continue
-            _readselectedpart!(columns[fieldindex], pages[fieldindex], decoded, file,
-                metadata, parts, selected, starts, counts, fieldindex, index,
+            _barrier(_readselectedpart!, columns[fieldindex], pages[fieldindex], decoded,
+                file, metadata, parts, selected, starts, counts, fieldindex, index,
                 fields[fieldindex], limits, budget, buffers, options,
                 get(locatedof, (fieldindex, index), missing))
         end
@@ -1621,7 +1649,7 @@ function _readselectedpart!(column::Vector, pages::Vector{Vector{Vector{UInt8}}}
         return
     end
     _growto!(column, starts[index] + counts[index])
-    _gatherrows!(column, starts[index], piece.values, piece.rows, selected[index])
+    _barrier(_gatherrows!, column, starts[index], piece.values, piece.rows, selected[index])
     if piece.pages !== nothing
         kept = Vector{UInt8}[]
         _keepstrings!(column, (starts[index] + 1):(starts[index] + counts[index]),
@@ -1665,6 +1693,7 @@ function _filterselected!(decoded::Dict{Tuple{Int,Int},_DecodedPart},
             end
             fieldindex = only(filterfields)
             for (index, result) in zip(batch, results)
+                result = result::_DecodedPart
                 selected[index] = result.rows
                 decoded[(fieldindex, index)] = result
             end
@@ -1679,10 +1708,10 @@ function _filterselected!(decoded::Dict{Tuple{Int,Int},_DecodedPart},
             end
             _readmap(batch, _readtasks(file, plan.ntasks, length(batch))) do index, _
                 rows = parts[index].rows
-                columns = NamedTuple{Tuple(names[fieldindex] for fieldindex in filterfields)}(Tuple(
-                    _filtercolumn(_alignedvalues(decoded[(fieldindex, index)], rows),
-                        decoded[(fieldindex, index)], fields[fieldindex])
-                    for fieldindex in filterfields))
+                columns = NamedTuple{Tuple(Symbol[names[fieldindex]
+                    for fieldindex in filterfields])}(Tuple(Any[_barrier(_filtervalues,
+                        decoded[(fieldindex, index)], rows, fields[fieldindex])
+                    for fieldindex in filterfields]))
                 mask, _ = _evalmask(plan.bound.filter, columns, _rowcount(rows))
                 selected[index] = _maskranges(mask, rows)
                 return nothing

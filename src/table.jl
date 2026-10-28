@@ -117,16 +117,16 @@ end
 # than for each combination of result types. An error from `f` is rethrown as itself
 # rather than in a TaskFailedException.
 function _readmap(f, indices, ntasks::Int)
+    # Assigned once, so the worker closure captures it unboxed.
+    results = Vector{Any}(undef, length(indices))
     if ntasks <= 1
         buffers = _PageBuffers()
-        results = Vector{Any}(undef, length(indices))
         for (position, index) in enumerate(indices)
             results[position] = f(index, buffers)
         end
         return results
     end
     items = collect(indices)
-    results = Vector{Any}(undef, length(items))
     queue = _ReadQueue(1)
     workers = map(1:min(ntasks, length(items))) do _
         return errormonitor(Threads.@spawn _readworker(f, items, results, queue))
@@ -197,8 +197,9 @@ function _readtablechunk!(column::Vector, offset::Int, file::File,
             "$(group.num_rows) rows"))
         start, stop = _chunkrange(md, file.footer.offset)
         convert, _ = _valueconverter(node, limits, options)
-        _readflatchunk!(column, offset, _physicaleltype(md.type_), convert, file.source, md,
-            node, start, stop, limits, budget, buffers; checksum=options.checksum)
+        _barrier(_readflatchunk!, column, offset, _physicaleltype(md.type_), convert,
+            file.source, md, node, start, stop, limits, budget, buffers;
+            checksum=options.checksum)
         return convert isa _StringPayloads ? convert.buffers : nothing
     catch err
         err isa FormatError || rethrow()
@@ -313,10 +314,11 @@ function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Sch
     end
 end
 
-# Copy of a Thrift struct with some fields replaced.
+# Copy of a Thrift struct with some fields replaced. The replacements' types may be
+# known only at run time, so the copy is constructed behind `_barrier`.
 function _withfields(value::T; fields...) where {T}
-    return T((haskey(fields, name) ? fields[name] : getfield(value, name)
-        for name in fieldnames(T))...)
+    return _barrier(T, (haskey(fields, name) ? fields[name] : getfield(value, name)
+        for name in fieldnames(T))...)::T
 end
 
 # Index of the last element in the preorder subtree that starts at `index`.
@@ -516,7 +518,9 @@ function _readplan(metadata::Metadata.FileMetaData, schema::Schema, scan, ntasks
     scan === nothing && return _ReadPlan(nothing, metadata, schema, ntasks, options, limits,
         colmetadata)
     sourcenames = _tablenames(schema, limits)
-    bound = Tables.resolve(_scanfor(scan, sourcenames), sourcenames)
+    # Behind `_barrier`: Tables resolves the scan's untyped selections.
+    bound = _barrier(Tables.resolve, _scanfor(scan, sourcenames),
+        sourcenames)::Tables.BoundScan
     any(column -> column.type !== nothing, bound.columns) && throw(ArgumentError(
         "Parquet does not apply scan type overrides; convert the columns after reading"))
     positions = sort!(unique!(vcat(Int[column.index for column in bound.columns],
@@ -618,6 +622,13 @@ function _parquet816(src::AbstractSource, metadata::Metadata.FileMetaData,
     (producer.application === :parquet_mr &&
         _statisticsversionbelow(producer.version, UInt64(1), UInt64(2), UInt64(9))) ||
         return metadata
+    # Only old files need this; it compiles when one is read.
+    return _barrier(_parquet816sizes, src, metadata, footeroffset,
+        limits)::Metadata.FileMetaData
+end
+
+function _parquet816sizes(src::AbstractSource, metadata::Metadata.FileMetaData,
+        footeroffset::Int64, limits::Limits)
     groups = map(metadata.row_groups) do group
         columns = map(group.columns) do chunk
             md = chunk.meta_data
@@ -794,9 +805,11 @@ function Table(input; select=nothing, drop=nothing, filter=nothing, limit=nothin
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
         stringtype::Type=DataStrings.DataString, int96::Type=Dates.Nanosecond,
         checksum::Bool=false, partitioning=:hive, limits::Limits=Limits())
-    _isdataset(input) && return _readdataset(Dataset(input; partitioning=partitioning,
-        select=select, drop=drop, filter=filter, limit=limit, scan=scan, ntasks=ntasks,
-        stringtype=stringtype, int96=int96, checksum=checksum, limits=limits))
+    # A dataset's files are read with types known only at run time.
+    _isdataset(input) && return _barrier(_readdataset, _barrier(Dataset, input;
+        partitioning=partitioning, select=select, drop=drop, filter=filter, limit=limit,
+        scan=scan, ntasks=ntasks, stringtype=stringtype, int96=int96, checksum=checksum,
+        limits=limits))::Table
     budget = _ByteBudget(limits)
     file = File(input; select=select, drop=drop, filter=filter, limit=limit, scan=scan,
         ntasks=ntasks, stringtype=stringtype, int96=int96, checksum=checksum,
@@ -816,8 +829,9 @@ _isdataset(input) = false
 
 # Applies the filter, row bounds, order, and renames of a resolved scan to the columns
 # read for it, and restricts the schema to the output columns.
-function _scanresidual(columns::NamedTuple, rows::Int, bound::Tables.BoundScan,
-        metadata::Metadata.FileMetaData, schema::Schema, limits::Limits,
+Base.@nospecializeinfer function _scanresidual(columns::NamedTuple, rows::Int,
+        bound::Tables.BoundScan, metadata::Metadata.FileMetaData, schema::Schema,
+        limits::Limits,
         offset::Int=bound.offset, limit=bound.limit)
     # Compiled once, not for each set of column types: only the residual scan needs them.
     @nospecialize columns
@@ -841,18 +855,25 @@ function _scanresidual(columns::NamedTuple, rows::Int, bound::Tables.BoundScan,
             String[String(name) for name in names], limits)
         return output, rows, metadata, schema
     end
-    residual = Tables.Scan(; select=[readnames[position] => name
+    residual = Tables.Scan(; select=Pair{Symbol,Symbol}[readnames[position] => name
         for (position, name) in zip(positions, names)], filter=bound.filter,
         limit=limit, offset=offset, validate=bound.validate)
-    # With no column read, a stand-in column carries the row count to the executor.
-    result = Tables.scan(isempty(readnames) ? (rows=Base.OneTo(rows),) : columns,
-        residual)
-    outrows = Tables.rowcount(result)
-    output = NamedTuple{Tuple(names)}(Tuple(Tables.getcolumn(result, name)
-        for name in names))
+    # With no column read, a stand-in column carries the row count to the executor,
+    # which compiles for the columns' types.
+    output, outrows = _barrier(_scanexecute,
+        isempty(readnames) ? (rows=Base.OneTo(rows),) : columns, residual,
+        names)::Tuple{NamedTuple,Int}
     metadata, schema = _selectfields(metadata, schema, positions,
         String[String(name) for name in names], limits)
     return output, outrows, metadata, schema
+end
+
+# The columns `names` of the residual scan of `columns`, and their row count.
+function _scanexecute(columns::NamedTuple, residual::Tables.Scan, names::Vector{Symbol})
+    result = Tables.scan(columns, residual)
+    output = NamedTuple{Tuple(names)}(Tuple(Tables.getcolumn(result, name)
+        for name in names))
+    return output, Tables.rowcount(result)
 end
 
 # A table holds no file; `close` has nothing to release.
@@ -1221,7 +1242,7 @@ Base.names(x::Union{File,Table}) = String[String(name) for name in Tables.column
 
 function Tables.schema(table::Table)
     columns = _tablecolumns(table)
-    return Tables.Schema(Tuple(keys(columns)), Tuple(eltype(column) for column in columns))
+    return Tables.Schema(keys(columns), map(eltype, values(columns)))
 end
 
 function Tables.rowcount(table::Table)

@@ -17,7 +17,7 @@
 const _NESTED_READ_MAX_DEPTH = 1024
 
 function _nestedreadlabel(plan::_NestedPlan)
-    path = getfield(plan, :source).path
+    path = _plansource(plan).path
     isempty(path) && return "schema root"
     return "nested field $(repr(join(path, ".")))"
 end
@@ -135,7 +135,8 @@ function _assemblynode!(builder::_AssemblyBuilder, plan::_NestedPlan, keyed::Boo
     if plan isa _NestedStructPlan
         children = _AssemblyNode[_assemblynode!(builder, child, false, entries, stack)
             for child in plan.children]
-        R = _structrowtype(String[child.source.element.name for child in plan.children],
+        R = _structrowtype(
+            String[_plansource(child).element.name for child in plan.children],
             Type[child.eltype for child in children],
             1 + maximum(child -> child.depth, children; init=0))
     else
@@ -590,7 +591,7 @@ function _buildnode(field::_FieldAssembly, node::_AssemblyNode, pieces, count::I
     if plan isa _NestedStructPlan
         children = AbstractVector[_buildnode(field, child, pieces, count)
             for child in node.children]
-        names = String[child.source.element.name for child in plan.children]
+        names = String[_plansource(child).element.name for child in plan.children]
         return StructVector{T}(names, children, validity, count)
     end
     offsets = _nodearray(field, pieces, node.id, _ITEM_OFFSETS)

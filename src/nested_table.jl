@@ -51,15 +51,24 @@ function _readleafchunks(file::File, metadata::Metadata.FileMetaData,
         chunks; init=0)
     entries = sum(chunk -> _claimcapacity(chunk[2].num_values, chunk[3][2] - chunk[3][1]),
         chunks; init=0)
-    sink = _leafsink(path, L, _scratch(buffers.dense, L), rows, entries, buffers)
+    sink = _barrier(_leafsink, path, L, _scratch(buffers.dense, L), rows, entries, buffers)
+    return _barrier(_readleafpiece!, sink, _physicaleltype(node.element.type_), convert,
+        file, chunks, path, node, limits, budget, buffers, options)::_LeafPiece
+end
+
+# Decodes `chunks` (row group, chunk metadata, byte range) of `file`'s leaf at `path`
+# into `sink` and returns the leaf's piece.
+function _readleafpiece!(sink::_LeafSink{O,L}, ::Type{P}, convert, file::File,
+        chunks::Vector, path::_LeafPath, node::SchemaNode, limits::Limits,
+        budget::_ByteBudget, buffers::_PageBuffers, options::_ReadOptions) where {O,L,P}
     total = 0
     for (group, md, (start, stop)) in chunks
         state = sink.state
         before = state.slots[1]
         state.chunkstart = true
         try
-            _readchunk!(sink, _physicaleltype(node.element.type_), L, convert, file.source,
-                md, node, start, stop, limits, budget, buffers; checksum=options.checksum)
+            _readchunk!(sink, P, L, convert, file.source, md, node, start, stop, limits,
+                budget, buffers; checksum=options.checksum)
             state.slots[1] - before == group.num_rows || throw(FormatError(
                 "leaf $(path.leaf) has $(state.slots[1] - before) rows in a row group of " *
                 "$(group.num_rows)"))
@@ -77,6 +86,9 @@ function _readleafchunks(file::File, metadata::Metadata.FileMetaData,
     return piece
 end
 
+_concatparts(::Type{V}, parts::Vector{AbstractVector}) where {V} =
+    _concat(V[part for part in parts])
+
 # An empty column of `node`'s rows.
 function _emptycolumn(node::_AssemblyNode)
     T = node.eltype
@@ -84,7 +96,7 @@ function _emptycolumn(node::_AssemblyNode)
     plan isa _NestedLeafPlan && return _fromrows(_columntype(T), T[])
     children = AbstractVector[_emptycolumn(child) for child in node.children]
     if plan isa _NestedStructPlan
-        names = String[child.source.element.name for child in plan.children]
+        names = String[_plansource(child).element.name for child in plan.children]
         return StructVector{T}(names, children, BitVector(), 0)
     end
     plan isa _NestedListPlan && return ListVector{T}([0], BitVector(), only(children))
@@ -105,7 +117,7 @@ function _readnestedcolumns(file::File, metadata::Metadata.FileMetaData, schema:
     columns = Vector{AbstractVector}(undef, length(fields))
     flat = Int[index for (index, field) in enumerate(fields) if _isflatfield(field)]
     if !isempty(flat)
-        names = String[fields[index].source.element.name for index in flat]
+        names = String[_plansource(fields[index]).element.name for index in flat]
         flatmetadata, flatschema = _selectfields(metadata, schema, flat, names, limits)
         columns[flat] = _readflattable(file, flatmetadata, flatschema, rows, limits,
             budget, ntasks, options)
@@ -144,7 +156,8 @@ function _readnestedcolumns(file::File, metadata::Metadata.FileMetaData, schema:
             sum(group -> Int(groups[group].num_rows), ranges[range]; init=0))
             for range in eachindex(ranges)]
         length(parts) == 1 && return parts[1]
-        column = _concat(_columntype(assembly.root.eltype)[part for part in parts])
+        # The column type is known at run time.
+        column = _barrier(_concatparts, _columntype(assembly.root.eltype), parts)
         budget.maximum == typemax(Int64) || _charge!(budget, Base.summarysize(column))
         return column
     end

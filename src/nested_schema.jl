@@ -43,6 +43,10 @@ struct _NestedMapPlan <: _NestedPlan
     leaf_range::UnitRange{Int32}
 end
 
+# The schema node of any plan (every `_NestedPlan` type has `source`), concretely typed
+# where the plan's own type is not known.
+_plansource(plan::_NestedPlan) = getfield(plan, :source)::SchemaNode
+
 struct _NestedSchemaPlan
     source::Schema
     root::_NestedStructPlan

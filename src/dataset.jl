@@ -92,10 +92,11 @@ function _dataset(inputs::Vector{Any}, paths::Vector{Union{Nothing,String}}, bas
     keys, values = partitioning === nothing ?
         (String[], [Union{Nothing,String}[] for _ in inputs]) : _hivepartitions(paths, base)
     partitions, partitiontypes = _hivevalues(keys, values, stringtype)
-    files = _readmap(eachindex(inputs), min(Int(ntasks), length(inputs))) do index, _
-        return _datasetfile(inputs[index], paths[index], partitions[index], stringtype,
-            int96, limits)
-    end
+    files = collect(_DatasetFile, _readmap(eachindex(inputs),
+            min(Int(ntasks), length(inputs))) do index, _
+        return _barrier(_datasetfile, inputs[index], paths[index], partitions[index],
+            stringtype, int96, limits)::_DatasetFile
+    end)
     names, types, elements = _unifycolumns(files, Symbol.(keys))
     colmetadata = map(names) do name
         for file in files
@@ -121,13 +122,14 @@ function _dataset(inputs::Vector{Any}, paths::Vector{Union{Nothing,String}}, bas
             partition[index] = position
         end
     end
-    bound = request === nothing ? nothing : _bindscan(
-        Tables.resolve(_scanfor(request, names), names), Dict{Symbol,Type}(zip(names, types)))
+    bound = request === nothing ? nothing :
+        _bindscan(_barrier(Tables.resolve, _scanfor(request, names), names)::Tables.BoundScan,
+            Dict{Symbol,Type}(zip(names, types)))
     bound === nothing || any(column -> column.type !== nothing, bound.columns) &&
         throw(ArgumentError("Parquet does not apply scan type overrides; convert the " *
             "columns after reading"))
-    return Dataset(collect(_DatasetFile, files), names, types, elements, colmetadata,
-        partition, bound, Int(ntasks), stringtype, int96, checksum, limits)
+    return Dataset(files, names, types, elements, colmetadata, partition, bound,
+        Int(ntasks), stringtype, int96, checksum, limits)
 end
 
 ## Finding the files
@@ -411,7 +413,7 @@ _describe(file::_DatasetFile, index::Int) =
 # Columns of all files by name, in order of first appearance: the element type (with
 # `Missing` added when a file lacks the column or has it optional) and the stored schema
 # elements of its first file. Partition keys among them keep only their position.
-function _unifycolumns(files, keys::Vector{Symbol})
+function _unifycolumns(files::Vector{_DatasetFile}, keys::Vector{Symbol})
     names = Symbol[]
     types = Type[]
     elements = Vector{Metadata.SchemaElement}[]
@@ -552,11 +554,23 @@ end
 
 function _openpart(ds::Dataset, file::_DatasetFile, scan::Tables.Scan, ntasks::Int)
     try
-        return _openfile(file.input, (file.footer, file.metadata); scan=scan,
+        return _barrier(_openfile, file.input, (file.footer, file.metadata); scan=scan,
             ntasks=ntasks, stringtype=ds.stringtype, int96=ds.int96, checksum=ds.checksum,
-            limits=ds.limits)
+            limits=ds.limits)::File
     catch err
         _rethrowfor(err, file.path)
+    end
+end
+
+# `f(handle)` for `file` opened for `scan`, which is closed after. The source type of
+# a dataset's file (a path, bytes, or a source) is known only at run time, so `f` runs
+# behind `_barrier`.
+function _withpart(f, ds::Dataset, file::_DatasetFile, scan::Tables.Scan, ntasks::Int)
+    handle = _openpart(ds, file, scan, ntasks)
+    try
+        return _barrier(f, handle)
+    finally
+        close(handle)
     end
 end
 
@@ -628,18 +642,16 @@ end
 
 # A file's rows for the part `(offset, limit)` of its folded filter's matches.
 function _readpart(ds::Dataset, file::_DatasetFile, filter, offset::Int, limit, ntasks::Int)
-    handle = _openpart(ds, file, _filescan(ds, file, filter, offset, limit), ntasks)
-    try
-        table = try
-            _readtable(handle, eachindex(handle.plan.metadata.row_groups),
+    scan = _filescan(ds, file, filter, offset, limit)
+    table = _withpart(ds, file, scan, ntasks) do handle
+        try
+            return _readtable(handle, eachindex(handle.plan.metadata.row_groups),
                 _ByteBudget(ds.limits))
         catch err
             _rethrowfor(err, file.path)
         end
-        return _datasettable(ds, file, table)
-    finally
-        close(handle)
     end
+    return _datasettable(ds, file, table::Table)
 end
 
 # The whole dataset as one table.
@@ -695,12 +707,11 @@ end
 # A table of the dataset's columns with no rows.
 function _emptydatasettable(ds::Dataset)
     file = first(ds.files)
-    handle = _openpart(ds, file, _filescan(ds, file, Tables.AlwaysFalse(), 0, nothing), 1)
-    try
-        return _datasettable(ds, file, _readtable(handle, 1:0, _ByteBudget(ds.limits)))
-    finally
-        close(handle)
+    table = _withpart(ds, file, _filescan(ds, file, Tables.AlwaysFalse(), 0, nothing),
+        1) do handle
+        return _readtable(handle, 1:0, _ByteBudget(ds.limits))
     end
+    return _datasettable(ds, file, table::Table)
 end
 
 # One table of the rows of `tables` (one per file, in order, with the same columns).
@@ -796,12 +807,9 @@ function _filegroupsof(ds::Dataset, index::Int)
     file = ds.files[index]
     filter = _filefilter(ds, file)
     filter === false && return Int[]
-    handle = _openpart(ds, file, _filescan(ds, file, filter, 0, nothing), 1)
-    try
+    return _withpart(ds, file, _filescan(ds, file, filter, 0, nothing), 1) do handle
         return Int[group for (group, _, _) in _filegroups(handle)]
-    finally
-        close(handle)
-    end
+    end::Vector{Int}
 end
 
 function _datasetgroupsknown(ds::Dataset)
@@ -814,18 +822,17 @@ end
 function _readdatasetgroup(ds::Dataset, (index, group, offset, limit))
     file = ds.files[index]
     filter = _filefilter(ds, file)
-    handle = _openpart(ds, file, _filescan(ds, file,
-        filter === false ? Tables.AlwaysFalse() : filter, 0, nothing), ds.ntasks)
-    try
-        table = try
-            _readtable(handle, group:group, _ByteBudget(ds.limits); window=(offset, limit))
+    table = _withpart(ds, file, _filescan(ds, file,
+            filter === false ? Tables.AlwaysFalse() : filter, 0, nothing),
+            ds.ntasks) do handle
+        try
+            return _readtable(handle, group:group, _ByteBudget(ds.limits);
+                window=(offset, limit))
         catch err
             _rethrowfor(err, file.path)
         end
-        return _datasettable(ds, file, table)
-    finally
-        close(handle)
     end
+    return _datasettable(ds, file, table::Table)
 end
 
 Base.length(ds::Dataset) = length(_datasetgroupsknown(ds))
@@ -929,7 +936,8 @@ function _columnentries(x, column::Union{Symbol,Int})
     names, entries = _colmetadataentries(x)
     index = column isa Int ? column : findfirst(==(column), names)
     (index === nothing || !(1 <= index <= length(names))) && throw(ArgumentError(
-        "$(repr(column)) is not a column of this $(nameof(typeof(x)))"))
+        "$(column isa Symbol ? ":" : "")$column is not a column of this " *
+        "$(nameof(typeof(x)))"))
     return entries[index]
 end
 
