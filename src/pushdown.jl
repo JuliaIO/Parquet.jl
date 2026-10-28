@@ -114,8 +114,10 @@ end
 # columns it lacks are not checked).
 function _bindscan(bound::Tables.BoundScan, types::AbstractDict{Symbol,Type})
     bound.filter === nothing && return bound
-    return Tables.BoundScan(bound.columns, _bindfilter(bound.filter, types),
-        bound.filtercols, bound.limit, bound.offset, bound.validate)
+    # The filter's literals and the columns' types are known at run time.
+    filter = _barrier(_bindfilter, bound.filter, types)::Tables.ScanExpr
+    return Tables.BoundScan(bound.columns, filter, bound.filtercols, bound.limit,
+        bound.offset, bound.validate)
 end
 
 # The element type a filter on the top-level field `node` compares with, or `nothing`
@@ -145,13 +147,17 @@ function _bindfilter(expr, types::AbstractDict{Symbol,Type})
                 "the filter matches text in column $ref, which holds $S values"))
             return expr
         elseif expr isa Tables.Cmp
-            return Tables.Cmp(expr.op, expr.lhs, _bindliteral(ref, S, expr.rhs))
+            return Tables.Cmp(expr.op, expr.lhs, _barrier(_bindliteral, ref, S, expr.rhs))
         end
-        bound = Any[_bindliteral(ref, S, value) for value in expr.values]
-        return all(((a, b),) -> a === b, zip(bound, expr.values)) ? expr :
-            Tables.In(expr.lhs, bound)
+        return _barrier(_bindin, expr, ref, S)::Tables.ScanExpr
     end
     return expr
+end
+
+function _bindin(expr::Tables.In, ref::Symbol, ::Type{S}) where {S}
+    bound = Any[_bindliteral(ref, S, value) for value in expr.values]
+    return all(((a, b),) -> a === b, zip(bound, expr.values)) ? expr :
+        Tables.In(expr.lhs, bound)
 end
 
 # What a column of `T` values compares with: values of the same kind, or anything for a
