@@ -1,12 +1,8 @@
 # Parquet.jl
 
 Parquet.jl is a pure-Julia reader and writer for the Apache Parquet columnar file
-format. The package implements the Tables.jl interface and keeps its public API
-small and namespaced.
-
-!!! warning "Development branch"
-    The `rewrite/1.0` branch is active development work. Do not use it for
-    production data until its conformance gates are complete.
+format. Files read as Tables.jl columns and any Tables.jl table writes. The public API
+is small and namespaced: nothing but the deprecated 0.8 names is exported.
 
 ## Quick start
 
@@ -29,9 +25,9 @@ columns = Tables.columntable(table)
 [Limits and errors](@ref) covers resource limits, errors, and what is not supported. The
 [API reference](@ref "API reference") lists the public types and functions.
 
-## Format target
+## Format
 
-The stable contract is Apache Parquet format 2.13.0. The reader accepts stable
-encodings and codecs, including deprecated input where practical. The writer emits
-nondeprecated stable forms. The core does not depend on Arrow.jl or a native Thrift
-compiler.
+Parquet.jl implements Apache Parquet format 2.13.0. It reads every encoding and codec of
+that version, deprecated ones included, except LZO; it writes the forms that are not
+deprecated. It needs no Arrow or Thrift library. [Limits and errors](@ref) lists what is
+not supported.
