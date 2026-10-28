@@ -99,7 +99,11 @@ using PrecompileTools: @compile_workload, @setup_workload
             write(writer, optional)
         end
         write(IOBuffer(), Tables.partitioner((scalars, scalars)))
-        write(joinpath(dir, "partitioned"), scalars; partitionby=:i8)
+        # Datasets are mostly partitioned by strings or integers; each file gets views of
+        # the other columns, of every scalar type and of the common optional ones.
+        write(joinpath(dir, "strings"), scalars; partitionby=:str)
+        write(joinpath(dir, "integers"), (id=scalars.i64, text=scalars.str,
+            maybe=optional.i64, name=optional.str, x=optional.f64); partitionby=:id)
     end
     # Interned schema names are per-process state; the image must start without them.
     lock(_SCHEMA_NAME_REGISTRY.lock) do
