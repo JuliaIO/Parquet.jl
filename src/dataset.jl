@@ -18,8 +18,8 @@ end
 """
     Parquet.Dataset(source; partitioning=:hive, select=nothing, drop=nothing,
                     filter=nothing, limit=nothing, scan=nothing,
-                    ntasks=Threads.nthreads(), int96=Dates.Nanosecond,
-                    checksum=false, limits=Parquet.Limits())
+                    ntasks=Threads.nthreads(), stringtype=DataString,
+                    int96=Dates.Nanosecond, checksum=false, limits=Parquet.Limits())
 
 Parquet files read as one table. `source` is a directory (every file below it), a glob
 pattern such as `"data/*.parquet"` or `"lake/**/*.parquet"` (`*` and `?` match within a
@@ -63,6 +63,7 @@ struct Dataset
     partition::Vector{Int}
     bound::Union{Nothing,Tables.BoundScan}
     ntasks::Int
+    stringtype::Type
     int96::Type
     checksum::Bool
     limits::Limits
@@ -79,17 +80,19 @@ end
 function _dataset(inputs::Vector{Any}, paths::Vector{Union{Nothing,String}}, base;
         partitioning=:hive, select=nothing, drop=nothing, filter=nothing, limit=nothing,
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
-        int96::Type=Dates.Nanosecond, checksum::Bool=false, limits::Limits=Limits())
+        stringtype::Type=DataStrings.DataString, int96::Type=Dates.Nanosecond,
+        checksum::Bool=false, limits::Limits=Limits())
     ntasks >= 1 || throw(ArgumentError("ntasks must be at least 1, got $ntasks"))
     partitioning in (:hive, nothing) || throw(ArgumentError(
         "partitioning must be :hive or nothing, got $(repr(partitioning))"))
     request = _scanrequest(select, drop, filter, limit, scan)
-    _ReadOptions(; int96=int96)
+    _ReadOptions(; int96=int96, stringtype=stringtype)
     keys, values = partitioning === nothing ?
         (String[], [Union{Nothing,String}[] for _ in inputs]) : _hivepartitions(paths, base)
-    partitions, partitiontypes = _hivevalues(keys, values)
+    partitions, partitiontypes = _hivevalues(keys, values, stringtype)
     files = _readmap(eachindex(inputs), min(Int(ntasks), length(inputs))) do index, _
-        return _datasetfile(inputs[index], paths[index], partitions[index], int96, limits)
+        return _datasetfile(inputs[index], paths[index], partitions[index], stringtype,
+            int96, limits)
     end
     names, types, elements = _unifycolumns(files, Symbol.(keys))
     colmetadata = map(names) do name
@@ -122,7 +125,7 @@ function _dataset(inputs::Vector{Any}, paths::Vector{Union{Nothing,String}}, bas
         throw(ArgumentError("Parquet does not apply scan type overrides; convert the " *
             "columns after reading"))
     return Dataset(collect(_DatasetFile, files), names, types, elements, colmetadata,
-        partition, bound, Int(ntasks), int96, checksum, limits)
+        partition, bound, Int(ntasks), stringtype, int96, checksum, limits)
 end
 
 ## Finding the files
@@ -305,9 +308,10 @@ function _unescapeuri(value::AbstractString)
 end
 
 # The typed value of every file per key, and each key's element type: `Int64`,
-# `Float64`, `Date`, `Bool`, or `DataString` (read like a STRING column), whichever all of
+# `Float64`, `Date`, `Bool`, or `stringtype` (read like a STRING column), whichever all of
 # its values parse as, with `Missing` when a file has none.
-function _hivevalues(keys::Vector{String}, values::Vector{Vector{Union{Nothing,String}}})
+function _hivevalues(keys::Vector{String}, values::Vector{Vector{Union{Nothing,String}}},
+        stringtype::Type=DataStrings.DataString)
     typed = [Any[] for _ in values]
     types = Type[]
     for position in eachindex(keys)
@@ -317,7 +321,7 @@ function _hivevalues(keys::Vector{String}, values::Vector{Vector{Union{Nothing,S
             all(_hiveint, present) ? Int64 :
             all(_hivefloat, present) ? Float64 :
             all(_hivedate, present) ? Dates.Date :
-            all(value -> value in ("true", "false"), present) ? Bool : DataStrings.DataString
+            all(value -> value in ("true", "false"), present) ? Bool : stringtype
         for (index, value) in enumerate(raw)
             push!(typed[index], value === nothing ? missing : _hiveparse(T, value))
         end
@@ -334,7 +338,7 @@ _hivedate(value::String) = occursin(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$", value) &&
 
 _hiveparse(::Type{T}, value::String) where {T<:Union{Int64,Float64,Dates.Date}} = parse(T, value)
 _hiveparse(::Type{Bool}, value::String) = value == "true"
-_hiveparse(::Type{DataStrings.DataString}, value::String) = value
+_hiveparse(::Type{<:Union{String,DataStrings.DataString}}, value::String) = value
 
 # The stored schema element of a partition column, so a read dataset writes back with it.
 function _partitionelement(key::String, T::Type)
@@ -350,7 +354,7 @@ function _partitionelement(key::String, T::Type)
     S === Dates.Date && return Metadata.SchemaElement(name=key, type_=Metadata.Type.INT32,
         repetition_type=repetition, converted_type=Metadata.ConvertedType.DATE,
         logicalType=Metadata.LogicalType(DATE=Metadata.DateType()))
-    S === DataStrings.DataString && return Metadata.SchemaElement(name=key,
+    S in (DataStrings.DataString, String) && return Metadata.SchemaElement(name=key,
         type_=Metadata.Type.BYTE_ARRAY,
         repetition_type=repetition, converted_type=Metadata.ConvertedType.UTF8,
         logicalType=Metadata.LogicalType(STRING=Metadata.StringType()))
@@ -360,9 +364,10 @@ end
 
 ## Reading footers and unifying columns
 
-function _datasetfile(input, path, partitions::Vector{Any}, int96::Type, limits::Limits)
+function _datasetfile(input, path, partitions::Vector{Any}, stringtype::Type, int96::Type,
+        limits::Limits)
     file = try
-        File(input; ntasks=1, int96=int96, limits=limits)
+        File(input; ntasks=1, stringtype=stringtype, int96=int96, limits=limits)
     catch err
         _rethrowfor(err, path)
     end
@@ -513,7 +518,8 @@ end
 function _openpart(ds::Dataset, file::_DatasetFile, scan::Tables.Scan, ntasks::Int)
     try
         return _openfile(file.input, (file.footer, file.metadata); scan=scan,
-            ntasks=ntasks, int96=ds.int96, checksum=ds.checksum, limits=ds.limits)
+            ntasks=ntasks, stringtype=ds.stringtype, int96=ds.int96, checksum=ds.checksum,
+            limits=ds.limits)
     catch err
         _rethrowfor(err, file.path)
     end

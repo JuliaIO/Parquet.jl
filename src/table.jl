@@ -205,7 +205,7 @@ end
 # Payload buffer indices count from the row group's first buffer, so later row groups
 # are rebased.
 function _payloadcolumn(payloads::Vector{DataStrings.StringPayload}, node::SchemaNode,
-        chunks::Vector{Vector{Vector{UInt8}}}, starts::Vector{Int})
+        chunks::Vector{Vector{Vector{UInt8}}}, starts::Vector{Int}, stringtype::Type)
     pages = Vector{UInt8}[]
     for (rowindex, chunk) in enumerate(chunks)
         base = length(pages)
@@ -221,7 +221,8 @@ function _payloadcolumn(payloads::Vector{DataStrings.StringPayload}, node::Schem
         end
         append!(pages, chunk)
     end
-    return _payloadvector(node, node.max_definition_level > 0, payloads, pages)
+    return _stringcolumn(_payloadvector(node, node.max_definition_level > 0, payloads,
+        pages), stringtype)
 end
 
 # A StringVector for STRING and ENUM values, a BytesVector for other byte arrays.
@@ -235,9 +236,10 @@ function _payloadvector(node::SchemaNode, optional::Bool,
     return DataStrings.BytesVector{T}(payloads, pages, Val(:trusted))
 end
 
-function _finishflatcolumn(column::Vector, node::SchemaNode, chunks, starts::Vector{Int})
+function _finishflatcolumn(column::Vector, node::SchemaNode, chunks, starts::Vector{Int},
+        stringtype::Type)
     column isa Vector{DataStrings.StringPayload} || return column
-    return _payloadcolumn(column, node, chunks, starts)
+    return _payloadcolumn(column, node, chunks, starts, stringtype)
 end
 
 # Columns of a table whose fields are all flat leaves. Each chunk decodes straight into
@@ -286,7 +288,8 @@ function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Sch
         column = columns[fieldindex]
         length(column) == rows || throw(FormatError(
             "flat column $(node.column_index) has $(length(column)) values for $rows rows"))
-        return _finishflatcolumn(column, node, pages[fieldindex], starts)
+        return _finishflatcolumn(column, node, pages[fieldindex], starts,
+            options.stringtype)
     end
 end
 
@@ -479,8 +482,8 @@ end
 
 """
     Parquet.File(source; select=nothing, drop=nothing, filter=nothing, limit=nothing,
-                 scan=nothing, ntasks=Threads.nthreads(), int96=Dates.Nanosecond,
-                 checksum=false, limits=Parquet.Limits())
+                 scan=nothing, ntasks=Threads.nthreads(), stringtype=DataString,
+                 int96=Dates.Nanosecond, checksum=false, limits=Parquet.Limits())
 
 Open a Parquet file and decode its footer, without reading column data. The keywords
 are those of [`Parquet.Table`](@ref) and apply to every table the file yields.
@@ -503,11 +506,11 @@ path stays memory mapped until `close(file)`; an `AbstractSource` is never close
 """
 function File(input; select=nothing, drop=nothing, filter=nothing, limit=nothing,
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
-        int96::Type=Dates.Nanosecond, checksum::Bool=false, limits::Limits=Limits(),
-        budget::_ByteBudget=_ByteBudget(limits))
+        stringtype::Type=DataStrings.DataString, int96::Type=Dates.Nanosecond,
+        checksum::Bool=false, limits::Limits=Limits(), budget::_ByteBudget=_ByteBudget(limits))
     return _openfile(input, nothing; select=select, drop=drop, filter=filter, limit=limit,
-        scan=scan, ntasks=ntasks, int96=int96, checksum=checksum, limits=limits,
-        budget=budget)
+        scan=scan, ntasks=ntasks, stringtype=stringtype, int96=int96, checksum=checksum,
+        limits=limits, budget=budget)
 end
 
 # A `File`; `cached` is the footer and decoded metadata of an earlier open of the same
@@ -515,11 +518,11 @@ end
 function _openfile(input, cached::Union{Nothing,Tuple{Footer,Metadata.FileMetaData}};
         select=nothing, drop=nothing, filter=nothing, limit=nothing,
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
-        int96::Type=Dates.Nanosecond, checksum::Bool=false, limits::Limits=Limits(),
-        budget::_ByteBudget=_ByteBudget(limits))
+        stringtype::Type=DataStrings.DataString, int96::Type=Dates.Nanosecond,
+        checksum::Bool=false, limits::Limits=Limits(), budget::_ByteBudget=_ByteBudget(limits))
     ntasks >= 1 || throw(ArgumentError("ntasks must be at least 1, got $ntasks"))
     request = _scanrequest(select, drop, filter, limit, scan)
-    options = _ReadOptions(; int96=int96, checksum=checksum)
+    options = _ReadOptions(; int96=int96, checksum=checksum, stringtype=stringtype)
     owned = !(input isa AbstractSource)
     src = source(input; budget=budget)
     try
@@ -542,7 +545,7 @@ function _openfile(input, cached::Union{Nothing,Tuple{Footer,Metadata.FileMetaDa
             _validatetablechunkranges(metadata, schema, footer.offset)
         end
         options = _ReadOptions(options.int96, _arrowhints(metadata, schema, limits),
-            _checksumpolicy(options.checksum, metadata))
+            _checksumpolicy(options.checksum, metadata), options.stringtype)
         plan = _readplan(metadata, schema, request, Int(ntasks), options, limits)
         file = File(src, footer, metadata, plan, owned, false)
         owned && finalizer(close!, file)
@@ -693,8 +696,9 @@ end
 
 """
     Parquet.Table(source; select=nothing, drop=nothing, filter=nothing, limit=nothing,
-                  scan=nothing, ntasks=Threads.nthreads(), int96=Dates.Nanosecond,
-                  checksum=false, partitioning=:hive, limits=Parquet.Limits())
+                  scan=nothing, ntasks=Threads.nthreads(), stringtype=DataString,
+                  int96=Dates.Nanosecond, checksum=false, partitioning=:hive,
+                  limits=Parquet.Limits())
 
 Read a Parquet file from a path, a byte vector, an `IO`, or a
 [`Parquet.AbstractSource`](@ref) into Tables.jl columns. The table owns its columns: a
@@ -720,6 +724,10 @@ writing it preserves their annotations.
 Column chunks decode on up to `ntasks` tasks; `ntasks=1` reads on the calling task.
 The result does not depend on `ntasks`.
 
+STRING and ENUM values read as `DataStrings.DataString`s, which refer to the column's
+decoded bytes; `stringtype=String` reads them as `String`s, including inside nested
+columns, at the cost of one allocation per value.
+
 INT96 timestamps (written by Spark, Hive, and Impala) read as
 `Durations.Timestamp{int96}`. Spark's `9999-12-31` placeholder values are outside the
 nanosecond range (1677 to 2262); read such files with `int96=Dates.Microsecond`.
@@ -731,14 +739,15 @@ CRCs in its files are not checked.
 """
 function Table(input; select=nothing, drop=nothing, filter=nothing, limit=nothing,
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
-        int96::Type=Dates.Nanosecond, checksum::Bool=false, partitioning=:hive,
-        limits::Limits=Limits())
+        stringtype::Type=DataStrings.DataString, int96::Type=Dates.Nanosecond,
+        checksum::Bool=false, partitioning=:hive, limits::Limits=Limits())
     _isdataset(input) && return _readdataset(Dataset(input; partitioning=partitioning,
         select=select, drop=drop, filter=filter, limit=limit, scan=scan, ntasks=ntasks,
-        int96=int96, checksum=checksum, limits=limits))
+        stringtype=stringtype, int96=int96, checksum=checksum, limits=limits))
     budget = _ByteBudget(limits)
     file = File(input; select=select, drop=drop, filter=filter, limit=limit, scan=scan,
-        ntasks=ntasks, int96=int96, checksum=checksum, limits=limits, budget=budget)
+        ntasks=ntasks, stringtype=stringtype, int96=int96, checksum=checksum,
+        limits=limits, budget=budget)
     try
         return _readtable(file, eachindex(file.plan.metadata.row_groups), budget)
     finally
@@ -797,6 +806,16 @@ end
 function Base.close(::Table)
     return
 end
+
+"""
+    copy(table::Parquet.Table) -> Parquet.Table
+
+A table with the same schema and metadata whose columns are new, mutable vectors
+(`copy` of each column). List, struct, and map columns become `Vector`s of their rows;
+`copy(row)` makes a row's own vector.
+"""
+Base.copy(table::Table) = Table(_tablemetadata(table), _tableschema(table),
+    map(copy, _tablecolumns(table)), _tablerows(table), _tablecolmetadata(table))
 
 # The row groups a file yields and each one's (offset, limit) row window, or `nothing`
 # when a filter combined with a limit or offset leaves them unknown before reading.

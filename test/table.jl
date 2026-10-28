@@ -896,3 +896,42 @@ end
         bound < Int64(2)^(8width - 1) && @test_throws Parquet.FormatError Parquet.Table(over)
     end
 end
+
+@testset "stringtype=String and copy(table)" begin
+    source = (s=["a", "a string longer than twelve bytes"], ms=["x", missing],
+        e=Parquet.LogicalColumn(["lo", "hi"], :enum), l=[["p", "q"], String[]],
+        st=[(x=1, y="a"), (x=2, y="b")], m=[["k" => "v"], Pair{String,String}[]],
+        ln=[["a", missing], missing], b=[UInt8[1], UInt8[2]])
+    bytes = take!(Parquet.write(IOBuffer(), source))
+    for ntasks in (1, 4)
+        t = Parquet.Table(bytes; stringtype=String, ntasks=ntasks)
+        @test t.s isa Vector{String} && t.s == source.s
+        @test t.ms isa Vector{Union{Missing,String}} && isequal(t.ms, source.ms)
+        @test t.e isa Vector{String} && t.e == ["lo", "hi"]
+        @test eltype(t.l) == Parquet.ListValue{String} && t.l == source.l
+        @test eltype(t.st) == @NamedTuple{x::Int64, y::String} && t.st == source.st
+        @test eltype(t.m) == Parquet.MapValue{String,String} && t.m[1] == ["k" => "v"]
+        @test eltype(t.ln) == Union{Missing,Parquet.ListValue{Union{Missing,String}}}
+        @test t.b isa Parquet.DataStrings.BytesVector
+        @test Tables.schema(Parquet.File(bytes; stringtype=String)) == Tables.schema(t)
+        # Filtered reads, and reads with a nested column, take it too.
+        @test Parquet.Table(bytes; stringtype=String, ntasks=ntasks,
+            filter=Parquet.colcmp(==, Parquet.col(:s), "a")).s == ["a"]
+        filtered = Parquet.Table(bytes; stringtype=String, ntasks=ntasks, select=[:s, :l],
+            filter=Parquet.colcmp(==, Parquet.col(:s), "a"))
+        @test eltype(filtered.s) == String && eltype(filtered.l) == Parquet.ListValue{String}
+    end
+    lake = mktempdir()
+    Parquet.write(lake, (k=["x", "y"], v=["a", "b"]); partitionby=:k)
+    t = Parquet.Table(lake; stringtype=String)
+    @test t.k isa Vector{String} && t.v isa Vector{String}
+    @test_throws ArgumentError Parquet.Table(bytes; stringtype=Symbol)
+
+    t = Parquet.Table(bytes)
+    c = copy(t)
+    @test c isa Parquet.Table && Tables.schema(c) == Tables.schema(t)
+    @test c.l isa Vector && c.st isa Vector && c.l == t.l && c.st == t.st
+    c.s[1] = "changed"
+    push!(c.l, c.l[1])
+    @test t.s[1] == "a" && length(t.l) == 2
+end

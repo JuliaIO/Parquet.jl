@@ -65,7 +65,8 @@ function _readleafchunks(file::File, metadata::Metadata.FileMetaData,
         total += Int(group.num_rows)
     end
     counts = _finishleaf!(sink, total)
-    piece = _leafpiece(sink.state, _leafvalues(sink, node, convert), counts)
+    piece = _leafpiece(sink.state, _leafvalues(sink, node, convert, options.stringtype),
+        counts)
     _charge!(budget, sizeof(sink.output) + sum(sizeof, piece.offsets; init=0) +
         sum(bits -> sizeof(bits.chunks), piece.bits; init=0))
     return piece

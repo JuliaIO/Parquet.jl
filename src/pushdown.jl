@@ -123,7 +123,7 @@ end
 function _filtertype(node::SchemaNode, limits::Limits, options::_ReadOptions)
     isempty(node.children) && node.max_repetition_level == 0 || return nothing
     convert, L = _valueconverter(node, limits, options)
-    convert isa _StringPayloads{true} && return DataStrings.DataString
+    convert isa _StringPayloads{true} && return options.stringtype
     convert isa _StringPayloads{false} && return DataStrings.DataBytes
     return L
 end
@@ -1566,7 +1566,7 @@ function _readselectedflat(file::File, plan::_ReadPlan, parts::Vector{_GroupRows
             "$(join(fields[fieldindex].path, '.')) has fewer rows than its row groups"))
         column isa Vector{DataStrings.StringPayload} || continue
         columns[fieldindex] = _payloadcolumn(column, fields[fieldindex], pages[fieldindex],
-            starts)
+            starts, options.stringtype)
     end
     return columns, total
 end

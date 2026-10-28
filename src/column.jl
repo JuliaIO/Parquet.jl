@@ -245,11 +245,13 @@ _aftercopy!(convert, dest::Vector, offset::Int, count::Int) = nothing
 
 # Choices a read makes where the file leaves one: `int96` is the resolution of INT96
 # timestamps, `arrow` the types the file's ARROW:schema gives its leaves (see
-# `_arrowhints`), and `checksum` whether page CRC32s are verified (`_CRC_*`).
+# `_arrowhints`), `checksum` whether page CRC32s are verified (`_CRC_*`), and
+# `stringtype` the type STRING and ENUM values read as (`DataString` or `String`).
 struct _ReadOptions
     int96::DataType
     arrow::Dict{Vector{String},Any}
     checksum::UInt8
+    stringtype::DataType
 end
 
 # Page CRC32 policies: not checked (the default, as pyarrow, Polars, and DuckDB read), every
@@ -259,12 +261,25 @@ const _CRC_ALL = 0x01
 const _CRC_NONZERO = 0x02
 
 function _ReadOptions(; int96::Type=Dates.Nanosecond,
-        arrow::Dict{Vector{String},Any}=Dict{Vector{String},Any}(), checksum::Bool=false)
+        arrow::Dict{Vector{String},Any}=Dict{Vector{String},Any}(), checksum::Bool=false,
+        stringtype::Type=DataStrings.DataString)
     int96 in (Dates.Nanosecond, Dates.Microsecond, Dates.Millisecond) ||
         throw(ArgumentError("int96 must be Dates.Nanosecond, Dates.Microsecond, or " *
             "Dates.Millisecond, got $int96"))
-    return _ReadOptions(int96, arrow, checksum ? _CRC_ALL : _CRC_OFF)
+    stringtype in (DataStrings.DataString, String) || throw(ArgumentError(
+        "stringtype must be DataStrings.DataString or String, got $stringtype"))
+    return _ReadOptions(int96, arrow, checksum ? _CRC_ALL : _CRC_OFF, stringtype)
 end
+
+# A string column as `stringtype` values: a StringVector stays as it is, and `String`
+# copies each value.
+_stringcolumn(column::AbstractVector, ::Type{DataStrings.DataString}) = column
+_stringcolumn(column::AbstractVector, ::Type{String}) = column
+_stringcolumn(column::DataStrings.StringVector{DataStrings.DataString}, ::Type{String}) =
+    String[String(value) for value in column]
+_stringcolumn(column::DataStrings.StringVector{Union{Missing,DataStrings.DataString}},
+    ::Type{String}) =
+    Union{Missing,String}[value === missing ? missing : String(value) for value in column]
 
 # The CRC policy for a file: verifying files of Parquet.jl 0.x skips their zero CRCs.
 function _checksumpolicy(checksum::UInt8, metadata::Metadata.FileMetaData)

@@ -83,7 +83,7 @@ end
 function _leafeltype(node::SchemaNode, limits::Limits, options::_ReadOptions)
     _, L = _valueconverter(node, limits, options)
     L === DataStrings.StringPayload || return L
-    return _logicalkind(node) in (:string, :enum) ? DataStrings.DataString :
+    return _logicalkind(node) in (:string, :enum) ? options.stringtype :
         DataStrings.DataBytes
 end
 
@@ -537,9 +537,10 @@ function _leafsink(path::_LeafPath, ::Type{L}, dense::Vector{L}, rows::Int,
 end
 
 # The vector of a leaf's values: string payloads wrap their page buffers.
-function _leafvalues(sink::_LeafSink, node::SchemaNode, convert)
+function _leafvalues(sink::_LeafSink, node::SchemaNode, convert, stringtype::Type)
     convert isa _StringPayloads || return sink.output
-    return _payloadvector(node, sink.state.path.nullable, sink.output, convert.buffers)
+    return _stringcolumn(_payloadvector(node, sink.state.path.nullable, sink.output,
+        convert.buffers), stringtype)
 end
 
 # The rows of field `field` for one row group, from the pieces of its leaves (in path
@@ -730,7 +731,8 @@ function _streampiece(path::_LeafPath, leaf::_NestedLeafPlan, stream::LeafStream
     _assembleentries!(sink, stream.repetition, stream.definition, count, length(dense),
         _DenseValues(dense))
     counts = _finishleaf!(sink, rows)
-    return _leafpiece(sink.state, _leafvalues(sink, leaf.source, convert), counts)
+    return _leafpiece(sink.state, _leafvalues(sink, leaf.source, convert,
+        DataStrings.DataString), counts)
 end
 
 """
