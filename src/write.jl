@@ -422,6 +422,9 @@ Base.@nospecializeinfer function _writevaluetype(@nospecialize(value), name::Str
     value isa Tuple && !isempty(value) &&
         return NTuple{length(value),_writeelementtype(value, name)}
     value isa AbstractVector && return Vector{_writeelementtype(value, name)}
+    # A map row keeps its entries' order and duplicate keys, which a `Dict` would not.
+    value isa MapValue && return Vector{Pair{_writeelementtype(keys(value), name),
+        _writeelementtype(values(value), name)}}
     value isa AbstractDict && return Dict{_writeelementtype(keys(value), name),
         _writeelementtype(values(value), name)}
     value isa Pair && return Pair{_writevaluetype(value.first, name),

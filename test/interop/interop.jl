@@ -26,7 +26,8 @@ canon(x::Durations.ZonedTimestamp) = "ts:true:$(nanos(x.utc))"
 canon(x::DataDecimals.Decimal) = "dec:$(DataDecimals.unscaled(x))e$(DataDecimals.scale(x))"
 canon(x::NamedTuple) = Dict("struct" => Any[Any[String(k), canon(v)] for (k, v) in pairs(x)])
 canon(x::AbstractVector{UInt8}) = "b:" * bytes2hex(collect(x))
-canon(x::AbstractVector{<:Pair}) = Dict("map" => Any[Any[canon(k), canon(v)] for (k, v) in x])
+canon(x::Union{AbstractDict,AbstractVector{<:Pair}}) =
+    Dict("map" => Any[Any[canon(k), canon(v)] for (k, v) in x])
 canon(x::AbstractVector) = Any[canon(v) for v in x]
 
 function canontable(table)

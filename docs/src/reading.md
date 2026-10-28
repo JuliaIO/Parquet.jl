@@ -123,9 +123,13 @@ Lists, structs, and maps read as typed rows, in [`Parquet.ListVector`](@ref),
   whose field names repeat or number more than 64 reads as a
   [`Parquet.StructValue`](@ref) of `name => value` pairs instead; `row["name"]` looks one
   up.
-- A map row is a [`Parquet.MapValue{K,V}`](@ref Parquet.MapValue): the map's
-  `key => value` pairs in file order, duplicate keys included; `Dict(row)` builds a
-  dictionary (the last duplicate wins).
+- A map row is a [`Parquet.MapValue{K,V}`](@ref Parquet.MapValue), a read-only
+  `AbstractDict{K,V}`: it iterates the map's `key => value` pairs in file order,
+  duplicate keys included, and `row[key]`, `get`, and `haskey` find the last entry with
+  that key, as `Dict(row)` keeps it.
+
+Inside containers and DataFrame cells, list and map rows print as the plain values they
+hold, `[1, missing]` and `Dict("a"=>1)`, without their element types.
 
 Each level of a typed row nests one more type, and Julia compiles deep ones slowly: the
 first read of structs 17 levels deep took 11 s with typed rows, and 32 levels over 15
@@ -147,7 +151,7 @@ nested = (
 )
 nestedtable = Parquet.Table(take!(Parquet.write(IOBuffer(), nested)))
 (name=nestedtable.profile[2].name, samples=collect(nestedtable.samples[2]),
-    attrs=Dict(nestedtable.attrs[3]))
+    c=nestedtable.attrs[3]["c"], attrs=Dict(nestedtable.attrs[3]))
 ```
 
 The reader also accepts the legacy list and map layouts of older writers.

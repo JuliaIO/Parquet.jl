@@ -330,7 +330,8 @@ end
     right = nrstream(plan, 3, [0, 0, 1], [0, 3, 1],
         [UInt8[0x78]]; rows=2)
     result = Parquet._assemblenested(plan, [keys, left, right], 2)
-    lookup = result[2][:lookup]
+    @test result[2][:lookup][1].left == 10
+    lookup = collect(result[2][:lookup])
     @test lookup[1].first == 1
     @test lookup[1].second.left == 10
     @test lookup[1].second.right == "x"
@@ -465,7 +466,7 @@ end
         Int32[10, 11]; rows=1)
     values = nrstream(plan, 3, [0, 1], [1, 1], Int32[100, 200]; rows=1)
     result = Parquet._assemblenested(plan, [ids, items, values], 1)
-    lookup = result[1][:lookup]
+    lookup = collect(result[1][:lookup])
     @test length(lookup) == 2
     @test lookup[1].first.id == 1
     @test collect(lookup[1].first.items) == Int32[10, 11]

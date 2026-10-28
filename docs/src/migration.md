@@ -41,8 +41,9 @@ with a deprecation warning and will be removed in 2.0. `read_parquet` still take
 - Strings read as `DataStrings.DataString`, timestamps as `Durations.Timestamp{P}` or
   `Durations.ZonedTimestamp{P,Z}`, INT96 as `Durations.Timestamp{Nanosecond}`, decimals as
   `DataDecimals.Decimal`, and INTERVAL as `Durations.Duration`.
-- Lists read as `AbstractVector` rows, structs as `NamedTuple` rows, and maps as ordered
-  `AbstractVector{<:Pair}` rows (`Dict(row)` makes a dictionary).
+- Lists read as `AbstractVector` rows, structs as `NamedTuple` rows, and maps as
+  read-only `AbstractDict` rows that keep the file's entry order (`row[key]` looks a key
+  up; `Dict(row)` copies the row into a dictionary).
 - Files written by 0.8 read as they are. 0.8 stored a page CRC of 0; reads check page
   CRCs only with `checksum=true`, which skips the zeros in files 0.8 wrote.
 - `Parquet.Table` reads eagerly and releases the file before returning; `close` is not

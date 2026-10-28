@@ -79,13 +79,16 @@ end
 # A map row views `keys[first:last]` and `values[first:last]` of its column's entry
 # vectors.
 """
-    Parquet.MapValue{K,V} <: AbstractVector{Pair{K,V}}
+    Parquet.MapValue{K,V} <: AbstractDict{K,V}
 
-A row of a map column: a read-only view of the map's `key => value` entries in file
-order, duplicate keys included. `Dict(row)` builds a dictionary (the last duplicate
-wins), and `copy(row)` gives a `Vector{Pair{K,V}}`.
+A row of a map column: a read-only dictionary that iterates the map's `key => value`
+entries in stored order, duplicate keys included, which `length` counts. `row[key]`,
+`get`, and `haskey` find the last entry with that key, the one `Dict(row)` keeps;
+`keys(row)` and `values(row)` are vectors in stored order. Each lookup scans the row, so
+for many lookups in a large map `Dict(row)` is faster. `collect(row)` gives the
+`Vector{Pair{K,V}}` of entries and `copy(row)` a `Dict{K,V}`.
 """
-struct MapValue{K,V} <: AbstractVector{Pair{K,V}}
+struct MapValue{K,V} <: AbstractDict{K,V}
     keys::Any
     values::Any
     first::Int
@@ -187,18 +190,22 @@ _nesteddepth(column::MapVector, limit::Int) = limit <= 0 ? 1 :
 _nesteddepth(column::StructVector, limit::Int) = limit <= 0 ? 1 :
     1 + maximum(child -> _nesteddepth(child, limit - 1), column.children; init=0)
 
-Base.IndexStyle(::Type{<:Union{ListValue,MapValue,StructValue}}) = IndexLinear()
+Base.IndexStyle(::Type{<:Union{ListValue,StructValue}}) = IndexLinear()
 Base.IndexStyle(::Type{<:Union{ListVector,StructVector,MapVector}}) = IndexLinear()
 
-# `push!`, `append!`, and the like go through `resize!` and `setindex!`.
-const _ReadOnlyNested = Union{ListValue,MapValue,StructValue,ListVector,StructVector,
-    MapVector}
+# `push!`, `append!`, `merge!`, and the like go through `resize!`, `setindex!`, and
+# `delete!`.
+const _ReadOnlyNested = Union{ListValue,StructValue,ListVector,StructVector,MapVector}
 _readonly(x) = throw(ArgumentError("a Parquet.$(nameof(typeof(x))) is read-only; " *
-    "copy(x) gives a Vector that can change"))
+    "copy(x) gives a $(x isa MapValue ? "Dict" : "Vector") that can change"))
 Base.setindex!(x::_ReadOnlyNested, value, ::Int) = _readonly(x)
 Base.resize!(x::_ReadOnlyNested, ::Integer) = _readonly(x)
+Base.setindex!(row::MapValue, value, key) = _readonly(row)
+Base.delete!(row::MapValue, key) = _readonly(row)
+Base.empty!(row::MapValue) = _readonly(row)
 
-Base.size(row::Union{ListValue,MapValue}) = (row.last - row.first + 1,)
+Base.size(row::ListValue) = (row.last - row.first + 1,)
+Base.length(row::MapValue) = row.last - row.first + 1
 Base.size(row::StructValue) = (length(row.names),)
 Base.size(column::Union{ListVector,MapVector}) = (length(column.offsets) - 1,)
 Base.size(column::StructVector) = (column.length,)
@@ -216,10 +223,64 @@ Base.@propagate_inbounds function Base.getindex(row::ListValue{T}, index::Int) w
     return @inbounds _childvalue(T, row.values, row.first + index - 1)
 end
 
-Base.@propagate_inbounds function Base.getindex(row::MapValue{K,V}, index::Int) where {K,V}
-    @boundscheck checkbounds(row, index)
-    entry = row.first + index - 1
-    return @inbounds Pair{K,V}(_childvalue(K, row.keys, entry), _childvalue(V, row.values, entry))
+function Base.iterate(row::MapValue{K,V}, entry::Int=row.first) where {K,V}
+    entry > row.last && return nothing
+    pair = @inbounds Pair{K,V}(_childvalue(K, row.keys, entry), _childvalue(V, row.values, entry))
+    return pair, entry + 1
+end
+
+# The column position of the last entry whose key is `key`, or `nothing`.
+function _mapentry(row::MapValue{K}, key) where {K}
+    for entry in row.last:-1:row.first
+        isequal(@inbounds(_childvalue(K, row.keys, entry)), key) && return entry
+    end
+    return nothing
+end
+
+Base.haskey(row::MapValue, key) = _mapentry(row, key) !== nothing
+
+function Base.get(row::MapValue{K,V}, key, default) where {K,V}
+    entry = _mapentry(row, key)
+    return entry === nothing ? default : @inbounds _childvalue(V, row.values, entry)
+end
+
+function Base.get(default::Base.Callable, row::MapValue{K,V}, key) where {K,V}
+    entry = _mapentry(row, key)
+    return entry === nothing ? default() : @inbounds _childvalue(V, row.values, entry)
+end
+
+function Base.getindex(row::MapValue{K,V}, key) where {K,V}
+    entry = _mapentry(row, key)
+    entry === nothing && throw(KeyError(key))
+    return @inbounds _childvalue(V, row.values, entry)
+end
+
+Base.keys(row::MapValue{K}) where {K} = ListValue{K}(row.keys, row.first, row.last)
+Base.values(row::MapValue{K,V}) where {K,V} = ListValue{V}(row.values, row.first, row.last)
+
+# Inside a container or under `:compact` (DataFrame cells), rows print as the plain Julia
+# values they hold, without element types: `[1, missing]`, `Dict("a" => 1)`.
+_compactrow(io::IO) = get(io, :compact, false) === true || haskey(io, :typeinfo)
+
+function Base.show(io::IO, row::ListValue)
+    _compactrow(io) || return invoke(show, Tuple{IO,AbstractArray}, io, row)
+    # A `:typeinfo` of the row's own type leaves out the element type.
+    return invoke(show, Tuple{IO,AbstractArray}, IOContext(io, :typeinfo => typeof(row)),
+        row)
+end
+
+function Base.show(io::IO, row::MapValue)
+    _compactrow(io) || return invoke(show, Tuple{IO,AbstractDict}, io, row)
+    entries = IOContext(io, :typeinfo => eltype(row))
+    limit = get(io, :limit, false)::Bool
+    print(io, "Dict(")
+    for (count, pair) in enumerate(row)
+        count > 1 && print(io, ", ")
+        show(entries, pair)
+        limit && count == 10 < length(row) && (print(io, ", …"); break)
+    end
+    print(io, ')')
+    return
 end
 
 Base.@propagate_inbounds function Base.getindex(row::StructValue, index::Int)
@@ -284,8 +345,12 @@ function Base.convert(::Type{ListValue{T}}, items::AbstractVector) where {T}
     return ListValue{T}(values, 1, length(values))
 end
 
-function Base.convert(::Type{MapValue{K,V}},
-        entries::Union{AbstractDict,AbstractVector{<:Pair}}) where {K,V}
+# (Two methods: one taking any AbstractDict would be ambiguous with Base's.)
+Base.convert(::Type{R}, entries::AbstractDict) where {R<:MapValue} = _maprow(R, entries)
+Base.convert(::Type{R}, entries::AbstractVector{<:Pair}) where {R<:MapValue} =
+    _maprow(R, entries)
+
+function _maprow(::Type{MapValue{K,V}}, entries) where {K,V}
     keys = _fromrows(_columntype(K), [entry.first for entry in entries])
     values = _fromrows(_columntype(V), [entry.second for entry in entries])
     return MapValue{K,V}(keys, values, 1, length(keys))

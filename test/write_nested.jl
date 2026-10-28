@@ -596,10 +596,11 @@ end
             column = Parquet.Tables.columns(table).objects
             @test column[1] === missing
             @test isempty(column[2])
-            @test column[3][1].second === missing
-            @test column[3][2].second.x == 1
-            @test column[3][2].second.y === missing
-            @test column[3][3].second.y == "z"
+            entries = collect(column[3])
+            @test entries[1].second === missing
+            @test entries[2].second.x == 1
+            @test entries[2].second.y === missing
+            @test entries[3].second.y == "z"
         finally
             close(table)
         end

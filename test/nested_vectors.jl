@@ -71,13 +71,22 @@ end
     column = Parquet.MapVector([0, 3, 3, 3], ["a", "b", "a"], Union{Missing,Int}[1, 2, 3];
         validity=Bool[true, false, true])
     @test eltype(column) == Union{Missing,Parquet.MapValue{String,Union{Missing,Int}}}
-    @test column[1] == ["a" => 1, "b" => 2, "a" => 3]
-    @test column[1] isa AbstractVector{Pair{String,Union{Missing,Int}}}
-    @test Dict(column[1]) == Dict("a" => 3, "b" => 2)
+    row = column[1]
+    @test row isa AbstractDict{String,Union{Missing,Int}}
+    # Entries in stored order, duplicate keys included; a lookup finds the last one, as
+    # Dict(row) keeps it.
+    @test collect(row) == ["a" => 1, "b" => 2, "a" => 3] && length(row) == 3
+    @test keys(row) == ["a", "b", "a"] && values(row) == [1, 2, 3]
+    @test row["a"] == 3 && row["b"] == 2 && get(row, "a", 0) == 3 && get(row, "z", 0) == 0
+    @test get(() -> 0, row, "z") == 0 && haskey(row, "b") && !haskey(row, "z")
+    @test_throws KeyError row["z"]
+    @test Dict(row) == copy(row) == Dict("a" => 3, "b" => 2)
     @test column[2] === missing
-    @test isempty(column[3])
+    @test isempty(column[3]) && column[3] == Dict{String,Int}()
     keyonly = Parquet.MapVector([0, 2], Int32[1, 2])
-    @test isequal(keyonly[1], [Int32(1) => missing, Int32(2) => missing])
+    @test isequal(collect(keyonly[1]), [Int32(1) => missing, Int32(2) => missing])
+    @test keyonly[1][2] === missing &&
+        isequal(keyonly[1], Dict(Int32(1) => missing, 2 => missing))
     @test_throws ArgumentError Parquet.MapVector([0, 1], Union{Missing,Int}[missing], [1])
     @test_throws ArgumentError Parquet.MapVector([0, 1], [1], [1, 2])
 end
@@ -146,9 +155,9 @@ end
     @test rows[end] === (a=Int32(4), b="w")
     rows = copy(maps)
     push!(rows, Dict("n" => 5))
-    @test rows[end] == ["n" => 5]
+    @test collect(rows[end]) == ["n" => 5]
     push!(rows, ["d" => 1, "d" => 2])
-    @test rows[end] == ["d" => 1, "d" => 2]
+    @test collect(rows[end]) == ["d" => 1, "d" => 2]
     nested = Parquet.ListVector([0, 1], structs[1:1])
     rows = copy(nested)
     push!(rows, [(a=Int32(9), b="n")])
@@ -182,7 +191,7 @@ end
     @test_throws BoundsError columns.m[Bool[true]]
     # Plain pair-vector maps (as other readers' map rows are) write as MAP (S3).
     plainmaps = (m=[["a" => 1], Pair{String,Int}[]],)
-    @test collect(Parquet.Tables.columns(
+    @test map(collect, Parquet.Tables.columns(
         Parquet.Table(Parquet._encodefile(plainmaps))).m) == [["a" => 1], Pair{String,Int}[]]
 end
 
@@ -191,7 +200,8 @@ end
         (l=[[1, 2], [3]], s=[(a=1,), (a=2,)], m=[Dict("k" => 1), Dict("j" => 2)]))))
     for (x, name) in ((table.l[1], "ListValue"), (table.m[1], "MapValue"),
             (table.l, "ListVector"), (table.s, "StructVector"), (table.m, "MapVector"))
-        for mutate! in (x -> push!(x, first(x)), x -> (x[1] = first(x)), x -> append!(x, x))
+        for mutate! in (x -> push!(x, first(x)), x -> (x[1] = first(x)),
+                x -> x isa AbstractDict ? merge!(x, x) : append!(x, x))
             err = try
                 mutate!(x)
             catch e
@@ -203,4 +213,26 @@ end
     row = copy(table.l[1])
     push!(row, 9)
     @test row == [1, 2, 9] && table.l[1] == [1, 2]
+    entries = copy(table.m[1])
+    entries["n"] = 3
+    @test entries == Dict("k" => 1, "n" => 3) && table.m[1] == Dict("k" => 1)
+end
+
+@testset "rows print as plain values in containers and DataFrame cells" begin
+    lists = Parquet.ListVector([0, 2, 2], Union{Missing,Int}[1, missing];
+        validity=Bool[true, false])
+    maps = Parquet.MapVector([0, 2], ["a", "b"], lists)
+    compact(x) = sprint(show, x; context=:compact => true)
+    @test compact(lists[1]) == "[1, missing]"
+    @test compact(maps[1]) == "Dict(\"a\"=>[1, missing], \"b\"=>missing)"
+    @test endswith(sprint(show, collect(lists)), "[[1, missing], missing]")
+    @test endswith(sprint(show, [maps[1]]), "[Dict(\"a\" => [1, missing], \"b\" => missing)]")
+    @test compact(Parquet.ListVector([0, 0], Int[])[1]) == "[]"
+    long = Parquet.MapVector([0, 12], string.(1:12), collect(1:12))[1]
+    @test endswith(sprint(show, long; context=(:compact => true, :limit => true)),
+        "\"10\"=>10, …)")
+    # Outside a container, rows print as Base prints their supertypes.
+    @test sprint(show, lists[1]) == "Union{Missing, Int64}[1, missing]"
+    @test startswith(sprint(show, MIME("text/plain"), maps[1]),
+        "Parquet.MapValue{String, Union{Missing, Parquet.ListValue{Union{Missing, Int64}}}} with 2 entries")
 end

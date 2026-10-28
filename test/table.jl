@@ -948,7 +948,7 @@ end
         @test t.e isa Vector{String} && t.e == ["lo", "hi"]
         @test eltype(t.l) == Parquet.ListValue{String} && t.l == source.l
         @test eltype(t.st) == @NamedTuple{x::Int64, y::String} && t.st == source.st
-        @test eltype(t.m) == Parquet.MapValue{String,String} && t.m[1] == ["k" => "v"]
+        @test eltype(t.m) == Parquet.MapValue{String,String} && t.m[1] == Dict("k" => "v")
         @test eltype(t.ln) == Union{Missing,Parquet.ListValue{Union{Missing,String}}}
         @test t.b isa Parquet.DataStrings.BytesVector
         @test Tables.schema(Parquet.File(bytes; stringtype=String)) == Tables.schema(t)

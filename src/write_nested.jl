@@ -885,8 +885,10 @@ function _shredentries!(state::_ShredState, node::_ShredMap, row::MapValue{K,V},
     values = row.values
     CK = _columntype(K)
     CV = _columntype(V)
-    keys isa CK && values isa CV || return _shredpairs!(state, node, row, repetition)
-    _shredentries!(state, node, keys::CK, values::CV, row.first:row.last, repetition)
+    # Read rows hold their column's typed vectors; others are read dynamically.
+    keys isa CK && values isa CV ?
+        _shredentries!(state, node, keys::CK, values::CV, row.first:row.last, repetition) :
+        _shredentries!(state, node, keys, values, row.first:row.last, repetition)
     return
 end
 
