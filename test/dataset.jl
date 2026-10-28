@@ -199,6 +199,29 @@ end
                 last(second_))).a == [last(second_)]
         end
     end
+    # The finer unit wins whatever the file order; a value it cannot hold names the file.
+    us(y, m, d) = Durations.Timestamp{Microsecond}(Dates.DateTime(y, m, d))
+    ns(y, m, d) = Durations.Timestamp{Nanosecond}(Dates.DateTime(y, m, d))
+    for order in ((:us, :ns), (:ns, :us))
+        mktempdir() do dir
+            values = Dict(:us => [us(2024, 1, 1)], :ns => [ns(2024, 6, 1) + Nanosecond(123)])
+            dswrite(dir, "p0.parquet", (a=values[order[1]],))
+            dswrite(dir, "p1.parquet", (a=values[order[2]],))
+            t = Parquet.Table(dir)
+            @test eltype(t.a) == Durations.Timestamp{Nanosecond}
+            @test sort(t.a) == [ns(2024, 1, 1), ns(2024, 6, 1) + Nanosecond(123)]
+        end
+    end
+    mktempdir() do dir
+        dswrite(dir, "p0.parquet", (a=[ns(2024, 6, 1)],))
+        far = dswrite(dir, "p1.parquet", (a=[us(9999, 12, 31)],))
+        err = try
+            Parquet.Table(dir)
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("\"a\"", err.msg) && occursin(far, err.msg)
+    end
     for (first_, second_) in (([1], [1.5]), ([typemax(UInt64)], [-1]),
             ([1], [Durations.Timestamp{Millisecond}(Dates.UTInstant(Millisecond(1)))]))
         mktempdir() do dir

@@ -478,8 +478,8 @@ function _widentype(S::Type, T::Type)
     return nothing
 end
 
-_finerunit(S::Type, T::Type) = Dates.toms(oneunit(S.parameters[1])) <=
-    Dates.toms(oneunit(T.parameters[1])) ? S : T
+_finerunit(S::Type, T::Type) = Dates.tons(oneunit(S.parameters[1])) <=
+    Dates.tons(oneunit(T.parameters[1])) ? S : T
 
 ## Reading
 
@@ -587,7 +587,8 @@ function _datasettable(ds::Dataset, file::_DatasetFile, table::Table)
         column = if ds.partition[index] > 0
             _constantcolumn(T, file.partitions[ds.partition[index]], rows)
         elseif ds.names[index] in file.columns
-            _convertcolumn(T, Tables.getcolumn(table, ds.names[index]))
+            _datasetcolumn(T, Tables.getcolumn(table, ds.names[index]), ds.names[index],
+                file)
         else
             _constantcolumn(T, missing, rows)
         end
@@ -627,6 +628,19 @@ function _constantcolumn(T::Type, value, rows::Int)
     end
     T === Missing && return fill(missing, rows)
     return fill!(Vector{T}(undef, rows), ismissing(value) ? missing : convert(S, value))
+end
+
+# A file's column as the dataset's type `T`, which can be wider than the file's: a value
+# the wider type cannot hold (a far timestamp at a finer unit) names the column and file.
+function _datasetcolumn(T::Type, column::AbstractVector, name::Symbol, file::_DatasetFile)
+    try
+        return _convertcolumn(T, column)
+    catch err
+        err isa Union{InexactError,OverflowError} || rethrow()
+        throw(ArgumentError("the dataset reads column $(repr(String(name))) as $T, which " *
+            "cannot hold a value in $(something(file.path, "one of its sources")); read " *
+            "that file on its own"))
+    end
 end
 
 # `column` with element type `T` (a file's column where other files make it optional).
