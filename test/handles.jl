@@ -148,12 +148,34 @@ end
     @test DataAPI.metadatakeys(Parquet.Table(bytes)) == String[]
 end
 
+# A sink that takes DataAPI metadata, as a DataFrame does.
+struct MetadataSink
+    columns::NamedTuple
+    metadata::Dict{String,Any}
+    colmetadata::Dict{Tuple{Symbol,String},Any}
+end
+MetadataSink(table) = MetadataSink(Tables.columntable(table), Dict(), Dict())
+DataAPI.metadatasupport(::Type{MetadataSink}) = (read=true, write=true)
+DataAPI.colmetadatasupport(::Type{MetadataSink}) = (read=true, write=true)
+DataAPI.metadata!(sink::MetadataSink, key::AbstractString, value; style) =
+    (sink.metadata[key] = (value, style); sink)
+DataAPI.colmetadata!(sink::MetadataSink, column::Symbol, key::AbstractString, value; style) =
+    (sink.colmetadata[(column, key)] = (value, style); sink)
+
 @testset "Parquet.read" begin
     bytes = handlebytes((a=[1, 2, 3], b=["x", "y", "z"]))
     @test Parquet.read(bytes, identity) isa Tables.CopiedColumns
     columns = Parquet.read(bytes, Tables.columntable; select=[:b])
     @test columns == (b=["x", "y", "z"],)
     @test_throws ArgumentError Parquet.read(bytes)
+    # File and column metadata reach a sink that takes them.
+    io = IOBuffer()
+    Parquet.write(io, (a=[1, 2],); metadata=Dict("owner" => "me"),
+        colmetadata=Dict(:a => Dict("unit" => "m")))
+    sink = Parquet.read(take!(io), MetadataSink)
+    @test sink.columns == (a=[1, 2],)
+    @test sink.metadata == Dict("owner" => ("me", :default))
+    @test sink.colmetadata == Dict((:a, "unit") => ("m", :default))
 end
 
 @testset "AbstractSource reads" begin

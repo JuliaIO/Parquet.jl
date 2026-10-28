@@ -971,12 +971,29 @@ end
 Read `source` as [`Parquet.Table`](@ref)`(source; kw...)` does and pass its columns to
 `sink` without copying their values, for example `Parquet.read(path, DataFrame)`.
 Nested columns arrive as `Vector`s of their rows, so the sink can grow and reorder them.
+A sink that takes DataAPI metadata, such as a `DataFrame`, gets the file and column
+metadata, as `DataFrame(Parquet.Table(path))` does.
 """
 function read(source, sink; kw...)
     table = Table(source; kw...)
     columns = map(_rowcolumn, _tablecolumns(table))
-    return sink(Tables.CopiedColumns(Table(_tablemetadata(table), _tableschema(table),
-        columns, _tablerows(table), _tablecolmetadata(table))))
+    copied = Table(_tablemetadata(table), _tableschema(table), columns, _tablerows(table),
+        _tablecolmetadata(table))
+    result = sink(Tables.CopiedColumns(copied))
+    # The CopiedColumns wrapper, which lets the sink keep the columns, hides the
+    # table's metadata from it.
+    if DataAPI.metadatasupport(typeof(result)).write
+        for key in DataAPI.metadatakeys(copied)
+            DataAPI.metadata!(result, key, DataAPI.metadata(copied, key); style=:default)
+        end
+    end
+    if DataAPI.colmetadatasupport(typeof(result)).write
+        for (column, keys) in DataAPI.colmetadatakeys(copied), key in keys
+            DataAPI.colmetadata!(result, column, key,
+                DataAPI.colmetadata(copied, column, key); style=:default)
+        end
+    end
+    return result
 end
 
 _rowcolumn(column::AbstractVector) = column
