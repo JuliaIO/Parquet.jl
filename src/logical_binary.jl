@@ -1,6 +1,13 @@
 import UUIDs
 
-"""An encoded JSON document whose UTF-8 bytes are preserved exactly."""
+"""
+    Parquet.JSONValue(bytes::AbstractVector{UInt8}; limits=Parquet.Limits())
+
+A JSON document kept as its UTF-8 bytes, the values of a JSON column. The bytes are
+copied and checked to hold one JSON value (an `ArgumentError` otherwise), without
+building objects from them. `string(value)` is the document text; a column of
+`JSONValue`s writes as a JSON column.
+"""
 struct JSONValue
     bytes::Base.CodeUnits{UInt8,String}
 
@@ -16,7 +23,13 @@ struct JSONValue
     end
 end
 
-"""An encoded BSON document whose bytes are preserved exactly."""
+"""
+    Parquet.BSONValue(bytes::AbstractVector{UInt8}; limits=Parquet.Limits())
+
+A BSON document kept as its bytes, the values of a BSON column. The bytes are copied and
+checked to hold one well-formed document (an `ArgumentError` otherwise); a column of
+`BSONValue`s writes as a BSON column.
+"""
 struct BSONValue
     bytes::Base.CodeUnits{UInt8,String}
 

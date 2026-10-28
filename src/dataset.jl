@@ -29,11 +29,11 @@ are skipped in directories and patterns. The keywords are those of
 [`Parquet.Table`](@ref).
 
 - A directory named `key=value` below the dataset's root gives its files a column `key`,
-  typed `Int64`, `Float64`, `Dates.Date`, `Bool`, or `String`, whichever all of its
-  values parse as; it follows the files' columns unless the files have a column of that
-  name, whose values it replaces (as pyarrow, Polars, and DuckDB do). An empty value or
-  `__HIVE_DEFAULT_PARTITION__` reads as `missing`. `partitioning=nothing` reads the
-  files' columns only.
+  typed `Int64`, `Float64`, `Dates.Date`, or `Bool`, the first that all of its values
+  parse as, or else a string (`DataStrings.DataString`); it follows the files' columns
+  unless the files have a column of that name, whose values it replaces (as pyarrow,
+  Polars, and DuckDB do). An empty value or `__HIVE_DEFAULT_PARTITION__` reads as
+  `missing`. `partitioning=nothing` reads the files' columns only.
 - Columns match by name across files. A column some files lack is `missing` in their
   rows; a column whose element type differs between files is an `ArgumentError`.
 - A filter skips the files whose partition values rule it out, and row groups and pages

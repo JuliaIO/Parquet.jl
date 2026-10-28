@@ -23,8 +23,11 @@ columns = Tables.columntable(table)
 (id=collect(columns.id), label=collect(columns.label))
 ```
 
-See the [guide](@ref "Guide") for writer options, statistics, and resource limits.
-See the [API reference](@ref "API reference") for the public types and functions.
+[Reading](@ref) covers columns, filters, row groups, threads, and sources;
+[Datasets](@ref) reads directories of files; [Writing](@ref) covers the writer's options;
+[Type mapping](@ref) lists the column types in both directions; and
+[Limits and errors](@ref) covers resource limits, errors, and what is not supported. The
+[API reference](@ref "API reference") lists the public types and functions.
 
 ## Format target
 

@@ -947,8 +947,9 @@ end
     Parquet.col(name)
 
 A column reference for a read `filter`, the same as `Tables.col`:
-`Parquet.Table(path; filter=Parquet.col(:x) > 3)`. Combine comparisons with `&`, `|`, and
-`!`; see also [`Parquet.colcmp`](@ref), [`Parquet.colin`](@ref), and
+`Parquet.Table(path; filter=Parquet.col(:x) > 3)`. `<`, `<=`, `>`, and `>=` compare it with
+numbers, strings, and characters, and `&`, `|`, and `!` combine filters; equality and
+other values go through [`Parquet.colcmp`](@ref). See also [`Parquet.colin`](@ref) and
 [`Parquet.isnull`](@ref).
 """
 const col = Tables.col
@@ -956,9 +957,10 @@ const col = Tables.col
 """
     Parquet.colcmp(op, column, value)
 
-A filter comparison for values the operator forms of [`Parquet.col`](@ref) do not cover
-(dates, timestamps), the same as `Tables.colcmp`:
-`Parquet.colcmp(>=, Parquet.col(:day), Date(2025, 1, 1))`.
+A filter comparison, the same as `Tables.colcmp`; `op` is `==`, `!=`, `<`, `<=`, `>`, or
+`>=`. Use it for equality (`Parquet.col(:x) == 3` is the ordinary `==`, which is `false`)
+and for values the operator forms of [`Parquet.col`](@ref) do not cover, such as dates
+and timestamps: `Parquet.colcmp(>=, Parquet.col(:day), Date(2025, 1, 1))`.
 """
 const colcmp = Tables.colcmp
 

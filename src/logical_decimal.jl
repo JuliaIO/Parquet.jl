@@ -1,7 +1,10 @@
 """
-    Decimal(unscaled, scale)
+    Parquet.Decimal(unscaled::Integer, scale::Integer)
 
-An exact Parquet decimal value equal to `unscaled * 10^(-scale)`.
+The exact decimal `unscaled * 10^(-scale)`, with a `BigInt` coefficient: the values of a
+DECIMAL column wider than 76 digits, which `DataDecimals.Decimal` cannot hold. A column
+of them writes as DECIMAL with the precision and scale its values need;
+[`Parquet.LogicalColumn`](@ref) sets them explicitly.
 """
 struct Decimal
     unscaled::BigInt

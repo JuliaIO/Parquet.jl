@@ -36,43 +36,10 @@ The keywords and their defaults, which match pyarrow's:
 | `ntasks` | `Threads.nthreads()` | tasks that encode column chunks |
 | `limits` | `Parquet.Limits()` | resource limits |
 
-## Type mapping
+## Column types
 
-Each column's element type decides its Parquet type. Values read back as the same type
-unless the table says otherwise.
-
-| Julia element type | Parquet column | Reads back as |
-|:--|:--|:--|
-| `Bool`, `Int8`-`Int64`, `UInt8`-`UInt64`, `Float16`, `Float32`, `Float64` | BOOLEAN, INT32/INT64 (with an INT annotation below 32 bits and for unsigned types), FLOAT16, FLOAT, DOUBLE | the same type |
-| `AbstractString`, `Symbol`, `Char` | STRING | `DataStrings.DataString` |
-| `Vector{UInt8}`, `DataStrings.DataBytes` | BYTE_ARRAY | `DataStrings.DataBytes` |
-| `NTuple{N,UInt8}` | FIXED_LEN_BYTE_ARRAY(N) | `NTuple{N,UInt8}` |
-| `UUID` | UUID | `UUID` |
-| `Date`, `Time` | DATE, TIME(NANOS) | `Date`, `Time` |
-| `DateTime` | TIMESTAMP(MILLIS) | `Durations.Timestamp{Millisecond}` |
-| `Durations.Timestamp{P}` | TIMESTAMP in unit `P` (`Second` as milliseconds) | `Durations.Timestamp{P}` |
-| `Durations.ZonedTimestamp{P,Z}` | TIMESTAMP adjusted to UTC; the zone goes in the ARROW:schema | `Durations.ZonedTimestamp{P,Z}` |
-| `Nanosecond`-`Second`; `Minute`-`Week` | INT64 count of the unit; of seconds | the same type; `Second` |
-| `Month`, `Year`, `Durations.Duration` | INTERVAL | `Durations.Duration` |
-| `DataDecimals.Decimal{P,S}` | DECIMAL(P,S) on INT32, INT64, or FIXED_LEN_BYTE_ARRAY | the same type |
-| `PooledArray`, `CategoricalArray` values | the type of the pool's values, dictionary encoded from the pool | plain values |
-| `AbstractVector`, `NTuple` | LIST | `AbstractVector` rows |
-| `NamedTuple` | group | `NamedTuple` rows |
-| `AbstractDict`, `AbstractVector{<:Pair}` | MAP | `AbstractVector{<:Pair}` rows |
-| `Missing` only | a null column | `Missing` |
-
-Nested values nest in any combination, with `missing` allowed at every level: a missing
-list, an empty list, and a list holding `missing` stay distinct. Map keys cannot be
-missing. A tuple's elements need one type up to `missing`; use a `NamedTuple` for a
-struct of mixed types. Maps keep their entries in order, duplicate keys included. A table
-read by `Parquet.Table` writes back without copying its nested rows.
-
-A column whose element type is abstract or a `Union` of several types, such as a
-`Vector{Any}`, is written as the one type its values share: numbers are promoted when
-every value converts exactly, strings become STRING, and containers are promoted element
-by element. Other mixes, `nothing` values, and `Int128` or `BigInt` columns are errors that
-name the column. `Parquet.LogicalColumn` selects an annotation a Julia type cannot say,
-such as ENUM or a TIME unit.
+Each column's element type decides its Parquet type, including nested and `missing`
+values; [Type mapping](@ref) lists every type in both directions.
 
 ## Compression and encodings
 

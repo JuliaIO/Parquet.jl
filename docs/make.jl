@@ -13,8 +13,11 @@ makedocs(
     ),
     pages=[
         "Home" => "index.md",
-        "Guide" => "guide.md",
+        "Reading" => "reading.md",
+        "Datasets" => "datasets.md",
         "Writing" => "writing.md",
+        "Type mapping" => "types.md",
+        "Limits and errors" => "limits.md",
         "Migrating from 0.8" => "migration.md",
         "API" => "api.md",
     ],
