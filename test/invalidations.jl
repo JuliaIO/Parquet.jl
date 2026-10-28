@@ -6,7 +6,7 @@
     script = raw"""
         using Parquet
         entries = ccall(:jl_debug_method_invalidation, Any, (Cint,), 1)
-        using CSV, CategoricalArrays, PooledArrays, SentinelArrays
+        using CSV, CategoricalArrays, PooledArrays, SentinelArrays, TimeZones
         ccall(:jl_debug_method_invalidation, Any, (Cint,), 0)
         instance(x) = x isa Core.MethodInstance ? x : x isa Core.CodeInstance ?
             (x.def isa Core.MethodInstance ? x.def : x.def.def) : nothing
