@@ -113,6 +113,56 @@ end
     end
 end
 
+@testset "path sinks never replace a directory and keep the file they replace" begin
+    mktempdir() do directory
+        treefiles(root) = sort([joinpath(dir, file) for (dir, _, files) in walkdir(root)
+            for file in files])
+        lake = joinpath(directory, "lake")
+        Parquet.write(lake, (year=[2023, 2024], v=[1, 2]); partitionby=:year)
+        files = treefiles(lake)
+        @test_throws "is a directory. To write a partitioned dataset into it, pass " *
+            "partitionby" Parquet.write(lake, (v=[3],))
+        @test_throws "is a directory" Parquet.Writer(lake)
+        @test treefiles(lake) == files
+        # A missing directory is reported for the path given, not the temporary file.
+        missingdir = joinpath(directory, "nope", "x.parquet")
+        err = try
+            Parquet.write(missingdir, (a=[1],))
+            nothing
+        catch error
+            error
+        end
+        @test err isa SystemError
+        @test occursin(repr(missingdir), sprint(showerror, err))
+        @test !occursin(".partial", sprint(showerror, err))
+        # A read-only file is refused as open(path, "w") refuses it (root can write it).
+        frozen = joinpath(directory, "frozen.parquet")
+        Parquet.write(frozen, (v=[1],))
+        chmod(frozen, 0o444)
+        if Sys.iswindows() || ccall(:getuid, UInt32, ()) != 0
+            @test_throws SystemError Parquet.write(frozen, (v=[2],))
+            @test wrcolumn(read(frozen), :v) == [1]
+        end
+        chmod(frozen, 0o644)
+        if !Sys.iswindows()
+            # A symlink is written through, and the replaced file keeps its mode.
+            target = joinpath(directory, "data.parquet")
+            Parquet.write(target, (v=[1],))
+            chmod(target, 0o640)
+            link = joinpath(directory, "latest.parquet")
+            symlink(target, link)
+            Parquet.write(link, (v=[2],))
+            @test islink(link)
+            @test wrcolumn(read(target), :v) == [2]
+            @test filemode(target) & 0o777 == 0o640
+            # Devices are written in place.
+            @test Parquet.write("/dev/null", (v=[1],)) == "/dev/null"
+            @test ischardev("/dev/null")
+        end
+        @test !any(endswith(".partial"), readdir(directory))
+    end
+end
+
 @testset "write metadata keywords and DataAPI defaults" begin
     table = WRMetaTable((id=[1, 2], name=["a", "b"]),
         Dict("source" => "test", "ARROW:schema" => "stale"),

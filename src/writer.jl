@@ -507,12 +507,15 @@ The function form passes the writer to `f` and closes it when `f` returns; when 
 the output is abandoned (a path sink is removed). Keyword arguments are those of
 [`Parquet.write`](@ref), except `partitionby` and `existing`, plus `nullable`.
 
-A path sink is written to a temporary file in the same directory and moved over `sink`
-when the writer closes, so an existing file stays intact until then.
+A path sink is written as [`Parquet.write`](@ref) writes one: to a temporary file that
+replaces the file when the writer closes, so an existing file stays intact until then.
 """
 mutable struct Writer{S<:IO}
     io::S
+    # The sink path as given, and the file a temporary file replaces at close (symlinks
+    # resolved); both `nothing` for an IO sink, `temporary` also for a device or pipe.
     path::Union{Nothing,String}
+    target::Union{Nothing,String}
     temporary::Union{Nothing,String}
     options::_WriteOptions
     schema::Union{Nothing,_WriteSchema}
@@ -528,28 +531,48 @@ end
 
 # The leading magic is written with the first column chunk (or by `close`), so a table
 # rejected before any chunk is encoded leaves an IO sink untouched.
-function _newwriter(io::IO, path, temporary, options::_WriteOptions)
-    return Writer(io, path, temporary, options, nothing, _GroupRecord[], Int64(0),
+function _newwriter(io::IO, path, target, temporary, options::_WriteOptions)
+    return Writer(io, path, target, temporary, options, nothing, _GroupRecord[], Int64(0),
         Int64(0), nothing, Dict{String,Vector{Metadata.KeyValue}}(),
         Dict{Vector{String},Any}(), false)
 end
 
 function Writer(io::IO; nullable::Bool=true, kwargs...)
-    return _newwriter(io, nothing, nothing, _writeoptions(; nullable=nullable, kwargs...))
+    return _newwriter(io, nothing, nothing, nothing,
+        _writeoptions(; nullable=nullable, kwargs...))
 end
 
 function Writer(path::AbstractString; nullable::Bool=true, kwargs...)
     return _openwriter(path, _writeoptions(; nullable=nullable, kwargs...))
 end
 
+# A file is written to a hidden temporary file beside the file it replaces (through
+# symlinks), which keeps that file's mode and is renamed over it at close. An existing
+# read-only file is refused as `open(path, "w")` would refuse it. Devices and pipes are
+# written in place; a directory is never replaced.
 function _openwriter(path::AbstractString, options::_WriteOptions)
-    target = String(path)
-    directory = dirname(abspath(target))
-    temporary = joinpath(directory,
+    path = String(path)
+    isdir(path) && throw(ArgumentError("cannot write a Parquet file to $(repr(path)): it " *
+        "is a directory. To write a partitioned dataset into it, pass partitionby to " *
+        "Parquet.write"))
+    ispath(path) && !isfile(path) &&
+        return _newwriter(open(path, "w"), path, nothing, nothing, options)
+    existing = isfile(path)
+    existing && close(open(path, "r+"))
+    target = existing ? realpath(path) : islink(path) ?
+        normpath(joinpath(dirname(abspath(path)), readlink(path))) : abspath(path)
+    temporary = joinpath(dirname(target),
         "." * basename(target) * "." * string(rand(UInt64); base=36) * ".partial")
-    io = open(temporary, "w")
+    io = try
+        open(temporary, "w")
+    catch err
+        # A missing or unwritable directory: name the path the caller gave.
+        err isa SystemError && throw(SystemError("opening file $(repr(path))", err.errnum))
+        rethrow()
+    end
     try
-        return _newwriter(io, target, temporary, options)
+        existing && chmod(temporary, filemode(target) & 0o7777)
+        return _newwriter(io, path, target, temporary, options)
     catch
         close(io)
         rm(temporary; force=true)
@@ -572,10 +595,9 @@ end
 function _abandon!(writer::Writer)
     writer.closed && return
     writer.closed = true
-    if writer.temporary !== nothing
-        close(writer.io)
-        rm(writer.temporary; force=true)
-    end
+    writer.path === nothing && return
+    close(writer.io)
+    writer.temporary === nothing || rm(writer.temporary; force=true)
     return
 end
 
@@ -798,8 +820,8 @@ end
 """
     close(writer::Parquet.Writer)
 
-Write the page indexes and footer. A writer to a path then moves its temporary file over
-the path; a writer to an `IO` leaves the `IO` open.
+Write the page indexes and footer. A writer to a path then renames its temporary file
+over the file it replaces; a writer to an `IO` leaves the `IO` open.
 """
 function Base.close(writer::Writer)
     writer.closed && return
@@ -810,13 +832,20 @@ function Base.close(writer::Writer)
         rethrow()
     end
     writer.closed = true
-    if writer.temporary !== nothing
-        close(writer.io)
-        mv(writer.temporary, writer.path; force=true)
-    else
+    if writer.path === nothing
         flush(writer.io)
+        return
     end
-    return
+    close(writer.io)
+    temporary = writer.temporary
+    temporary === nothing && return
+    # A rename replaces the file in one step, and fails rather than replace a directory.
+    err = ccall(:jl_fs_rename, Int32, (Cstring, Cstring), temporary, writer.target)
+    err < 0 || return
+    rm(temporary; force=true)
+    hint = Sys.iswindows() ? " (close programs that have it open, then retry)" : ""
+    throw(Base.IOError("Parquet could not replace $(repr(writer.path)); it is " *
+        "unchanged$hint", err))
 end
 
 function _finishfile!(writer::Writer)
@@ -988,8 +1017,10 @@ partition of a `Tables.partitions` source is written as one or more row groups, 
 every column nullable and later partitions converted to the first partition's types; a
 single table keeps the nullability of its element types. The one-argument form returns a
 function, so a table can be piped: `CSV.File(path) |> Parquet.write("out.parquet")`.
-A path sink is written to a temporary file in the same directory and moved over `sink`
-at the end, so a failed write leaves an existing file intact.
+A path sink is written to a temporary file beside the file it replaces and renamed over it
+at the end, so a failed write leaves an existing file intact. An existing file keeps its
+permissions, a symlink is written through, a read-only file is refused, and a directory is
+an error (pass `partitionby` to write a dataset into it).
 
 Keywords and defaults (pyarrow's):
 
@@ -1044,7 +1075,7 @@ function write(sink::Union{IO,AbstractString}, table; partitionby=nothing,
         "existing applies only to partitioned writes (partitionby)"))
     nullable = Tables.partitions(table) isa Tuple{Any} ? nothing : true
     options = _writeoptions(; nullable=nullable, kwargs...)
-    writer = sink isa IO ? _newwriter(sink, nothing, nothing, options) :
+    writer = sink isa IO ? _newwriter(sink, nothing, nothing, nothing, options) :
         _openwriter(sink, options)
     write(writer, table)
     if writer.schema === nothing
