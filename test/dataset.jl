@@ -175,6 +175,38 @@ end
         @test occursin("\"a\"", err.msg) && occursin("p0.parquet", err.msg) &&
             occursin("p1.parquet", err.msg)
     end
+    # Types that widen without loss read as the wider one, whichever file comes first.
+    Durations = Parquet.Durations
+    stamp(P, n) = Durations.Timestamp{P}(Dates.UTInstant(P(n)))
+    for (first_, second_, T) in ((Int32[1, 2], [3, typemax(Int64)], Int64),
+            ([3, typemax(Int64)], Int32[1, 2], Int64),
+            (UInt32[1, typemax(UInt32)], Int32[-1, 2], Int64),
+            (UInt8[1, 255], UInt16[3, 4], UInt16),
+            (Float32[1.5, 2.5], [3.25, 1e300], Float64),
+            ([stamp(Millisecond, 1), stamp(Millisecond, 2)],
+                [stamp(Microsecond, 3), stamp(Microsecond, 4)], Durations.Timestamp{Microsecond}),
+            (Union{Missing,Int32}[1, missing], [5, 6], Union{Missing,Int64}))
+        mktempdir() do dir
+            dswrite(dir, "p0.parquet", (a=first_,))
+            dswrite(dir, "p1.parquet", (a=second_,))
+            t = Parquet.Table(dir)
+            @test eltype(t.a) == T &&
+                isequal(t.a, T[value for value in Iterators.flatten((first_, second_))])
+            @test Tables.schema(Parquet.Dataset(dir)).types == (T,)
+            # The table writes back with the wider type's schema.
+            @test eltype(Parquet.Table(take!(Parquet.write(IOBuffer(), t))).a) == T
+            @test Parquet.Table(dir; filter=Parquet.colcmp(==, Parquet.col(:a),
+                last(second_))).a == [last(second_)]
+        end
+    end
+    for (first_, second_) in (([1], [1.5]), ([typemax(UInt64)], [-1]),
+            ([1], [Durations.Timestamp{Millisecond}(Dates.UTInstant(Millisecond(1)))]))
+        mktempdir() do dir
+            dswrite(dir, "p0.parquet", (a=first_,))
+            dswrite(dir, "p1.parquet", (a=second_,))
+            @test_throws ArgumentError Parquet.Dataset(dir)
+        end
+    end
     # A directory value replaces a file column of the same name.
     mktempdir() do dir
         dswrite(dir, "year=2000/x.parquet", (id=[1, 2], year=[1999, 1998]))

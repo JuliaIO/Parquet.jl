@@ -53,8 +53,12 @@ Columns match by name across files, in the order they first appear:
 - A column some files lack reads as `missing` in their rows.
 - A column that is required in one file and optional in another, or all-null in one
   file, reads as `Union{Missing,T}`.
-- A column whose element type differs between files is an `ArgumentError` that names the
-  column and both files.
+- A column whose files store types that widen without loss reads as the wider type, as
+  `pyarrow.dataset` reads it: `Int32` and `Int64` as `Int64` (integers of mixed
+  signedness as `Int64`), `Float32` and `Float64` as `Float64`, and millisecond and
+  microsecond timestamps as microseconds.
+- Other differences in element type are an `ArgumentError` that names the column and
+  both files.
 
 ```@example datasets
 mixed = mktempdir()

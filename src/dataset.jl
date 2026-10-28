@@ -36,7 +36,9 @@ are skipped in directories and patterns. The keywords are those of
   value as the string `""`, as in pyarrow, Polars, and DuckDB.
   `partitioning=nothing` reads the files' columns only.
 - Columns match by name across files. A column some files lack is `missing` in their
-  rows; a column whose element type differs between files is an `ArgumentError`.
+  rows. A column whose files hold narrower integers, a narrower float, or a coarser
+  timestamp unit reads as the wider type; other differences in element type are an
+  `ArgumentError`.
 - A filter skips the files whose partition values rule it out, and row groups and pages
   within files as `Parquet.Table` does.
 - Iterating the dataset yields one `Parquet.Table` per row group of each file, so it is
@@ -427,15 +429,23 @@ function _unifycolumns(files, keys::Vector{Symbol})
             end
             U = types[known]
             (U === T || name in keys) && continue
-            if Base.nonmissingtype(U) === Base.nonmissingtype(T) || T === Missing
+            S, R = Base.nonmissingtype(U), Base.nonmissingtype(T)
+            if S === R || T === Missing
                 types[known] = Union{Missing,U}
             elseif U === Missing
                 types[known] = Union{Missing,T}
                 elements[known] = subtree
+            elseif (W = _widentype(S, R)) !== nothing
+                types[known] = Missing <: U || Missing <: T ? Union{Missing,W} : W
+                W === R && (elements[known] = subtree)
+                W === S || W === R ||
+                    (elements[known] = [_partitionelement(String(name), W)])
             else
                 throw(ArgumentError("column $(repr(String(name))) is $U in " *
                     "$(_describe(files[first[known]], first[known])) but $T in " *
-                    "$(_describe(file, index)); the files' columns must match by type"))
+                    "$(_describe(file, index)); the files' columns must have one type, " *
+                    "or types that widen without loss (integers, floats, or timestamp " *
+                    "units)"))
             end
         end
     end
@@ -444,6 +454,30 @@ function _unifycolumns(files, keys::Vector{Symbol})
     end
     return names, types, elements
 end
+
+# The type that holds every value of the read types `S` and `T` exactly, when one
+# widens the other without loss: integers (to the wider, or to Int64 for mixed
+# signedness), floats, and timestamps of one zone (to the finer unit). `nothing` for any
+# other pair.
+function _widentype(S::Type, T::Type)
+    if S <: Union{Signed,Unsigned} && T <: Union{Signed,Unsigned}
+        for W in (S, T, Int64)
+            typemin(W) <= typemin(S) && typemin(W) <= typemin(T) &&
+                typemax(S) <= typemax(W) && typemax(T) <= typemax(W) && return W
+        end
+    elseif S <: AbstractFloat && T <: AbstractFloat
+        return promote_type(S, T)
+    elseif S <: Durations.Timestamp && T <: Durations.Timestamp
+        return _finerunit(S, T)
+    elseif S <: Durations.ZonedTimestamp && T <: Durations.ZonedTimestamp &&
+            S.parameters[2] === T.parameters[2]
+        return _finerunit(S, T)
+    end
+    return nothing
+end
+
+_finerunit(S::Type, T::Type) = Dates.toms(oneunit(S.parameters[1])) <=
+    Dates.toms(oneunit(T.parameters[1])) ? S : T
 
 ## Reading
 
