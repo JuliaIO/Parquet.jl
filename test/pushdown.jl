@@ -468,3 +468,21 @@ end
         @test isempty(read(Parquet.colcmp(==, Parquet.col(:id), missing)))
     end
 end
+
+@testset "pushdown: old parquet-mr decimal statistics stored as bytes" begin
+    # parquet-mr 1.8.2 compared FIXED_LEN_BYTE_ARRAY decimals as signed bytes, so its
+    # statistics say min 2.00 where the data holds 1.00. They must not prune.
+    corpus = get(ENV, "PARQUET_TESTING_DIR", joinpath(@__DIR__, "parquet-testing"))
+    for name in ("fixed_length_decimal.parquet", "fixed_length_decimal_legacy.parquet")
+        path = joinpath(corpus, "data", name)
+        isfile(path) || continue
+        all = Parquet.Table(path).value
+        one = filter(value -> value < 2, all)
+        @test length(one) == 1
+        @test Parquet.Table(path; filter=Parquet.col(:value) < 2).value == one
+        @test Parquet.Table(path; filter=Parquet.colcmp(==, Parquet.col(:value),
+            only(one))).value == one
+        stats = only(Parquet.statistics(Parquet.File(path), :value))
+        @test stats.min === nothing && stats.max === nothing
+    end
+end

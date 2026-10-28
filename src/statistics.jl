@@ -929,7 +929,11 @@ function _statisticproducertrust(element::Metadata.SchemaElement,
     if binary && _statisticsparquet251affected(java)
         return _StatisticTrustFact(:untrusted, :parquet_251)
     end
-    _statisticissignedcomparison(comparison) &&
+    # As in Arrow C++'s ApplicationVersion::HasCorrectStatistics, old parquet-mr and
+    # parquet-cpp computed every order but the signed one wrongly. They also compared byte
+    # arrays as signed bytes, which is wrong for decimals stored as bytes too (it puts 2.00
+    # below 1.00), so those fall to the same rule.
+    _statisticissignedcomparison(comparison) && !binary &&
         return _StatisticTrustFact(:trusted, :trusted)
     arrow = _statisticsarrowproducer(createdby)
     affected, reason = _statisticsoldorderaffected(arrow)

@@ -620,11 +620,20 @@ end
         "parquet-mr version 1.5.0-cdh5.-1.0",
         "parquet-mr version 1.5.0-cdh5. 5.0",
         "parquet-mr version 1.5.0-cdh5.\u0665.0",
-        "parquet-mr version 1.5.0-cdh5.6.1",
-        "unrelated version 0.1.0")
-        @test st_facts(signedbinary, decimalstats;
-            created_by=createdby).trust.state == :trusted
+        "parquet-mr version 1.5.0-cdh5.6.1")
+        # Past PARQUET-251, parquet-mr before 1.10 still compared bytes as signed, which
+        # puts decimals stored as bytes out of order (2.00 below 1.00).
+        facts = st_facts(signedbinary, decimalstats; created_by=createdby)
+        @test facts.trust.state == :untrusted && facts.trust.reason == :parquet_mr_pre_1_10
     end
+    @test st_facts(signedbinary, decimalstats;
+        created_by="unrelated version 0.1.0").trust.state == :trusted
+    for createdby in ("parquet-mr version 1.10.0", "parquet-mr version 1.12.3 (build x)",
+            "parquet-cpp version 1.3.0", "parquet-cpp-arrow version 19.0.0")
+        @test st_facts(signedbinary, decimalstats; created_by=createdby).trust.state == :trusted
+    end
+    @test st_facts(signedbinary, decimalstats;
+        created_by="parquet-cpp version 1.2.0").trust.reason == :parquet_cpp_pre_1_3
 
     rawleaf = st_leaf(STMD.Type.BYTE_ARRAY)
     distinct = st_modern(UInt8[0x01], UInt8[0x02])
