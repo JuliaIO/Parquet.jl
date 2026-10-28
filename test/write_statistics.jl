@@ -44,6 +44,15 @@ function wscolumnindex(metadata::WSMD.FileMetaData, name::String)
     throw(ArgumentError("writer statistics test column $name is absent"))
 end
 
+# The ColumnIndex of a chunk, or nothing when the writer wrote none.
+function wspageindex(bytes::Vector{UInt8}, group::Int, column::Int)
+    chunk = wsmetadata(bytes).row_groups[group].columns[column]
+    chunk.column_index_offset === nothing && return nothing
+    start = Int(chunk.column_index_offset) + 1
+    return Parquet.Thrift.decode(bytes[start:(start + Int(chunk.column_index_length) - 1)],
+        WSMD.ColumnIndex)
+end
+
 function wsorderkind(order::WSMD.ColumnOrder)
     order.TYPE_ORDER !== nothing && return :type
     order.IEEE_754_TOTAL_ORDER !== nothing && return :ieee
@@ -201,8 +210,8 @@ end
     @test length(metadata.column_orders) == length(metadata.schema) - 1
     floating = Set(["f32", "f64", "f16"])
     for (index, element) in enumerate(metadata.schema[2:end])
-        expected = element.name in floating ? :ieee : :type
-        @test wsorderkind(metadata.column_orders[index]) == expected
+        # Floats too use the type-defined order, as pyarrow writes it.
+        @test wsorderkind(metadata.column_orders[index]) == :type
         statistics = wsstats(metadata, 1, index)
         @test statistics !== nothing
         wsassertmodern(statistics)
@@ -248,7 +257,9 @@ end
     @test fixed.max_value == UInt8[0x01, 0x01, 0x00]
 end
 
-@testset "writer IEEE extrema, NaN counts, and signed zero" begin
+@testset "writer float extrema, NaN counts, and signed zero" begin
+    # The type-defined order's rules: no NaN in bounds, none for only NaN, zero bounds
+    # -0.0 and +0.0.
     formats = (
         (Float16, UInt16, UInt16(0x8000), UInt16(0x0000),
             UInt16(0x7e11), UInt16(0xfe22)),
@@ -266,7 +277,7 @@ end
         metadata = wsmetadata(Parquet._encodefile((value=mixed,);
             statistics=true))
         statistics = wsstats(metadata, 1, 1)
-        @test wsorderkind(only(metadata.column_orders)) == :ieee
+        @test wsorderkind(only(metadata.column_orders)) == :type
         @test statistics.null_count == 1
         @test statistics.nan_count == 1
         @test wsfloatbits(T, statistics.min_value) == negativezero
@@ -276,17 +287,16 @@ end
         allnanmetadata = wsmetadata(Parquet._encodefile((value=allnan,);
             statistics=true))
         allnanstatistics = wsstats(allnanmetadata, 1, 1)
-        expected = sort(collect(allnanbits); by=wsieeekey)
         @test allnanstatistics.nan_count == 2
-        @test wsfloatbits(T, allnanstatistics.min_value) == first(expected)
-        @test wsfloatbits(T, allnanstatistics.max_value) == last(expected)
+        @test allnanstatistics.min_value === nothing
+        @test allnanstatistics.max_value === nothing
         for bits in (positivezero, negativezero)
             zero = wsfloatvalue(T, bits)
             zerostatistics = wsstats(wsmetadata(Parquet._encodefile(
                 (value=T[zero],); statistics=true)), 1, 1)
             @test zerostatistics.nan_count == 0
-            @test wsfloatbits(T, zerostatistics.min_value) == bits
-            @test wsfloatbits(T, zerostatistics.max_value) == bits
+            @test wsfloatbits(T, zerostatistics.min_value) == negativezero
+            @test wsfloatbits(T, zerostatistics.max_value) == positivezero
         end
     end
     allhalves = reinterpret(Float16, collect(UInt16(0):typemax(UInt16)))
@@ -325,7 +335,7 @@ end
         statistics=true))
     @test isempty(empty.row_groups)
     @test length(empty.column_orders) == 3
-    @test wsorderkind.(empty.column_orders) == [:type, :ieee, :ieee]
+    @test wsorderkind.(empty.column_orders) == [:type, :type, :type]
     allnull = Union{Missing,Int32}[missing, missing, missing]
     statistics = wsstats(wsmetadata(Parquet._encodefile((value=allnull,);
         statistics=true)), 1, 1)
@@ -453,4 +463,24 @@ end
     floatbounds(smallfloats)
     floatbounds(largefloats)
     @test floatbounds(largefloats) <= floatbounds(smallfloats)
+end
+
+@testset "float pages of only NaN" begin
+    # A page of only NaN has no bounds, so the chunk's bounds come from the other pages
+    # and no column index is written for the chunk (its pages must each have bounds).
+    for nan in (NaN, -NaN)
+        bytes = Parquet._encodefile((x=vcat(fill(nan, 20_000), collect(1.0:20_000.0)),);
+            statistics=true)
+        statistics = wsstats(wsmetadata(bytes), 1, 1)
+        @test reinterpret(Float64, statistics.min_value)[1] == 1.0
+        @test reinterpret(Float64, statistics.max_value)[1] == 20_000.0
+        @test statistics.nan_count == 20_000
+        @test wspageindex(bytes, 1, 1) === nothing
+        @test wsmetadata(bytes).row_groups[1].columns[1].offset_index_offset !== nothing
+    end
+    # Page-index zero bounds follow the same rules as the chunk's.
+    bytes = Parquet._encodefile((x=[0.0, -0.0, 1.0],); statistics=true)
+    index = wspageindex(bytes, 1, 1)
+    @test reinterpret(UInt64, only(index.min_values))[1] == 0x8000000000000000
+    @test reinterpret(UInt64, only(index.max_values))[1] == reinterpret(UInt64, 1.0)
 end

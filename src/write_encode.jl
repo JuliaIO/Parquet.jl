@@ -634,7 +634,8 @@ function _numberbounds(values::Vector{Bool}, ::_SignedKey)
     return true, all(values), any(values), 0
 end
 
-# Floats compare in IEEE 754 total order with NaN left out unless every value is NaN.
+# Float bounds follow the type-defined order's rules: NaN is left out (a page of only NaN
+# has no bounds), and a zero minimum is -0.0 and a zero maximum +0.0.
 function _numberbounds(values::Vector{P}, ::_FloatKey) where {P<:Union{Float32,Float64}}
     U = P === Float32 ? UInt32 : UInt64
     lo = typemax(U)
@@ -648,16 +649,9 @@ function _numberbounds(values::Vector{P}, ::_FloatKey) where {P<:Union{Float32,F
         lo = min(lo, ifelse(nan, typemax(U), key))
         hi = max(hi, ifelse(nan, zero(U), key))
     end
-    if nans == length(values)
-        lo = typemax(U)
-        hi = zero(U)
-        @inbounds for value in values
-            key = _totalkey(reinterpret(U, value))
-            lo = min(lo, key)
-            hi = max(hi, key)
-        end
-    end
-    return true, reinterpret(P, _fromtotalkey(lo)), reinterpret(P, _fromtotalkey(hi)), nans
+    nans == length(values) && return false, zero(P), zero(P), nans
+    lower, upper = reinterpret(P, _fromtotalkey(lo)), reinterpret(P, _fromtotalkey(hi))
+    return true, iszero(lower) ? -zero(P) : lower, iszero(upper) ? zero(P) : upper, nans
 end
 
 # Three-way comparison of two byte strings under a byte order.
@@ -705,19 +699,9 @@ function _bytesbounds(values::_BytesBuffer, order::_Order)
             _comparebytes(pointer, length, lopointer, lolength, order) < 0 && (lo = index)
             _comparebytes(pointer, length, hipointer, hilength, order) > 0 && (hi = index)
         end
-        if lo == 0
-            # Every FLOAT16 value is NaN.
-            lo = hi = 1
-            for index in 2:count
-                pointer, length = _bytesview(values, index)
-                lopointer, lolength = _bytesview(values, lo)
-                hipointer, hilength = _bytesview(values, hi)
-                _comparebytes(pointer, length, lopointer, lolength, order) < 0 && (lo = index)
-                _comparebytes(pointer, length, hipointer, hilength, order) > 0 && (hi = index)
-            end
-        end
     end
-    return true, lo, hi, nans
+    # A page of only FLOAT16 NaN has no bounds.
+    return lo != 0, lo, hi, nans
 end
 
 # Bounds of the entries `indices` use, marking them in `marks` first.
@@ -844,6 +828,8 @@ mutable struct _ChunkWriter{B,D}
     entries::Int64
     nulls::Int64
     nans::Int64
+    # A page had values but only NaN, so it has no bounds (see _nanpage!).
+    nanpage::Bool
     uncompressed::Int64
     found::Bool
     min::Vector{UInt8}
@@ -943,7 +929,7 @@ function _ChunkWriter(leaf::_LeafSpec, options::_ChunkOptions, scratch::_EncodeS
         scratch.definitions, scratch.repetitions, scratch.indices, scratch.body,
         scratch.page, scratch.compressed, UInt8[], dictionary,
         usedictionary ? _DICT_PROBING : _DICT_OFF, _PageRecord[], Int32(0), Int32(0),
-        Int64(0), Int64(0), Int64(0), Int64(0), false, UInt8[], UInt8[],
+        Int64(0), Int64(0), Int64(0), false, Int64(0), false, UInt8[], UInt8[],
         leaf.bloom ? _resethashes!(scratch.hashes) : nothing)
 end
 
@@ -1035,14 +1021,23 @@ function _pagebounds!(chunk::_ChunkWriter{B}, encoding::Metadata.Encoding.T) whe
         nans = 0
     elseif values isa _BytesBuffer
         found, lo, hi, nans = _bytesbounds(values, order)
-        found || return false, UInt8[], UInt8[]
+        chunk.nans += nans
+        found || return _nanpage!(chunk, nans)
         minimum, maximum = _boundbytes(values, lo), _boundbytes(values, hi)
+        if order == _ORDER_FLOAT16
+            # FLOAT16 zero bounds as for other floats: -0.0 minimum, +0.0 maximum.
+            _float16bits(minimum) & 0x7fff == 0 && (minimum = UInt8[0x00, 0x80])
+            _float16bits(maximum) & 0x7fff == 0 && (maximum = UInt8[0x00, 0x00])
+        end
         P = _BytesBuffer
+        nans = 0
     else
         found, lo, hi, nans = _numberbounds(values, order)
-        found || return false, UInt8[], UInt8[]
+        chunk.nans += nans
+        found || return _nanpage!(chunk, nans)
         minimum, maximum = _boundbytes(lo), _boundbytes(hi)
         P = eltype(values)
+        nans = 0
     end
     chunk.nans += nans
     if !chunk.found
@@ -1055,6 +1050,15 @@ function _pagebounds!(chunk::_ChunkWriter{B}, encoding::Metadata.Encoding.T) whe
     end
     return true, minimum, maximum
 end
+
+# A page whose values are all NaN has no bounds, and a column index, whose pages must each
+# have bounds unless they hold only nulls, is not written for its chunk.
+function _nanpage!(chunk::_ChunkWriter, nans::Int)
+    nans > 0 && (chunk.nanpage = true)
+    return false, UInt8[], UInt8[]
+end
+
+_float16bits(bound::Vector{UInt8}) = UInt16(bound[1]) | (UInt16(bound[2]) << 8)
 
 _levelwidth(level::Int) = 64 - leading_zeros(UInt64(level))
 
@@ -1297,8 +1301,8 @@ function _finishchunk(chunk::_ChunkWriter)
     chunk.plainpages > 0 && push!(stats, Metadata.PageEncodingStats(page_type=pagetype,
         encoding=plainencoding, count=chunk.plainpages))
     statistics = options.statistics ? _chunkstatistics(chunk) : nothing
-    columnindex = options.pageindex && options.statistics && leaf.order != _ORDER_NONE ?
-        _columnindex(chunk) : nothing
+    columnindex = options.pageindex && options.statistics && leaf.order != _ORDER_NONE &&
+        !chunk.nanpage ? _columnindex(chunk) : nothing
     return _EncodedChunk(dictionary, chunk.data, encodings, stats, chunk.entries,
         chunk.uncompressed + dictionarybytes, statistics, chunk.pages, columnindex,
         _chunkbloom(chunk))
