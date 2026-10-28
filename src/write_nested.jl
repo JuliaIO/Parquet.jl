@@ -254,10 +254,13 @@ end
 
 function _tupleunify(A::Type, B::Type)
     A === Union{} && return B
+    B === Union{} && return A
     A == B && return A
-    if Missing <: A || Missing <: B
-        S = _tupleunify(Base.nonmissingtype(A), Base.nonmissingtype(B))
-        return S === nothing ? nothing : Union{Missing,S}
+    # Removing Missing from an abstract type such as Any leaves it unchanged.
+    S, U = Base.nonmissingtype(A), Base.nonmissingtype(B)
+    if (S, U) != (A, B)
+        T = _tupleunify(S, U)
+        return T === nothing ? nothing : Union{Missing,T}
     end
     A <: Tuple && B <: Tuple && A isa DataType && B isa DataType &&
         !isempty(A.parameters) && !Base.isvarargtype(A.parameters[end]) &&

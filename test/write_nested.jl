@@ -1243,6 +1243,9 @@ end
         (value=Any[[1], Any["a"]],))
     @test_throws "only empty containers" Parquet._encodefile((value=Any[[], []],))
 
+    # A tuple position that only ever holds missing takes the other positions' type.
+    values, _ = wnroundtrip([(1.5, missing), (2.5, missing)])
+    @test isequal(wnplain.(values), Any[Any[1.5, missing], Any[2.5, missing]])
     @test_throws "need one element type" Parquet._encodefile((value=[(1, "a")],))
     @test_throws "fixed, nonzero number" Parquet._encodefile((value=[()],))
     @test_throws "MAP key types cannot include Missing" Parquet._encodefile(
