@@ -423,8 +423,12 @@ end
     @test isequal(table.optional, optional)
     close(table)
 
-    # Past 1024 bytes a fixed width reads as DataBytes.
-    wide = [Tuple(fill(UInt8(i), 1025)) for i in 1:2]
+    # Up to 256 bytes a fixed width reads as NTuples; past that, as DataBytes.
+    widest = [Tuple(fill(UInt8(i), 256)) for i in 1:2]
+    widesttable = Parquet.Table(Parquet._encodefile((widest=widest,)))
+    @test widesttable.widest isa Vector{NTuple{256,UInt8}}
+    @test widesttable.widest == widest
+    wide = [Tuple(fill(UInt8(i), 257)) for i in 1:2]
     widetable = Parquet.Table(Parquet._encodefile((wide=wide,)))
     @test widetable.wide isa Parquet.DataStrings.BytesVector
     @test [collect(value) for value in widetable.wide] == [collect(value) for value in wide]

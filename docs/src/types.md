@@ -11,7 +11,7 @@ elements are `Union{Missing,T}`.
 | INT(8-64, signed or not), FLOAT16 | `Int8`-`UInt64`, `Float16` |
 | STRING, ENUM | `DataStrings.DataString` (the column is a `DataStrings.StringVector`) |
 | BYTE_ARRAY | `DataStrings.DataBytes` (the column is a `DataStrings.BytesVector`) |
-| FIXED_LEN_BYTE_ARRAY(N) | `NTuple{N,UInt8}`; `DataStrings.DataBytes` when N > 1024 |
+| FIXED_LEN_BYTE_ARRAY(N) | `NTuple{N,UInt8}`; `DataStrings.DataBytes` when N > 256 |
 | UUID | `UUIDs.UUID` |
 | DECIMAL(p, s), p <= 76 | `DataDecimals.Decimal{p,s,T}`, stored in `Int32`, `Int64`, `Int128`, or `DataDecimals.Int256` |
 | DECIMAL(p, s), p > 76 | [`Parquet.Decimal`](@ref) |

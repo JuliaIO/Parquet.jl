@@ -72,8 +72,8 @@ function _logicaleltype(node::SchemaNode, physical::Type)
 end
 
 # Widest FIXED_LEN_BYTE_ARRAY read as an `NTuple`; wider ones read as `DataBytes`, so a
-# file cannot force a huge tuple type.
-const _MAX_FIXED_TUPLE_BYTES = 1024
+# file cannot force a huge tuple type. Arrow.jl uses the same bound for fixed-size binary.
+const _MAX_FIXED_TUPLE_BYTES = 256
 
 function _unannotatedeltype(element::Metadata.SchemaElement, physical::Type)
     element.type_ == Metadata.Type.BYTE_ARRAY && return DataStrings.DataBytes
