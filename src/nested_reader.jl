@@ -184,6 +184,7 @@ mutable struct _PathState
     chunkstart::Bool
     previous::UInt16
     slots::Vector{Int}
+    bounds::Vector{Int}
     hashes::Vector{UInt64}
     bits::Vector{BitVector}
     offsets::Vector{Vector{Int}}
@@ -219,7 +220,7 @@ function _PathState(path::_LeafPath, rows::Int, entries::Int, buffers::_PageBuff
         path.kind[item] == _ITEM_OFFSETS && sizehint!(offsets[item], capacity)
     end
     return _PathState(path, true, 0x0000, zeros(Int, path.depth + 1),
-        zeros(UInt64, items), bits, offsets)
+        zeros(Int, path.depth + 1), zeros(UInt64, items), bits, offsets)
 end
 
 @inline _mixhash(hash::UInt64, value::UInt64) = (hash ⊻ value) * 0x00000100000001b3
@@ -273,6 +274,7 @@ function _assemblenodes!(state::_PathState, repetitions::Vector{UInt16},
         end
     end
     ends = copy(slots)
+    bounds = _openbounds!(state.bounds, repetitions, count)
     item = 1
     while item <= length(path.kind)
         kind = path.kind[item]
@@ -289,14 +291,29 @@ function _assemblenodes!(state::_PathState, repetitions::Vector{UInt16},
                 path.kind[item + 1] == _ITEM_OFFSETS && path.node[item + 1] == path.node[item]
             offsets = item + 1
         end
-        validity > 0 && resize!(state.bits[validity], slots[space + 1] + count)
-        offsets > 0 && _growto!(state.offsets[offsets], slots[space + 1] + count + 1)
+        validity > 0 && resize!(state.bits[validity], slots[space + 1] + bounds[space + 1])
+        offsets > 0 &&
+            _growto!(state.offsets[offsets], slots[space + 1] + bounds[space + 1] + 1)
         ends[space + 1], inner = _nodepass!(state, validity, offsets, repetitions,
             definitions, count)
         offsets > 0 && (ends[space + 2] = inner)
         item = max(validity, offsets) + 1
     end
     return ends
+end
+
+# How many of `count` entries repeat at most at each space: at most that many slots of
+# the space open in them, so its arrays grow by that much (not by every entry).
+function _openbounds!(bounds::Vector{Int}, repetitions::Vector{UInt16}, count::Int)
+    fill!(bounds, 0)
+    depth = length(bounds) - 1
+    @inbounds for index in 1:count
+        bounds[min(Int(repetitions[index]), depth) + 1] += 1
+    end
+    for space in 2:length(bounds)
+        bounds[space] += bounds[space - 1]
+    end
+    return bounds
 end
 
 # A slot of `space` opens at an entry that repeats at most at `space` and is defined to
