@@ -395,6 +395,10 @@ end
             compression_codec="ZSTD")) == path
         table = @test_deprecated read_parquet(path)
         @test table.a == [1, 2]
+        # 0.8's keywords: a range of rows, use_threads, and batchsize (ignored).
+        rows = @test_deprecated read_parquet(path; rows=2:2, use_threads=false,
+            batchsize=10)
+        @test rows.a == [2]
         file = Parquet.File(path)
         @test only(only(Parquet.metadata(file).row_groups).columns
             ).meta_data.codec == WRMD.CompressionCodec.ZSTD

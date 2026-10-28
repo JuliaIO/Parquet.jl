@@ -49,8 +49,19 @@ include("writer.jl")
 include("write_partitioned.jl")
 include("precompile.jl")
 
-# Parquet.jl 0.8 names, kept until 2.0.
-Base.@deprecate read_parquet(path; kwargs...) Table(path; kwargs...)
+# Parquet.jl 0.8 names, kept until 2.0. read_parquet takes 0.8's keywords too: `rows`
+# (a range of rows), `use_threads`, and `batchsize` (which no longer applies).
+function read_parquet(path; rows::Union{Nothing,AbstractUnitRange}=nothing,
+        use_threads::Union{Nothing,Bool}=nothing, batchsize=nothing, kwargs...)
+    Base.depwarn("`read_parquet(path; kwargs...)` is deprecated, use " *
+        "`Parquet.Table(path; kwargs...)` instead.", :read_parquet)
+    use_threads === nothing ||
+        (kwargs = (; kwargs..., ntasks=use_threads ? Threads.nthreads() : 1))
+    rows === nothing ||
+        (kwargs = (; kwargs..., scan=Tables.Scan(offset=first(rows) - 1, limit=length(rows))))
+    return Table(path; kwargs...)
+end
+export read_parquet
 function write_parquet(sink, table; compression_codec="SNAPPY")
     Base.depwarn("`write_parquet(sink, table; compression_codec)` is deprecated, use " *
         "`Parquet.write(sink, table; compress)` instead.", :write_parquet)
