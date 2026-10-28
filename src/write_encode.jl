@@ -1242,10 +1242,14 @@ function _dictionaryframe(chunk::_ChunkWriter)
     return frame, Int64(length(frame) - length(compressed) + length(payload))
 end
 
-# A byte-array page bound longer than _INDEX_BOUND_BYTES is truncated: the minimum to a
+# A BYTE_ARRAY page bound longer than _INDEX_BOUND_BYTES is truncated: the minimum to a
 # prefix, the maximum to a prefix with its last byte incremented, which still bounds it.
-function _indexbound(bound::Vector{UInt8}, order::_Order, upper::Bool)
-    order == _ORDER_BYTES && length(bound) > _INDEX_BOUND_BYTES || return bound
+# STRING and ENUM bounds are cut between characters and increment a character, so they
+# stay UTF-8. Other bounds (FIXED_LEN_BYTE_ARRAY ones must keep their width) are whole.
+function _indexbound(bound::Vector{UInt8}, leaf::_LeafSpec, upper::Bool)
+    leaf.order == _ORDER_BYTES && leaf.element.type_ == Metadata.Type.BYTE_ARRAY &&
+        length(bound) > _INDEX_BOUND_BYTES || return bound
+    leaf.utf8 && return _utf8indexbound(bound, upper)
     prefix = bound[1:_INDEX_BOUND_BYTES]
     upper || return prefix
     for index in _INDEX_BOUND_BYTES:-1:1
@@ -1253,6 +1257,24 @@ function _indexbound(bound::Vector{UInt8}, order::_Order, upper::Bool)
             prefix[index] += 0x01
             return prefix[1:index]
         end
+    end
+    return bound
+end
+
+function _utf8indexbound(bound::Vector{UInt8}, upper::Bool)
+    characters = Char[]
+    bytes = 0
+    for character in String(copy(bound))
+        (bytes += ncodeunits(character)) > _INDEX_BOUND_BYTES && break
+        push!(characters, character)
+    end
+    upper || return Vector{UInt8}(String(characters))
+    for index in length(characters):-1:1
+        # The next code point, skipping surrogates, which UTF-8 cannot hold.
+        character = characters[index]
+        character == '\U10ffff' && continue
+        characters[index] = character == '\ud7ff' ? '\ue000' : character + 1
+        return Vector{UInt8}(String(characters[1:index]))
     end
     return bound
 end
@@ -1347,10 +1369,10 @@ function _columnindex(chunk::_ChunkWriter)
     pages = chunk.pages
     return Metadata.ColumnIndex(
         null_pages=Bool[!page.found for page in pages],
-        min_values=Vector{UInt8}[page.found ? _indexbound(page.min, order, false) : UInt8[]
-            for page in pages],
-        max_values=Vector{UInt8}[page.found ? _indexbound(page.max, order, true) : UInt8[]
-            for page in pages],
+        min_values=Vector{UInt8}[page.found ? _indexbound(page.min, chunk.leaf, false) :
+            UInt8[] for page in pages],
+        max_values=Vector{UInt8}[page.found ? _indexbound(page.max, chunk.leaf, true) :
+            UInt8[] for page in pages],
         boundary_order=_boundaryorder(chunk),
         null_counts=Int64[page.nulls for page in pages])
 end

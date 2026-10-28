@@ -484,3 +484,22 @@ end
     @test reinterpret(UInt64, only(index.min_values))[1] == 0x8000000000000000
     @test reinterpret(UInt64, only(index.max_values))[1] == reinterpret(UInt64, 1.0)
 end
+
+@testset "page-index bounds are valid values of their column" begin
+    # FIXED_LEN_BYTE_ARRAY bounds keep the column's width.
+    wide = [ntuple(i -> UInt8(i == 1 ? value : 0x00), 100) for value in 1:3]
+    index = wspageindex(Parquet._encodefile((x=wide,); statistics=true), 1, 1)
+    @test length(only(index.min_values)) == 100 && length(only(index.max_values)) == 100
+    # Long STRING bounds are cut between characters, and the maximum still bounds the
+    # page's values.
+    text = [repeat("€", 30), repeat("€", 29) * "z", repeat("ab", 40)]
+    index = wspageindex(Parquet._encodefile((x=text,); statistics=true), 1, 1)
+    lower, upper = only(index.min_values), only(index.max_values)
+    @test isvalid(String, lower) && isvalid(String, upper)
+    @test length(lower) <= 64
+    @test all(value -> lower <= codeunits(value) <= upper, text)
+    # Without characters to increment, the whole value is the bound.
+    top = repeat("\U10ffff", 20)
+    index = wspageindex(Parquet._encodefile((x=[top],); statistics=true), 1, 1)
+    @test only(index.max_values) == codeunits(top)
+end
