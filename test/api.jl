@@ -24,6 +24,15 @@
     end
 end
 
+# `names` lists the exported names, and on Julia 1.11 and later the public ones too.
+@testset "every exported and public name has a docstring" begin
+    documented = Base.Docs.meta(Parquet)
+    for name in names(Parquet)
+        name === :Parquet && continue
+        @test haskey(documented, Base.Docs.Binding(Parquet, name))
+    end
+end
+
 @testset "error types are documented" begin
     documented = Base.Docs.meta(Parquet)
     for name in (:FormatError, :LimitError, :UnsupportedFeatureError, :File, :Table,

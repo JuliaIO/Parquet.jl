@@ -553,7 +553,8 @@ are those of [`Parquet.Table`](@ref) and apply to every table the file yields.
   filter, row groups whose statistics rule it out are skipped.
   With both a filter and a `limit` (or a scan `offset`), which row groups contribute
   is known only while reading, so such a file can be iterated but not indexed.
-- `DataAPI.nrow(file)` is the row count of an unfiltered read.
+- `DataAPI.nrow(file)` is the row count a read returns, after any `limit` or offset;
+  with a filter it is known only after reading, so it is an `ArgumentError`.
 - `DataAPI.metadata(file)` gives the file's key-value metadata and the schema metadata of
   its `ARROW:schema` (the footer's entry wins where both have a key; the `ARROW:schema`
   entry itself, which sets column types, is left out), `DataAPI.colmetadata(file,

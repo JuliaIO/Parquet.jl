@@ -63,3 +63,12 @@ Decimal
 JSONValue
 BSONValue
 ```
+
+## Deprecated
+
+The 0.8 names, still exported until 2.0 ([Migrating from 0.8](@ref)).
+
+```@docs
+read_parquet
+write_parquet
+```

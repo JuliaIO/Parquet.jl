@@ -98,7 +98,7 @@ unless the table says otherwise.
 | `PooledArray`, `CategoricalArray` values | the type of the pool's values, dictionary encoded from the pool | plain values |
 | `AbstractVector`, `NTuple` | LIST | `AbstractVector` rows |
 | `NamedTuple` | group | `NamedTuple` rows |
-| `AbstractDict`, `AbstractVector{<:Pair}` | MAP | `AbstractVector{<:Pair}` rows |
+| `AbstractDict`, `AbstractVector{<:Pair}` | MAP | [`Parquet.MapValue`](@ref) rows (read-only `AbstractDict`s in entry order) |
 | `Missing` only | a null column | `Missing` |
 
 STRING and ENUM values must be valid UTF-8: a string that is not fails the write with an

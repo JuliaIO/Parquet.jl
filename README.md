@@ -13,7 +13,10 @@ Parquet.write("trips.parquet", df)
 Parquet.read("trips.parquet", DataFrame)                # every column
 Parquet.Table("trips.parquet"; select=[:id, :fare],
     filter=Parquet.col(:fare) > 5)                     # only the rows and columns asked for
-Parquet.Table("lake/")                                 # a directory of files or a Hive dataset
+
+lake = mktempdir()
+Parquet.write(lake, df; partitionby=:city)             # a Hive-partitioned dataset
+Parquet.Table(lake)                                    # every file below a directory
 ```
 
 - Reads the files pyarrow, Polars, DuckDB, Spark, and parquet-java write: nested lists,

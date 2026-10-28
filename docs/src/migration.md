@@ -11,7 +11,7 @@ with a deprecation warning and will be removed in 2.0. `read_parquet` still take
 | 0.8 | 1.0 |
 |:--|:--|
 | `read_parquet(path)` | `Parquet.Table(path)` (a file or a dataset directory) |
-| `read_parquet(path; rows, batchsize, use_threads)` | `Parquet.Table(path; scan=Tables.Scan(offset, limit), ntasks)`; `Parquet.File(path)` iterates row groups |
+| `read_parquet(path; rows, batchsize, use_threads)` | `Parquet.Table(path; scan=Tables.Scan(offset=first(rows) - 1, limit=length(rows)), ntasks)`; `Parquet.File(path)` iterates row groups |
 | `write_parquet(path, table; compression_codec="SNAPPY")` | `Parquet.write(path, table; compress=:snappy)` |
 | `Parquet.File(path)` with `nrows`, `ncols`, `colnames`, `schema` | `Parquet.File(path)` with `DataAPI.nrow`, `Tables.columnnames`, `Tables.schema`; `Parquet.metadata` for the footer |
 | `rowgroups`, `columns`, `pages`, `bytes`, `values` | `for table in Parquet.File(path)` (one table per row group) |
