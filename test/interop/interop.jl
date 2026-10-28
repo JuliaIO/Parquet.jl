@@ -166,10 +166,15 @@ function writeall(directory)
             compress=:zstd, rowgroupsize=3, pagesize=64)
         save(name * "_v2", canontable(table))
     end
+    # File and column metadata, which pyarrow reads from the ARROW:schema.
+    Parquet.write(joinpath(directory, "metadata.parquet"), CASES[1][2];
+        metadata=["owner" => "interop"], colmetadata=Dict(:i8 => ["unit" => "count"]))
+    save("metadata", merge(canontable(CASES[1][2]), Dict("metadata" => Dict("owner" =>
+        "interop"), "colmetadata" => Dict("i8" => Dict("unit" => "count")))))
     Parquet.write(joinpath(directory, "partitioned"), PARTITIONED; partitionby=KEYS)
     names = [filter(!in(KEYS), collect(keys(PARTITIONED))); KEYS]
     save("partitioned", canontable(NamedTuple{Tuple(names)}(PARTITIONED)))
-    println("Parquet.jl wrote $(length(CASES) * 2 + 1) cases")
+    println("Parquet.jl wrote $(length(CASES) * 2 + 2) cases")
     return 0
 end
 

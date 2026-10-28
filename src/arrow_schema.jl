@@ -328,17 +328,23 @@ function _arrowfieldobject(node::SchemaNode, hints)
 end
 
 """
-    _arrowschema(schema::Schema; hints=Dict(), metadata=()) -> String
+    _arrowschema(schema::Schema; hints=Dict(), metadata=(), fieldmetadata=Dict()) -> String
 
 The base64 `ARROW:schema` value for a file with Parquet `schema`, as pyarrow would
 infer each column from its Parquet type, so pyarrow, Polars, and DuckDB read the file
 the same with or without it. `hints` maps a leaf's path to what the Parquet type cannot
 say: the time zone (`String`) of a UTC-adjusted timestamp, or the Arrow TimeUnit
 (`Int16`: 0 seconds to 3 nanoseconds) of a duration stored as INT64. `metadata` is the
-schema-level Arrow key-value metadata.
+schema-level Arrow key-value metadata and `fieldmetadata` maps a top-level column name to
+its field's, as `key => value` pairs; pyarrow takes a file's schema and field metadata
+from them.
 """
-function _arrowschema(schema::Schema; hints=Dict{Vector{String},Any}(), metadata=())
+function _arrowschema(schema::Schema; hints=Dict{Vector{String},Any}(), metadata=(),
+        fieldmetadata=Dict{String,Any}())
     fields = _FBObject[_arrowfieldobject(child, hints) for child in schema.root.children]
+    for (field, child) in zip(fields, schema.root.children)
+        field.fields[7] = _arrowkeyvalueobjects(get(fieldmetadata, child.element.name, ()))
+    end
     message = _fbobject(Int16(4), _ARROW_SCHEMA_HEADER,
         _fbobject(Int16(0), fields, _arrowkeyvalueobjects(metadata), nothing), nothing,
         nothing)

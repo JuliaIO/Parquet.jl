@@ -891,7 +891,7 @@ function _finishfile!(writer::Writer)
         schema=schema.elements,
         num_rows=writer.rows,
         row_groups=rowgroups,
-        key_value_metadata=_withschema(writer.metadata, schema, writer.arrowhints),
+        key_value_metadata=_withschema(writer, schema),
         created_by=_createdby(),
         column_orders=options.chunk.statistics ? _writecolumnorders(schema.schema) : nothing,
     )
@@ -906,10 +906,16 @@ end
 
 # The file's key-value metadata ends with an ARROW:schema generated from the written
 # schema, so Arrow readers recover time zones and durations the Parquet types cannot hold.
-# A stored schema with an annotation this package cannot read gets none.
-function _withschema(metadata, schema::_WriteSchema, hints)
+# It repeats the file and column metadata, which pyarrow reads from there. A stored schema
+# with an annotation this package cannot read gets none.
+function _withschema(writer::Writer, schema::_WriteSchema)
+    metadata = writer.metadata
+    arrowpairs(entries) = Pair{String,String}[entry.key => something(entry.value, "")
+        for entry in something(entries, Metadata.KeyValue[])]
     arrow = try
-        _arrowschema(schema.schema; hints=hints)
+        _arrowschema(schema.schema; hints=writer.arrowhints, metadata=arrowpairs(metadata),
+            fieldmetadata=Dict(name => arrowpairs(entries)
+                for (name, entries) in writer.colmetadata))
     catch err
         err isa Union{FormatError,UnsupportedFeatureError} || rethrow()
         nothing

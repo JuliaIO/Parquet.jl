@@ -300,6 +300,20 @@ def read_duckdb(path):
     return con.sql("SELECT * FROM " + source).to_arrow_table()
 
 
+def metadata_difference(expected, schema):
+    """pyarrow takes file and column metadata from the ARROW:schema."""
+    def strings(metadata):
+        return {key.decode(): value.decode() for key, value in (metadata or {}).items()}
+    found = strings(schema.metadata)
+    if any(found.get(key) != value for key, value in expected["metadata"].items()):
+        return "schema metadata %s, expected %s" % (found, expected["metadata"])
+    for name, metadata in expected["colmetadata"].items():
+        found = strings(schema.field(name).metadata)
+        if found != metadata:
+            return "field %s metadata %s, expected %s" % (name, found, metadata)
+    return None
+
+
 def read(directory):
     failures = 0
     for spec in sorted(Path(directory).glob("*.json")):
@@ -308,13 +322,16 @@ def read(directory):
         for tool, reader in (("pyarrow", read_pyarrow), ("polars", read_polars),
                              ("duckdb", read_duckdb)):
             try:
-                actual = canon_table(reader(path))
+                table = reader(path)
+                actual = canon_table(table)
                 if path.is_dir():
                     actual = sort_rows(actual)
                     # Readers order the partition columns their own way (DuckDB by name).
                     if sorted(actual["names"]) == sorted(expected["names"]):
                         actual["names"] = expected["names"]
                 problem = difference(expected, json.loads(json.dumps(actual)))
+                if problem is None and tool == "pyarrow" and "metadata" in expected:
+                    problem = metadata_difference(expected, table.schema)
             except Exception as err:  # noqa: BLE001 (report every reader failure)
                 problem = "%s: %s" % (type(err).__name__, err)
             failures += problem is not None

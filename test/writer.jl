@@ -163,6 +163,33 @@ end
     end
 end
 
+# The schema and top-level field metadata in a file's ARROW:schema.
+function wrarrowmetadata(bytes::Vector{UInt8})
+    metadata = wrmetadata(bytes)
+    text = only(entry.value for entry in metadata.key_value_metadata
+        if entry.key == "ARROW:schema")
+    raw = Parquet.Base64.base64decode(text)
+    message = Parquet._FBTable(raw, Parquet._fbtarget(raw, 8))
+    schema = Parquet._fbsubtable(message, 2)
+    pairs(table, slot) = [Parquet._fbstring(entry, 0) => Parquet._fbstring(entry, 1)
+        for entry in Parquet._fbtables(table, slot, Parquet.Limits())]
+    fields = Dict(Parquet._fbstring(field, 0) => pairs(field, 6)
+        for field in Parquet._fbtables(schema, 1, Parquet.Limits()))
+    return pairs(schema, 2), fields
+end
+
+@testset "file and column metadata are in the ARROW:schema too" begin
+    # pyarrow takes a file's schema and field metadata from its ARROW:schema.
+    bytes = take!(Parquet.write(IOBuffer(), (v=[1.5], w=[1]);
+        metadata=Dict("owner" => "me"), colmetadata=Dict(:v => Dict("unit" => "m"))))
+    schema, fields = wrarrowmetadata(bytes)
+    @test schema == ["owner" => "me"]
+    @test fields == Dict("v" => ["unit" => "m"], "w" => Pair{String,String}[])
+    footer = wrmetadata(bytes)
+    @test [(entry.key, entry.value) for entry in footer.key_value_metadata
+        if entry.key != "ARROW:schema"] == [("owner", "me")]
+end
+
 @testset "write metadata keywords and DataAPI defaults" begin
     table = WRMetaTable((id=[1, 2], name=["a", "b"]),
         Dict("source" => "test", "ARROW:schema" => "stale"),
