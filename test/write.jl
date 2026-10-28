@@ -548,7 +548,8 @@ end
 end
 
 @testset "PLAIN V1 writer validation" begin
-    @test_throws ArgumentError Parquet._encodefile(NamedTuple())
+    # A table without columns writes a file without columns.
+    @test isempty(Parquet.Tables.columnnames(Parquet.Table(Parquet._encodefile(NamedTuple()))))
     @test_throws ArgumentError Parquet._encodefile((a=Int32[1], b=Int32[1, 2]))
     @test_throws ArgumentError Parquet._encodefile((a=Int128[1, 2],))
     @test_throws Parquet.LimitError Parquet._encodefile((a=Int32[1, 2],); limits=Parquet.Limits(max_container_elements=1))

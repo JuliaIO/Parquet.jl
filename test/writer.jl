@@ -7,6 +7,8 @@ import SentinelArrays
 
 const WRMD = Parquet.Metadata
 
+@enum WRColor wrred wrgreen wrblue
+
 function wrmetadata(bytes::Vector{UInt8})
     file = Parquet.File(bytes)
     try
@@ -448,4 +450,25 @@ end
     finally
         close(table)
     end
+end
+
+@testset "rows without a schema, non-tables, zero columns, and @enum values" begin
+    generator = (row for row in [(a=1, b="x"), (a=2, b="y")] if row.a > 1)
+    @test wrcolumn(take!(Parquet.write(IOBuffer(), generator)), :b) == ["y"]
+    dicts = [Dict(:a => 1), Dict(:a => 2)]
+    @test wrcolumn(take!(Parquet.write(IOBuffer(), dicts)), :a) == [1, 2]
+    @test_throws "Parquet.write needs a Tables.jl table" Parquet.write(IOBuffer(), [1, 2])
+    @test_throws "got Int64" Parquet.write(IOBuffer(), 1)
+    @test_throws "pass Tables.partitioner(tables)" Parquet.write(IOBuffer(),
+        [Tables.table([1 2]), Tables.table([3 4])])
+    for empty in (NamedTuple(), Tables.partitioner([NamedTuple(), NamedTuple()]))
+        table = Parquet.Table(take!(Parquet.write(IOBuffer(), empty)))
+        @test isempty(Tables.columnnames(table))
+        @test Parquet._tablerows(table) == 0
+    end
+    bytes = take!(Parquet.write(IOBuffer(), (c=[wrred, wrblue],
+        o=Union{Missing,WRColor}[missing, wrgreen])))
+    @test wrcolumn(bytes, :c) == ["wrred", "wrblue"]
+    @test isequal(wrcolumn(bytes, :o), [missing, "wrgreen"])
+    @test wrmetadata(bytes).schema[2].logicalType.ENUM !== nothing
 end

@@ -999,8 +999,9 @@ end
     finally
         close(table)
     end
+    # Rows without names are collected as Tables.columns collects them, under the limits.
     unnamed = WNSchemaLessRows(NTuple{3,Int32}[])
-    @test_throws ArgumentError Parquet._encodefile(unnamed; limits=rowlimits)
+    @test_throws Parquet.LimitError Parquet._encodefile(unnamed; limits=rowlimits)
 
     wide = WNSchemaLessRows(
         NamedTuple{(:left,:right),Tuple{Int32,Int32}}[])

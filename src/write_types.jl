@@ -129,7 +129,7 @@ struct _TaggedBytes end
 (::_TaggedBytes)(x::Union{JSONValue,BSONValue}) = x.bytes
 
 struct _AsString end
-(::_AsString)(x::Union{Symbol,AbstractChar}) = string(x)
+(::_AsString)(x::Union{Symbol,AbstractChar,Enum}) = string(x)
 
 @inline function _bigendianbytes(value::Integer, ::Val{W}) where {W}
     return ntuple(i -> (value >> (8 * (W - i))) % UInt8, Val(W))
@@ -188,6 +188,13 @@ function _writemap(::Type{T}) where {T<:Union{Symbol,Char}}
     return _WriteMap(String, Metadata.Type.BYTE_ARRAY, _AsString();
         logical=Metadata.LogicalType(STRING=Metadata.StringType()),
         converted=Metadata.ConvertedType.UTF8)
+end
+
+# An @enum value writes its name.
+function _writemap(::Type{T}) where {T<:Enum}
+    return _WriteMap(String, Metadata.Type.BYTE_ARRAY, _AsString();
+        logical=Metadata.LogicalType(ENUM=Metadata.EnumType()),
+        converted=Metadata.ConvertedType.ENUM)
 end
 
 function _writemap(::Type{T}) where {T<:AbstractVector{UInt8}}

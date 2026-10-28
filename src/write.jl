@@ -118,8 +118,8 @@ Base.@noinline function _writerowschema(rows, limits::Limits)
     declared = _preflightwriteroweltype(rows, limits)
     schema = Tables.schema(rows)
     if schema === nothing
-        declared === nothing && throw(ArgumentError(
-            "row-oriented Tables sources must declare a schema or a concrete NamedTuple element type"))
+        # The caller collects such rows into columns instead.
+        declared === nothing && return nothing
         return _writerownamedtupleschema(declared)
     end
     names = schema.names
@@ -130,8 +130,6 @@ Base.@noinline function _writerowschema(rows, limits::Limits)
         "row-oriented Tables sources must declare column types"))
     _checklimit(:container_elements, length(names),
         limits.max_container_elements)
-    isempty(names) && throw(ArgumentError(
-        "a Parquet table must have at least one column"))
     length(names) == length(types) || throw(ArgumentError(
         "row-oriented Tables schema has different name and type counts"))
     return names, types
@@ -255,7 +253,9 @@ end
 function _writeinputrowcolumns(table, limits::Limits)
     Base.@nospecialize table
     rowsource = Tables.rows(table)
-    names, types = _writerowschema(rowsource, limits)
+    schema = _writerowschema(rowsource, limits)
+    schema === nothing && return _writeinputcolumns(_collectrows(table), limits)
+    names, types = schema
     normalized = _validatewritecolumnnames(names)
     _preflightwriterowtypes(normalized, types, limits)
     count = _writerowcount(rowsource, limits)
@@ -271,13 +271,29 @@ function _writeinputrowcolumns(table, limits::Limits)
     return output, rowcount
 end
 
+# Rows without a declared schema (a generator of NamedTuples, a vector of dictionaries) are
+# collected into columns as Tables.columns collects them, widening types as values come.
+function _collectrows(table)
+    Base.@nospecialize table
+    message = "Parquet.write needs a Tables.jl table, such as a DataFrame, a NamedTuple " *
+        "of vectors, or a vector of NamedTuples; got $(typeof(table))"
+    # A vector of DataFrames, for example, holds tables rather than rows.
+    Base.IteratorEltype(typeof(table)) isa Base.HasEltype && eltype(table) !== Any &&
+        Tables.istable(eltype(table)) && throw(ArgumentError(message * ", which holds " *
+            "tables; pass Tables.partitioner(tables) to write them into one file"))
+    try
+        return Tables.columns(table)
+    catch err
+        err isa ArgumentError && occursin("AbstractRow", err.msg) || rethrow()
+        throw(ArgumentError(message))
+    end
+end
+
 function _writeinputcolumns(table, limits::Limits)
     Base.@nospecialize table
     Tables.columnaccess(table) || return _writeinputrowcolumns(table, limits)
     columns = Tables.columns(table)
     names = collect(Tables.columnnames(columns))
-    isempty(names) && throw(ArgumentError(
-        "a Parquet table must have at least one column"))
     normalized = _validatewritecolumnnames(names)
     output = Pair{String,AbstractVector}[]
     sizehint!(output, length(names))
