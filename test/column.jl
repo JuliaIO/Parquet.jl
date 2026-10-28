@@ -1153,6 +1153,15 @@ end
 @testset "column chunk metadata validation" begin
     int32 = columnleaf(MD.Type.INT32)
     page = datapage(Int32[1])
+    # An encoding this reader does not know (ALP is 10) names the column to drop.
+    newer = columnpage(Parquet.encode_plain(Int32[1]); v1=columnv1(1; encoding=MD.Encoding.T(10)))
+    err = try
+        readsynthetic([newer], int32; num_values=1)
+    catch e
+        e
+    end
+    @test err isa Parquet.FormatError && occursin("column value", err.message) &&
+        occursin("encoding 10", err.message)
     # Valid but unsupported: the error names the file to read.
     err = try
         readsynthetic([page], int32; num_values=1, file_path="other.parquet")

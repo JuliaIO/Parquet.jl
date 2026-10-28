@@ -550,6 +550,18 @@ function _decodeothervalues(::Type{T}, encoding::Metadata.Encoding.T,
     throw(FormatError("data page encoding $encoding is not supported"))
 end
 
+# An encoding the format version this reader implements does not define, such as ALP
+# (encoding 10), or a corrupt encoding field: the error names the column so a read can
+# drop it. (Like an unknown codec, it is a FormatError: the reader cannot tell a newer
+# encoding from corruption.)
+function _checkvalueencoding(encoding::Metadata.Encoding.T, node::SchemaNode)
+    any(entry -> first(entry) == encoding.value,
+        Thrift.enumnames(Metadata.Encoding.T)) && return
+    throw(FormatError("column $(join(node.path, '.')) uses data page encoding " *
+        "$(encoding.value), which this reader does not know; drop the column to read the " *
+        "others"))
+end
+
 function _convertvalue(::typeof(identity), value)
     return value
 end
@@ -669,6 +681,7 @@ function _datapagev1!(sink, ::Type{P}, convert, frame::PageFrame,
         hasdictionary::Bool, remaining::Int, buffers::_PageBuffers,
         limits::Limits) where {P}
     header = frame.header.data_page_header
+    _checkvalueencoding(header.encoding, node)
     count = Int(header.num_values)
     count >= 0 || throw(FormatError("negative data page value count"))
     count <= remaining ||
@@ -746,6 +759,7 @@ function _datapagev2!(sink, ::Type{P}, convert, frame::PageFrame,
         hasdictionary::Bool, remaining::Int, buffers::_PageBuffers,
         limits::Limits) where {P}
     header = frame.header.data_page_header_v2
+    _checkvalueencoding(header.encoding, node)
     count = Int(header.num_values)
     rows = Int(header.num_rows)
     count >= 0 || throw(FormatError("negative data page V2 value count"))

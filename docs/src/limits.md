@@ -100,3 +100,7 @@ These are read or written in a reduced form:
   are read but not written; new files use `:lz4_raw` and RLE.
 - `_metadata` and `_common_metadata` summary files are skipped, with every name that
   starts with `_` or `.`.
+
+A data page encoding newer than the format version this package implements (2.13), such
+as ALP, cannot be told from a corrupt page: it is a `FormatError` that names the column,
+which can be dropped to read the rest.
