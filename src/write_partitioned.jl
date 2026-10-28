@@ -28,9 +28,22 @@ _hivevalue(value::Union{Integer,AbstractFloat}, ::String) = _hiveescape(string(v
 _hivevalue(value::Dates.Date, ::String) = _hiveescape(string(value))
 _hivevalue(value::Union{AbstractString,Symbol,AbstractChar}, ::String) =
     _hiveescape(string(value))
+# Timestamps as pyarrow writes them: "2024-01-01 12:30:00.000" (digits by unit), with a
+# trailing "Z" when adjusted to UTC. They read back as strings, as with pyarrow.
+_hivevalue(value::Dates.DateTime, name::String) =
+    _hivevalue(Durations.Timestamp{Dates.Millisecond}(value), name)
+function _hivevalue(value::Durations.Timestamp{P}, ::String) where {P}
+    persecond = Dates.tons(Dates.Second(1)) ÷ Dates.tons(P(1))
+    seconds, fraction = fldmod(Dates.value(value), persecond)
+    text = Dates.format(Dates.DateTime(1970) + Dates.Second(seconds), "yyyy-mm-dd HH:MM:SS")
+    digits = ndigits(persecond) - 1
+    return _hiveescape(digits == 0 ? text : text * "." * lpad(fraction, digits, '0'))
+end
+_hivevalue(value::Durations.ZonedTimestamp{P,:UTC}, name::String) where {P} =
+    _hivevalue(value.utc, name) * "Z"
 _hivevalue(value, name::String) = throw(ArgumentError("partition column $(repr(name)) " *
-    "holds $(typeof(value)) values; partition by integer, float, Bool, Date, or string " *
-    "columns (convert others first, for example with string.(column))"))
+    "holds $(typeof(value)) values; partition by integer, float, Bool, Date, timestamp, " *
+    "or string columns (convert others first, for example with string.(column))"))
 
 # Rows of each distinct key, in order of first appearance.
 function _partitiongroups(keys::Tuple, rows::Int)

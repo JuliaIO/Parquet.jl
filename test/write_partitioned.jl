@@ -77,7 +77,7 @@ wpsorted(table) = (order = sortperm(collect(table.id)); map(c -> collect(c)[orde
     @test_throws "every column" Parquet.write(joinpath(root, "z"), (n=[1],);
         partitionby=:n)
     @test_throws "partition by integer" Parquet.write(joinpath(root, "z"),
-        (id=[1], t=[DateTime(2024)]); partitionby=:t)
+        (id=[1], t=[Time(1)]); partitionby=:t)
     @test !isdir(joinpath(root, "z")) || isempty(wpfiles(joinpath(root, "z")))
 
     # Partitions of the input stream into the same files, every column nullable. Past
@@ -111,4 +111,25 @@ wpsorted(table) = (order = sortperm(collect(table.id)); map(c -> collect(c)[orde
     @test Parquet.DataAPI.metadata(file, "origin") == "test"
     @test Parquet.DataAPI.colmetadata(file, :id, "unit") == "row"
     close(file)
+end
+
+@testset "partitioned writes by timestamp keys" begin
+    # Directory names as pyarrow writes them, with the key's unit; they read as strings.
+    root = mktempdir()
+    stamp(P, ticks) = Parquet.Durations.Timestamp{P}(Dates.UTInstant(P(ticks)))
+    Parquet.write(joinpath(root, "naive"), (k=[DateTime(2024, 1, 1, 12, 30),
+        DateTime(2024, 1, 1, 0, 0, 0, 123)], v=[1, 2]); partitionby=:k)
+    @test wpfiles(joinpath(root, "naive")) == [
+        "k=2024-01-01%2000%3A00%3A00.123/part-0.parquet",
+        "k=2024-01-01%2012%3A30%3A00.000/part-0.parquet"]
+    Parquet.write(joinpath(root, "micros"), (k=[stamp(Microsecond, 1_704_067_200_000_123)],
+        v=[1]); partitionby=:k)
+    @test wpfiles(joinpath(root, "micros")) ==
+        ["k=2024-01-01%2000%3A00%3A00.000123/part-0.parquet"]
+    utc = Parquet.Durations.ZonedTimestamp{Millisecond,:UTC}(
+        stamp(Millisecond, 1_704_112_200_000), Dates.UTC)
+    Parquet.write(joinpath(root, "utc"), (k=[utc], v=[1]); partitionby=:k)
+    @test wpfiles(joinpath(root, "utc")) == ["k=2024-01-01%2012%3A30%3A00.000Z/part-0.parquet"]
+    table = Parquet.Table(joinpath(root, "naive"))
+    @test sort(collect(table.k)) == ["2024-01-01 00:00:00.123", "2024-01-01 12:30:00.000"]
 end

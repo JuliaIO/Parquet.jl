@@ -105,7 +105,9 @@ Parquet.write("trips", table; partitionby=[:year, :month])
 ```
 
 Each distinct key gets one file holding its rows, without the key columns. Keys are
-integers, floats, Bools, `Date`s, or strings. Values are percent-encoded as pyarrow does
+integers, floats, Bools, `Date`s, timestamps, or strings; a timestamp is written as
+pyarrow writes it (`2024-01-01 12:30:00.000`, `Z` when adjusted to UTC) and, as with
+pyarrow, reads back as a string. Values are percent-encoded as pyarrow does
 (all but `A-Z a-z 0-9 - . _ ~`), and `missing` is written as
 `__HIVE_DEFAULT_PARTITION__`. An empty string is written as an empty value (`key=`) and
 reads back as `""` in Parquet.jl, pyarrow, Polars, and DuckDB. Readers type key columns
