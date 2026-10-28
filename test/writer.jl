@@ -472,3 +472,25 @@ end
     @test isequal(wrcolumn(bytes, :o), [missing, "wrgreen"])
     @test wrmetadata(bytes).schema[2].logicalType.ENUM !== nothing
 end
+
+@testset "a column that is only missing takes its type from a later table" begin
+    bytes = take!(Parquet.Writer(IOBuffer()) do writer
+        Parquet.write(writer, (id=[1, 2], note=[missing, missing], t=[missing, missing]))
+        Parquet.write(writer, (id=[3], note=["late"], t=[DateTime(2024)]))
+        Parquet.write(writer, (id=[4], note=[missing], t=[missing]))
+    end)
+    @test isequal(wrcolumn(bytes, :note), [missing, missing, "late", missing])
+    @test isequal(wrcolumn(bytes, :t), [missing, missing, Parquet.Durations.Timestamp{
+        Millisecond}(DateTime(2024)), missing])
+    metadata = wrmetadata(bytes)
+    @test all(group.columns[2].meta_data.type_ == WRMD.Type.BYTE_ARRAY
+        for group in metadata.row_groups)
+    # The same through the partitions of one source.
+    parts = Tables.partitioner([(id=[1], note=[missing]), (id=[2], note=["x"])])
+    @test isequal(wrcolumn(take!(Parquet.write(IOBuffer(), parts)), :note), [missing, "x"])
+    # A null column cannot become nested once null pages are written.
+    @test_throws "cannot become nested" Parquet.Writer(IOBuffer()) do writer
+        Parquet.write(writer, (note=[missing],))
+        Parquet.write(writer, (note=[[1]],))
+    end
+end

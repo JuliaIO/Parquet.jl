@@ -540,7 +540,9 @@ A Parquet file written incrementally to `sink`, a path or `IO`. Each
 writes the footer. The first table fixes the schema; every later table must have the same
 column names in the same order, and its values must convert to the first table's column
 types exactly (an `Int32` column into an `Int64` one, for example). Every column is
-nullable unless `nullable=false`, so later tables may hold `missing`.
+nullable unless `nullable=false`, so later tables may hold `missing`. A column that is only
+`missing` in the first table takes the scalar type of the first later table that gives it
+one.
 
 The function form passes the writer to `f` and closes it when `f` returns; when `f` throws,
 the output is abandoned (a path sink is removed). Keyword arguments are those of
@@ -703,8 +705,9 @@ function _writetable!(writer::Writer, table, source, offset::Int=0,
                 "accepts only Parquet.Table inputs with the same stored schema, and the " *
                 "reverse; write Tables.columntable(table) instead"))
     end
+    length(columns) == length(writer.schema.fields) || _bindmismatch(writer.schema, columns)
+    retyped = isfirst || writer.schema.stored ? Int[] : _retypenullcolumns!(writer, columns)
     schema = writer.schema
-    length(columns) == length(schema.fields) || _bindmismatch(schema, columns)
     bindings = _FieldBinding[]
     for (index, (name, values)) in enumerate(columns)
         if shapes !== nothing && shapes[index] !== nothing
@@ -720,6 +723,9 @@ function _writetable!(writer::Writer, table, source, offset::Int=0,
         for (field, binding) in zip(schema.fields, bindings)
             _writearrowhints!(writer.arrowhints, schema, field, binding)
         end
+    end
+    for index in retyped
+        _writearrowhints!(writer.arrowhints, schema, schema.fields[index], bindings[index])
     end
     rows == 0 && return rows
     size = something(options.rowgroupsize, rows)
@@ -766,6 +772,50 @@ function _writetable!(writer::Writer, table, source, offset::Int=0,
     end
     _runordered(work, consume, length(jobs), options.ntasks)
     return rows
+end
+
+# A column that held only missing so far was written as a null (UNKNOWN) column. The first
+# later table that gives it a scalar type sets its type: the earlier row groups hold only
+# nulls, whose pages are the same for every physical type, so only their chunk metadata
+# changes. Returns the indexes of the retyped columns.
+function _retypenullcolumns!(writer::Writer, columns)
+    schema = writer.schema
+    options = writer.options
+    retyped = Int[]
+    elements = Metadata.SchemaElement[first(schema.elements)]
+    for (index, (field, (name, values))) in enumerate(zip(schema.fields, columns))
+        if field isa _NestedField
+            append!(elements, field.fragment)
+            continue
+        end
+        element = schema.leaves[field.leaf].element
+        logical = element.logicalType
+        if logical !== nothing && logical.UNKNOWN !== nothing && eltype(values) !== Missing
+            _flatwritable(values) || throw(ArgumentError("column $(repr(name)) was only " *
+                "missing in the first table, so it was written as a null column, which " *
+                "cannot become nested; give it its type in the first table, for example " *
+                "Union{Missing,Vector{Int}}[missing, ...]"))
+            element = _flatelement(name, values, true, options.limits)
+            push!(retyped, index)
+        end
+        push!(elements, element)
+    end
+    isempty(retyped) && return retyped
+    tree = Schema(elements; limits=options.limits)
+    semantic = _nestedplan(tree; limits=options.limits)
+    leaves = _leafspecs(tree, semantic, options)
+    for group in writer.groups, (index, record) in enumerate(group.chunks)
+        type = leaves[index].element.type_
+        meta = record.meta
+        meta.type_ == type && continue
+        fields = fieldnames(Metadata.ColumnMetaData)
+        meta = Metadata.ColumnMetaData(; NamedTuple{fields}(map(name -> name === :type_ ?
+            type : getfield(meta, name), fields))...)
+        group.chunks[index] = _ChunkRecord(meta, record.columnindex, record.offsetindex,
+            record.bloom)
+    end
+    writer.schema = _WriteSchema(elements, tree, semantic, schema.fields, leaves, false)
+    return retyped
 end
 
 # A job encodes a run of consecutive fields of one row group: a large field alone, small
