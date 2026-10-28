@@ -510,6 +510,8 @@ end
 
 function _readplan(metadata::Metadata.FileMetaData, schema::Schema, scan, ntasks::Int,
         options::_ReadOptions, limits::Limits)
+    # Compiled once: the keywords' scan (`_scanrequest`) has a type per keyword types.
+    @nospecialize scan
     colmetadata = _filecolmetadata(metadata, schema, limits)
     scan === nothing && return _ReadPlan(nothing, metadata, schema, ntasks, options, limits,
         colmetadata)
