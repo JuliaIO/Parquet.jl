@@ -512,7 +512,13 @@ end
         @test sum(Int64, columns.a) == 43118090240
         @test sum(Int64, columns.b) == 129016125440
         close(table)
-        @test_throws Parquet.FormatError Parquet.Table(corrupt)
+        # Page CRCs are verified only on request.
+        @test Tables.rowcount(Parquet.Table(corrupt)) == 5120
+        @test_throws Parquet.FormatError Parquet.Table(corrupt; checksum=true)
+        @test_throws Parquet.FormatError Parquet.Dataset([corrupt]; checksum=true) |>
+            Parquet.Table
+        @test_throws Parquet.FormatError Parquet.Table(corrupt; checksum=true,
+            filter=Parquet.col(:a) > 0)
         encrypted = joinpath(corpus, "data", "encrypt_columns_plaintext_footer.parquet.encrypted")
         if isfile(encrypted)
             error = try

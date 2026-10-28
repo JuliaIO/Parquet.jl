@@ -19,7 +19,7 @@ end
     Parquet.Dataset(source; partitioning=:hive, select=nothing, drop=nothing,
                     filter=nothing, limit=nothing, scan=nothing,
                     ntasks=Threads.nthreads(), int96=Dates.Nanosecond,
-                    limits=Parquet.Limits())
+                    checksum=false, limits=Parquet.Limits())
 
 Parquet files read as one table. `source` is a directory (every file below it), a glob
 pattern such as `"data/*.parquet"` or `"lake/**/*.parquet"` (`*` and `?` match within a
@@ -63,6 +63,7 @@ struct Dataset
     bound::Union{Nothing,Tables.BoundScan}
     ntasks::Int
     int96::Type
+    checksum::Bool
     limits::Limits
 end
 
@@ -77,7 +78,7 @@ end
 function _dataset(inputs::Vector{Any}, paths::Vector{Union{Nothing,String}}, base;
         partitioning=:hive, select=nothing, drop=nothing, filter=nothing, limit=nothing,
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
-        int96::Type=Dates.Nanosecond, limits::Limits=Limits())
+        int96::Type=Dates.Nanosecond, checksum::Bool=false, limits::Limits=Limits())
     ntasks >= 1 || throw(ArgumentError("ntasks must be at least 1, got $ntasks"))
     partitioning in (:hive, nothing) || throw(ArgumentError(
         "partitioning must be :hive or nothing, got $(repr(partitioning))"))
@@ -119,7 +120,7 @@ function _dataset(inputs::Vector{Any}, paths::Vector{Union{Nothing,String}}, bas
         throw(ArgumentError("Parquet does not apply scan type overrides; convert the " *
             "columns after reading"))
     return Dataset(collect(_DatasetFile, files), names, types, elements, colmetadata,
-        partition, bound, Int(ntasks), int96, limits)
+        partition, bound, Int(ntasks), int96, checksum, limits)
 end
 
 ## Finding the files
@@ -510,7 +511,7 @@ end
 function _openpart(ds::Dataset, file::_DatasetFile, scan::Tables.Scan, ntasks::Int)
     try
         return _openfile(file.input, (file.footer, file.metadata); scan=scan,
-            ntasks=ntasks, int96=ds.int96, limits=ds.limits)
+            ntasks=ntasks, int96=ds.int96, checksum=ds.checksum, limits=ds.limits)
     catch err
         _rethrowfor(err, file.path)
     end

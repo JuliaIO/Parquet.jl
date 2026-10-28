@@ -58,7 +58,7 @@ function _readleafchunks(file::File, metadata::Metadata.FileMetaData,
         before = state.slots[1]
         state.chunkstart = true
         _readchunk!(sink, _physicaleltype(node.element.type_), L, convert, file.source, md,
-            node, start, stop, limits, budget, buffers)
+            node, start, stop, limits, budget, buffers; checksum=options.checksum)
         state.slots[1] - before == group.num_rows || throw(FormatError(
             "leaf $(path.leaf) has $(state.slots[1] - before) rows in a row group of " *
             "$(group.num_rows)"))

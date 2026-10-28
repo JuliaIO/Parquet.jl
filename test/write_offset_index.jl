@@ -432,11 +432,11 @@ function Parquet.close!(source::OITrackedSource)
     return
 end
 
-function oireject(bytes::Vector{UInt8}, type::Type{<:Exception}=Parquet.FormatError)
-    @test_throws type Parquet.Table(bytes)
+function oireject(bytes::Vector{UInt8}, type::Type{<:Exception}=Parquet.FormatError; kw...)
+    @test_throws type Parquet.Table(bytes; kw...)
     # Parquet never closes a source it was given.
     source = OITrackedSource(copy(bytes), false)
-    @test_throws type Parquet.Table(source)
+    @test_throws type Parquet.Table(source; kw...)
     @test !source.closed
     return
 end
@@ -702,7 +702,8 @@ end
     validtail = oilegacyfile([data1, index]; indexposition=2)
     corruptcrc = copy(validtail)
     corruptcrc[4 + length(data1) + length(index)] ⊻= 0x01
-    oireject(corruptcrc)
+    oiroundtrip(corruptcrc, (; value=Int32[1]))
+    oireject(corruptcrc; checksum=true)
     indexoffset = Int64(4 + length(data1))
     truncated = oirewritepageheader(validtail, indexoffset) do header
         return oireplace(header;

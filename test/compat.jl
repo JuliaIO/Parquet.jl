@@ -17,6 +17,29 @@ using Tables
     end
 end
 
+@testset "files written by Parquet.jl 0.8" begin
+    # Parquet.jl 0.8.6 wrote a page CRC of 0 and the created_by "Parquet.jl 0.7.0".
+    bytes = read(joinpath(@__DIR__, "fixtures", "parquet08.parquet"))
+    for checksum in (false, true)
+        t = Tables.columntable(Parquet.Table(bytes; checksum=checksum))
+        @test t.i32 == Int32[1, 2, 3] && t.i64 == [1, 2, 3] && t.b == [true, false, true]
+        @test t.f32 == Float32[1.5, 2.5, 3.5] && isequal(t.f64, [1.0, 2.0, NaN])
+        @test t.s == ["a", "héllo", ""]
+        @test isequal(t.im, [1, missing, 3]) && isequal(t.sm, ["x", missing, "z"])
+    end
+    # The same pages from another writer fail verification.
+    n = length(bytes)
+    start = n - 8 - Int(Parquet._readu32le(bytes, n - 7))
+    metadata = Parquet.Thrift.decode(view(bytes, (start + 1):(n - 8)),
+        Parquet.Metadata.FileMetaData)
+    footer = Parquet.Thrift.encode(Parquet._withfields(metadata;
+        created_by="parquet-cpp-arrow version 19.0.0"))
+    other = vcat(bytes[1:start], footer, reinterpret(UInt8, [htol(UInt32(length(footer)))]),
+        b"PAR1")
+    @test Parquet.Table(other).i64 == [1, 2, 3]
+    @test_throws Parquet.FormatError("page CRC32 mismatch") Parquet.Table(other; checksum=true)
+end
+
 @testset "TIME of 24:00:00" begin
     bytes = take!(Parquet.write(IOBuffer(), (t=Int32[0, 86_400_000], x=[1, 2])))
     n = length(bytes)

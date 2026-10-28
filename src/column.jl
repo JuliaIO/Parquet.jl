@@ -243,20 +243,35 @@ _bitcopy(::_TimestampValue) = true
 _bitcopy(::_DecimalValue) = true
 _aftercopy!(convert, dest::Vector, offset::Int, count::Int) = nothing
 
-# Element types a read produces where the file leaves a choice: `int96` is the
-# resolution of INT96 timestamps, and `arrow` the types the file's ARROW:schema gives
-# its leaves (see `_arrowhints`).
+# Choices a read makes where the file leaves one: `int96` is the resolution of INT96
+# timestamps, `arrow` the types the file's ARROW:schema gives its leaves (see
+# `_arrowhints`), and `checksum` whether page CRC32s are verified (`_CRC_*`).
 struct _ReadOptions
     int96::DataType
     arrow::Dict{Vector{String},Any}
+    checksum::UInt8
 end
 
+# Page CRC32 policies: not checked (the default, as pyarrow, Polars, and DuckDB read), every
+# CRC checked, or every CRC but zeros checked (Parquet.jl 0.x wrote 0 for every page).
+const _CRC_OFF = 0x00
+const _CRC_ALL = 0x01
+const _CRC_NONZERO = 0x02
+
 function _ReadOptions(; int96::Type=Dates.Nanosecond,
-        arrow::Dict{Vector{String},Any}=Dict{Vector{String},Any}())
+        arrow::Dict{Vector{String},Any}=Dict{Vector{String},Any}(), checksum::Bool=false)
     int96 in (Dates.Nanosecond, Dates.Microsecond, Dates.Millisecond) ||
         throw(ArgumentError("int96 must be Dates.Nanosecond, Dates.Microsecond, or " *
             "Dates.Millisecond, got $int96"))
-    return _ReadOptions(int96, arrow)
+    return _ReadOptions(int96, arrow, checksum ? _CRC_ALL : _CRC_OFF)
+end
+
+# The CRC policy for a file: verifying files of Parquet.jl 0.x skips their zero CRCs.
+function _checksumpolicy(checksum::UInt8, metadata::Metadata.FileMetaData)
+    createdby = metadata.created_by
+    checksum == _CRC_ALL && createdby !== nothing &&
+        occursin(r"^Parquet\.jl (version )?0\.", createdby) && return _CRC_NONZERO
+    return checksum
 end
 
 # An Arrow duration stored as INT64: the count of its unit.
@@ -826,7 +841,8 @@ end
 # are validated against the chunk metadata.
 function _readchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractSource,
         md::Metadata.ColumnMetaData, node::SchemaNode, start::Int64, stop::Int64,
-        limits::Limits, budget::_ByteBudget, buffers::_PageBuffers) where {P,L}
+        limits::Limits, budget::_ByteBudget, buffers::_PageBuffers;
+        checksum::UInt8=_CRC_ALL) where {P,L}
     src isa MemorySource || (src = _ChunkSource(src, start, stop))
     count = Int(md.num_values)
     dictionary = _scratch(buffers.dictionary, L)
@@ -837,7 +853,7 @@ function _readchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractSource,
     framecount = Int64(0)
     position = start
     while position < stop
-        frame = readpage(src, position, stop, limits)
+        frame = readpage(src, position, stop, limits; checksum=checksum)
         frameend = pageend(frame)
         frameend > position || throw(FormatError(
             "column chunk contains a nonadvancing page frame"))
@@ -1285,12 +1301,12 @@ end
 function _readflatchunk!(output::Vector{O}, offset::Int, ::Type{P}, convert,
         src::AbstractSource, md::Metadata.ColumnMetaData, node::SchemaNode,
         start::Int64, stop::Int64, limits::Limits, budget::_ByteBudget,
-        buffers::_PageBuffers) where {O,P}
+        buffers::_PageBuffers; checksum::UInt8=_CRC_ALL) where {O,P}
     L = Base.nonmissingtype(O)
     sink = _FlatSink{O,L,node.max_definition_level == 0}(output, offset,
         _scratch(buffers.dense, L), UInt16(node.max_definition_level))
     _readchunk!(sink, P, L, convert, src, md, node, start, stop, limits, budget,
-        buffers)
+        buffers; checksum=checksum)
     return output
 end
 

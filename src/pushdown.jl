@@ -517,7 +517,8 @@ function _dictionaryvalues(ctx::_PruneContext, field::_PruneField,
         header, _ = readpageheader(ctx.file.source, start, stop, limits)
         (pagekind(header) === :dictionary &&
             header.uncompressed_page_size <= _DICTIONARY_CHECK_BYTES) || return nothing
-        frame = readpage(ctx.file.source, start, stop, limits)
+        frame = readpage(ctx.file.source, start, stop, limits;
+            checksum=ctx.plan.options.checksum)
         P = _physicaleltype(md.type_)
         entries = _validatedpageentrycount(frame, limits)
         _charge!(ctx.budget, _pagecharge(P, frame, entries))
@@ -946,7 +947,7 @@ function _readselectedchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractS
         md::Metadata.ColumnMetaData, node::SchemaNode, start::Int64, stop::Int64,
         limits::Limits, budget::_ByteBudget, buffers::_PageBuffers,
         wanted::Vector{UnitRange{Int}}, pages::Union{Nothing,_ChunkPages},
-        gather=nothing) where {P,L}
+        gather=nothing; checksum::UInt8=_CRC_ALL) where {P,L}
     decoded = UnitRange{Int}[]
     isempty(wanted) && return decoded, 0
     total = Int(md.num_values)
@@ -994,7 +995,7 @@ function _readselectedchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractS
                 next += 1
             end
             if next <= length(wanted) && first(wanted[next]) < row + count
-                frame = readpage(src, position, limit, limits)
+                frame = readpage(src, position, limit, limits; checksum=checksum)
                 _charge!(budget, _pagecharge(P, frame, Int64(count)))
                 if kind === :data_v1
                     _datapagev1!(sink, P, convert, frame, md, node, dictionary,
@@ -1025,7 +1026,7 @@ function _readselectedchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractS
         elseif kind === :dictionary
             (page == 0 && !hasdictionary) || throw(FormatError(
                 "dictionary page follows a data page in the column chunk"))
-            frame = readpage(src, position, limit, limits)
+            frame = readpage(src, position, limit, limits; checksum=checksum)
             entries = _validatedpageentrycount(frame, limits)
             _charge!(budget, _pagecharge(P, frame, entries))
             _dictionarypage!(dictionary, P, convert, frame, md, node, buffers, limits)
@@ -1249,7 +1250,7 @@ function _decodepart(file::File, metadata::Metadata.FileMetaData, part::_GroupRo
         _scratch(buffers.dense, Base.nonmissingtype(O)), UInt16(node.max_definition_level))
     rows, dictionary = _readselectedchunk!(sink, _physicaleltype(md.type_),
         Base.nonmissingtype(O), convert, src, md, node, start, stop, limits, budget,
-        buffers, wanted, pages, gather)
+        buffers, wanted, pages, gather; checksum=options.checksum)
     if gather isa _PageFilter
         # The kept values (only those that matched) and the buffers they point into,
         # all of which stay.

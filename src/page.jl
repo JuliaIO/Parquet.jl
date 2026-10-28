@@ -147,13 +147,15 @@ function readpageheader(src::AbstractSource, offset::Int64, stop::Int64,
 end
 
 """
-    readpage(src, offset, stop, limits) -> PageFrame
+    readpage(src, offset, stop, limits; checksum=_CRC_ALL) -> PageFrame
 
 Read one page whose header starts at `offset` and whose bytes must end at or before `stop`.
-Both page sizes are checked against `limits.max_page_bytes` before the payload is read,
-and the CRC32 of the on-disk payload is verified when the header carries one.
+Both page sizes are checked against `limits.max_page_bytes` before the payload is read.
+The CRC32 of the on-disk payload is verified when the header carries one and `checksum`
+asks for it (`_CRC_NONZERO` skips CRCs of 0).
 """
-function readpage(src::AbstractSource, offset::Int64, stop::Int64, limits::Limits)
+function readpage(src::AbstractSource, offset::Int64, stop::Int64, limits::Limits;
+        checksum::UInt8=_CRC_ALL)
     header, headerlength, total = _readpageheader(src, offset, stop, limits)
     validatepageheader(header)
     compressed = Int64(header.compressed_page_size)
@@ -164,7 +166,8 @@ function readpage(src::AbstractSource, offset::Int64, stop::Int64, limits::Limit
     _checklimit(:page_bytes, header.uncompressed_page_size, limits.max_page_bytes)
     payload = _contiguous(_readrangeexact(src, total, payloadoffset, compressed))
     crc = header.crc
-    crc === nothing || verifypagechecksum(crc, payload)
+    crc === nothing || checksum == _CRC_OFF || (checksum == _CRC_NONZERO && iszero(crc)) ||
+        verifypagechecksum(crc, payload)
     return PageFrame(offset, header, headerlength, payload)
 end
 

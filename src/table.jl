@@ -197,7 +197,7 @@ function _readtablechunk!(column::Vector, offset::Int, file::File,
     start, stop = _chunkrange(md, file.footer.offset)
     convert, _ = _valueconverter(node, limits, options)
     _readflatchunk!(column, offset, _physicaleltype(md.type_), convert, file.source, md,
-        node, start, stop, limits, budget, buffers)
+        node, start, stop, limits, budget, buffers; checksum=options.checksum)
     return convert isa _StringPayloads ? convert.buffers : nothing
 end
 
@@ -445,7 +445,7 @@ end
 """
     Parquet.File(source; select=nothing, drop=nothing, filter=nothing, limit=nothing,
                  scan=nothing, ntasks=Threads.nthreads(), int96=Dates.Nanosecond,
-                 limits=Parquet.Limits())
+                 checksum=false, limits=Parquet.Limits())
 
 Open a Parquet file and decode its footer, without reading column data. The keywords
 are those of [`Parquet.Table`](@ref) and apply to every table the file yields.
@@ -468,10 +468,11 @@ path stays memory mapped until `close(file)`; an `AbstractSource` is never close
 """
 function File(input; select=nothing, drop=nothing, filter=nothing, limit=nothing,
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
-        int96::Type=Dates.Nanosecond, limits::Limits=Limits(),
+        int96::Type=Dates.Nanosecond, checksum::Bool=false, limits::Limits=Limits(),
         budget::_ByteBudget=_ByteBudget(limits))
     return _openfile(input, nothing; select=select, drop=drop, filter=filter, limit=limit,
-        scan=scan, ntasks=ntasks, int96=int96, limits=limits, budget=budget)
+        scan=scan, ntasks=ntasks, int96=int96, checksum=checksum, limits=limits,
+        budget=budget)
 end
 
 # A `File`; `cached` is the footer and decoded metadata of an earlier open of the same
@@ -479,11 +480,11 @@ end
 function _openfile(input, cached::Union{Nothing,Tuple{Footer,Metadata.FileMetaData}};
         select=nothing, drop=nothing, filter=nothing, limit=nothing,
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
-        int96::Type=Dates.Nanosecond, limits::Limits=Limits(),
+        int96::Type=Dates.Nanosecond, checksum::Bool=false, limits::Limits=Limits(),
         budget::_ByteBudget=_ByteBudget(limits))
     ntasks >= 1 || throw(ArgumentError("ntasks must be at least 1, got $ntasks"))
     request = _scanrequest(select, drop, filter, limit, scan)
-    options = _ReadOptions(; int96=int96)
+    options = _ReadOptions(; int96=int96, checksum=checksum)
     owned = !(input isa AbstractSource)
     src = source(input; budget=budget)
     try
@@ -504,7 +505,8 @@ function _openfile(input, cached::Union{Nothing,Tuple{Footer,Metadata.FileMetaDa
             _validatetablerowgroups(metadata, schema, limits)
             _validatetablechunkranges(metadata, schema, footer.offset)
         end
-        options = _ReadOptions(options.int96, _arrowhints(metadata, schema, limits))
+        options = _ReadOptions(options.int96, _arrowhints(metadata, schema, limits),
+            _checksumpolicy(options.checksum, metadata))
         plan = _readplan(metadata, schema, request, Int(ntasks), options, limits)
         file = File(src, footer, metadata, plan, owned, false)
         owned && finalizer(close!, file)
@@ -656,7 +658,7 @@ end
 """
     Parquet.Table(source; select=nothing, drop=nothing, filter=nothing, limit=nothing,
                   scan=nothing, ntasks=Threads.nthreads(), int96=Dates.Nanosecond,
-                  partitioning=:hive, limits=Parquet.Limits())
+                  checksum=false, partitioning=:hive, limits=Parquet.Limits())
 
 Read a Parquet file from a path, a byte vector, an `IO`, or a
 [`Parquet.AbstractSource`](@ref) into Tables.jl columns. The table owns its columns: a
@@ -685,16 +687,22 @@ The result does not depend on `ntasks`.
 INT96 timestamps (written by Spark, Hive, and Impala) read as
 `Durations.Timestamp{int96}`. Spark's `9999-12-31` placeholder values are outside the
 nanosecond range (1677 to 2262); read such files with `int96=Dates.Microsecond`.
+
+`checksum=true` verifies the CRC32 of every page that has one and throws a
+[`Parquet.FormatError`](@ref) on a mismatch. Reads do not verify by default, as pyarrow,
+Polars, and DuckDB do not. Parquet.jl 0.x wrote a CRC of 0 for every page, so zero
+CRCs in its files are not checked.
 """
 function Table(input; select=nothing, drop=nothing, filter=nothing, limit=nothing,
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
-        int96::Type=Dates.Nanosecond, partitioning=:hive, limits::Limits=Limits())
+        int96::Type=Dates.Nanosecond, checksum::Bool=false, partitioning=:hive,
+        limits::Limits=Limits())
     _isdataset(input) && return _readdataset(Dataset(input; partitioning=partitioning,
         select=select, drop=drop, filter=filter, limit=limit, scan=scan, ntasks=ntasks,
-        int96=int96, limits=limits))
+        int96=int96, checksum=checksum, limits=limits))
     budget = _ByteBudget(limits)
     file = File(input; select=select, drop=drop, filter=filter, limit=limit, scan=scan,
-        ntasks=ntasks, int96=int96, limits=limits, budget=budget)
+        ntasks=ntasks, int96=int96, checksum=checksum, limits=limits, budget=budget)
     try
         return _readtable(file, eachindex(file.plan.metadata.row_groups), budget)
     finally

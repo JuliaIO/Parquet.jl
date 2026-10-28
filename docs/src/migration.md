@@ -42,5 +42,7 @@ with a deprecation warning and will be removed in 2.0.
   `DataDecimals.Decimal`, and INTERVAL as `Durations.Duration`.
 - Lists read as `AbstractVector` rows, structs as `NamedTuple` rows, and maps as ordered
   `AbstractVector{<:Pair}` rows (`Dict(row)` makes a dictionary).
+- Files written by 0.8 read as they are. 0.8 stored a page CRC of 0; reads check page
+  CRCs only with `checksum=true`, which skips the zeros in files 0.8 wrote.
 - `Parquet.Table` reads eagerly and releases the file before returning; `close` is not
   needed. `Parquet.read(path, DataFrame)` hands the columns to a sink without a copy.

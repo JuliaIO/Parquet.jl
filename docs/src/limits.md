@@ -7,7 +7,8 @@ that cannot work (an unknown column in `select`, a directory passed to `Parquet.
 conflicting column types across a dataset's files):
 
 - [`Parquet.FormatError`](@ref): the input is not a valid Parquet file, such as corrupt
-  or inconsistent metadata, a page that does not decode, or a checksum mismatch.
+  or inconsistent metadata, a page that does not decode, or (with `checksum=true`) a
+  page CRC32 mismatch.
 - [`Parquet.UnsupportedFeatureError`](@ref): the file is valid but uses something this
   package does not read, or holds a value the Julia type cannot represent. The message
   names it and, where there is one, the way to read the file.
