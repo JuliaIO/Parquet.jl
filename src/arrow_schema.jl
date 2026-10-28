@@ -198,10 +198,10 @@ function _fbwrite!(bytes::Vector{UInt8}, object::_FBObject)
     pending = Tuple{Int,Any}[]
     for slot in present
         value, at = object.fields[slot], table + offsets[slot]
-        if value isa Union{Bool,UInt8,Int16,Int32,Int64}
-            for (index, byte) in enumerate(reinterpret(UInt8, [htol(value)]))
-                bytes[at + index] = byte
-            end
+        if value isa Union{UInt8,Int16,Int32,Int64}
+            _fbstore!(bytes, at, value)
+        elseif value isa Bool
+            _fbstore!(bytes, at, UInt8(value))
         else
             push!(pending, (at, value))
         end
@@ -210,6 +210,14 @@ function _fbwrite!(bytes::Vector{UInt8}, object::_FBObject)
         _fbpatch!(bytes, at, UInt32(_fbwritevalue!(bytes, value) - at))
     end
     return table
+end
+
+# Stores a scalar little-endian at `bytes[(at + 1):(at + sizeof(value))]`.
+function _fbstore!(bytes::Vector{UInt8}, at::Int, value::Union{UInt8,Int16,Int32,Int64})
+    for index in 1:sizeof(value)
+        bytes[at + index] = (value >> (8 * (index - 1))) % UInt8
+    end
+    return
 end
 
 function _fbwritevalue!(bytes::Vector{UInt8}, value::String)

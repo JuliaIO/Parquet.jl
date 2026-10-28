@@ -155,7 +155,7 @@ that holds the field's values when it is a package vector (`StructVector`, `List
 otherwise `nothing`. `path` names the field in error messages. With `nullable=true` every
 field is optional except map keys.
 """
-function _nestedwriteshape(name::String, declared::Type, source,
+Base.@nospecializeinfer function _nestedwriteshape(name::String, declared::Type, source,
         limits::Limits; key::Bool=false, depth::Int=2, path::String=name,
         nullable::Bool=false)
     Base.@nospecialize declared source
@@ -173,15 +173,15 @@ function _nestedwriteshape(name::String, declared::Type, source,
         return _nestedwriteleafshape(name, value_type, optional;
             fixed_width=source.width)
     elseif source isa StructVector
-        types = Type[eltype(child) for child in source.children]
+        types = Type[_eltypeof(child) for child in source.children]
         return _nestedwritestructshape(name, value_type, optional,
             copy(source.names), types, copy(source.children), limits, depth, path, nullable)
     elseif source isa ListVector
         return _nestedwritelistshape(name, value_type, optional,
-            eltype(source.values), source.values, limits, depth, path, nullable)
+            _eltypeof(source.values), source.values, limits, depth, path, nullable)
     elseif source isa MapVector
         return _nestedwritemapshape(name, value_type, optional,
-            eltype(source.keys), eltype(source.values), source.keys, source.values,
+            _eltypeof(source.keys), _eltypeof(source.values), source.keys, source.values,
             limits, depth, path, nullable)
     elseif value_type <: ListValue
         _nestedwritecheckconcrete(value_type, "Parquet list view type")
@@ -193,12 +193,12 @@ function _nestedwriteshape(name::String, declared::Type, source,
         return _nestedwriteleafshape(name, value_type, optional)
     elseif value_type <: StructValue
         # Rows of one column share their struct's children, which declare its fields.
-        row = source isa AbstractVector ? findfirst(!ismissing, source) : nothing
+        row = source isa AbstractVector ? _barrier(findfirst, !ismissing, source) : nothing
         row === nothing && throw(ArgumentError("Parquet field $(repr(path)) holds " *
             "StructValue rows but no present row declares their fields"))
         sample = source[row]
         return _nestedwritestructshape(name, value_type, optional, copy(sample.names),
-            Type[eltype(child) for child in sample.children], copy(sample.children),
+            Type[_eltypeof(child) for child in sample.children], copy(sample.children),
             limits, depth, path, nullable)
     elseif value_type <: NamedTuple
         _nestedwritecheckconcrete(value_type, "Parquet struct type")
@@ -234,6 +234,9 @@ function _nestedwriteshape(name::String, declared::Type, source,
     end
     throw(_writeunsupported(value_type, path))
 end
+
+# The element type of a vector that `_nestedwriteshape` sees untyped.
+_eltypeof(values::AbstractVector) = _barrier(eltype, values)::Type
 
 # Tuples write as lists, so their fields need one element type: types that are equal up
 # to missing, also inside nested tuples (a tuple value belongs to the wider tuple type).
@@ -690,7 +693,7 @@ end
 function _shredtree(node::_NestedWriteNode, base::Int, depth::Int=0)
     plan = node.plan
     leaves = (Int(first(node.leaves)) - base):(Int(last(node.leaves)) - base)
-    name = join(getfield(plan, :source).path, ".")
+    name = join(_plansource(plan).path, ".")
     typed = depth < _SHRED_TYPED_DEPTH
     T = typed ? node.value_type : Any
     if plan isa _NestedLeafPlan
@@ -984,7 +987,7 @@ function _nestedwriterows(semantic::_NestedSchemaPlan, node::_NestedWriteNode,
     typed = count <= _SHRED_TUPLE_LEAVES
     state = _ShredState{repeated}(levels(), levels(), typed ? Tuple(values) : values,
         typed ? Tuple(converts) : converts)
-    _shredcolumn!(state, tree, column, eachindex(column))
+    _barrier(_shredcolumn!, state, tree, column, eachindex(column))
     return _ShreddedLeaf[_ShreddedLeaf(state.repetition[index], state.definition[index],
         state.values[index]) for index in 1:count]
 end
@@ -999,26 +1002,29 @@ const _FUSED_LEAVES = 16
 Encode the column chunks of one nested field's leaves (`specs`, in schema order) for the
 rows `column`.
 """
-function _encodenested(semantic::_NestedSchemaPlan, node::_NestedWriteNode,
-        column::AbstractVector, rows::UnitRange{Int}, specs::Vector{_LeafSpec},
-        options::_ChunkOptions)
+Base.@nospecializeinfer function _encodenested(semantic::_NestedSchemaPlan,
+        node::_NestedWriteNode, column::AbstractVector, rows::UnitRange{Int},
+        specs::Vector{_LeafSpec}, options::_ChunkOptions)
     # Only the shredding loop specializes on the column type.
     Base.@nospecialize column
     if length(specs) > _FUSED_LEAVES
-        leaves = _nestedwriterows(semantic, node, view(column, rows), options.limits)
+        leaves = _barrier(_nestedwriterows, semantic, node, view(column, rows),
+            options.limits)::Vector{_ShreddedLeaf}
         return _EncodedChunk[_encodechunk(spec, _LeveledRows(leaf.repetition,
             leaf.definition, leaf.values, length(rows)), options)
             for (spec, leaf) in zip(specs, leaves)]
     end
     converts, _, repeated, tree = _shredsetup(node, options.limits)
     scratches = _nestedscratches(length(specs))
-    chunks = Tuple(_ChunkWriter(spec, options, scratch)
-        for (spec, scratch) in zip(specs, scratches))
-    state = _ShredState{repeated}(Vector{UInt16}[chunk.repetitions for chunk in chunks],
-        Vector{UInt16}[chunk.definitions for chunk in chunks],
+    chunks = Tuple(Any[_ChunkWriter(spec, options, scratch)
+        for (spec, scratch) in zip(specs, scratches)])
+    state = _ShredState{repeated}(
+        Vector{UInt16}[(chunk::_ChunkWriter).repetitions for chunk in chunks],
+        Vector{UInt16}[(chunk::_ChunkWriter).definitions for chunk in chunks],
         map(chunk -> chunk.values, chunks), Tuple(converts))
-    _shredpages!(state, tree, column, rows, chunks, options)
-    return _EncodedChunk[_finishchunk(chunk) for chunk in chunks]
+    # The chunks' buffer types and the column's type are known at run time.
+    _barrier(_shredpages!, state, tree, column, rows, chunks, options)
+    return _EncodedChunk[_barrier(_finishchunk, chunk)::_EncodedChunk for chunk in chunks]
 end
 
 # Buffers for the leaves of nested fields, one set per leaf position, reused by the
@@ -1096,7 +1102,7 @@ _provenancevaluetype(T::Type) = T
 function _provenancenode(plan::_NestedPlan)
     isempty(_nestedleafrange(plan)) && throw(ArgumentError(
         "schema-bearing writes do not support zero-leaf group " *
-        repr(join(getfield(plan, :source).path, "."))))
+        repr(join(_plansource(plan).path, "."))))
     if plan isa _NestedLeafPlan
         element = plan.source.element
         return _NestedWriteNode(plan,

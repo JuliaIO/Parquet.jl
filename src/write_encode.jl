@@ -1560,8 +1560,16 @@ function _encodepooledchunk(leaf::_LeafSpec, column, first::Int, last::Int, conv
     leaf.encoding === nothing && leaf.dictionary || return nothing
     leaf.order in (_ORDER_FLOAT, _ORDER_FLOAT16) && return nothing
     chunk = _ChunkWriter(leaf, options, _encodescratch())
+    chunk.dictionary === nothing && return nothing
+    # The chunk's buffers take the leaf's physical type, known at run time.
+    return _barrier(_encodepooled!, chunk, _pagebuffer(leaf.element, options.limits),
+        column, first, last, convert, optional, name)::Union{Nothing,_EncodedChunk}
+end
+
+function _encodepooled!(chunk::_ChunkWriter, entries, column, first::Int, last::Int,
+        convert, optional::Bool, name::String)
+    leaf = chunk.leaf
     dictionary = chunk.dictionary
-    dictionary === nothing && return nothing
     pool = column.pool
     refs = column.refs
     low = firstindex(pool)
@@ -1569,7 +1577,6 @@ function _encodepooledchunk(leaf::_LeafSpec, column, first::Int, last::Int, conv
     @inbounds for index in first:last
         used[Int(refs[index]) - low + 1] = true
     end
-    entries = _pagebuffer(leaf.element, options.limits)
     poolrefs = Int[]
     for ref in low:lastindex(pool)
         used[ref - low + 1] || continue
@@ -1635,6 +1642,11 @@ Encode one column chunk of `leaf` from a row source.
 """
 function _encodechunk(leaf::_LeafSpec, rows, options::_ChunkOptions)
     chunk = _ChunkWriter(leaf, options, _encodescratch())
+    # The chunk's buffers take the leaf's physical type, known at run time.
+    return _barrier(_encoderows!, chunk, rows)::_EncodedChunk
+end
+
+function _encoderows!(chunk::_ChunkWriter, rows)
     _writerows!(chunk, rows)
     return _finishchunk(chunk)
 end

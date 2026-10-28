@@ -86,7 +86,7 @@ function _validatewritecolumnnames(names)
     sizehint!(normalized, length(names))
     seen = Set{String}()
     for raw in names
-        name = _writecolumnname(raw)
+        name = _writecolumnname(raw)::String
         name in seen && throw(ArgumentError(
             "Parquet column names must be unique"))
         push!(normalized, name)
@@ -250,7 +250,7 @@ function _unknownwriterowcolumns(rows, types, limits::Limits)
     return columns, count
 end
 
-function _writeinputrowcolumns(table, limits::Limits)
+Base.@nospecializeinfer function _writeinputrowcolumns(table, limits::Limits)
     Base.@nospecialize table
     rowsource = Tables.rows(table)
     schema = _writerowschema(rowsource, limits)
@@ -264,9 +264,9 @@ function _writeinputrowcolumns(table, limits::Limits)
         _knownwriterowcolumns(rowsource, types, count, limits)
     output = Pair{String,AbstractVector}[]
     sizehint!(output, length(columns))
-    for index in eachindex(columns, normalized)
+    for index in eachindex(normalized)
         push!(output, Pair{String,AbstractVector}(normalized[index],
-            _writeinputcolumn(normalized[index], columns[index])))
+            _barrier(_writeinputcolumn, normalized[index], columns[index])))
     end
     return output, rowcount
 end
@@ -289,9 +289,10 @@ function _collectrows(table)
     end
 end
 
-function _writeinputcolumns(table, limits::Limits)
+Base.@nospecializeinfer function _writeinputcolumns(table, limits::Limits)
     Base.@nospecialize table
-    Tables.columnaccess(table) || return _writeinputrowcolumns(table, limits)
+    Tables.columnaccess(table) || return _barrier(_writeinputrowcolumns, table,
+        limits)::Tuple{Vector{Pair{String,AbstractVector}},Int}
     columns = Tables.columns(table)
     names = collect(Tables.columnnames(columns))
     normalized = _validatewritecolumnnames(names)
@@ -309,7 +310,8 @@ function _writeinputcolumns(table, limits::Limits)
         end
         length(values) == rows || throw(ArgumentError(
             "Parquet columns have different lengths"))
-        push!(output, Pair{String,AbstractVector}(name, _writeinputcolumn(name, values)))
+        push!(output, Pair{String,AbstractVector}(name,
+            _barrier(_writeinputcolumn, name, values)))
     end
     return output, something(rows, 0)
 end
@@ -322,9 +324,9 @@ function _writeinputcolumn(name::String, values::AbstractVector)
     pooled = _pooledcolumn(values)
     pooled === nothing || return pooled
     # Compiled only for the columns that need it, not with every column type's write.
-    _writedeclared(eltype(values)) ||
-        (values = _narrowwritecolumn(name, Base.inferencebarrier(values)))
-    return _writeextensioncolumn(name, values)
+    _writedeclared(eltype(values)) || (values = _barrier(_narrowwritecolumn, name, values))
+    # Extensions add methods for their packages' column types.
+    return _barrier(_writeextensioncolumn, name, values)::AbstractVector
 end
 
 # Extensions convert columns of their packages' types to types this package writes
@@ -898,7 +900,7 @@ function _writecodec(codec::Symbol)
     name === :lz4_raw && return Metadata.CompressionCodec.LZ4_RAW
     name === :lz4 && return Metadata.CompressionCodec.LZ4_RAW
     name === :lzo && return _writecodec(Metadata.CompressionCodec.LZO)
-    throw(ArgumentError("unknown Parquet compression codec $(repr(codec)); use :snappy, " *
+    throw(ArgumentError("unknown Parquet compression codec :$codec; use :snappy, " *
         ":zstd, :gzip, :lz4, :brotli, or nothing"))
 end
 

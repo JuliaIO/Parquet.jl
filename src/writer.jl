@@ -173,22 +173,11 @@ function _inferschema(columns::Vector{Pair{String,AbstractVector}}, options::_Wr
     for (name, values) in columns
         occursin('\0', name) && throw(ArgumentError(
             "Parquet top-level field names cannot contain NUL"))
-        if _flatwritable(values)
-            optional = nullable || Missing <: eltype(values)
-            push!(fragments, Metadata.SchemaElement[_flatelement(name, values, optional,
-                limits)])
-            push!(shapes, nothing)
-        else
-            shape = _nestedwriteshape(name, eltype(values), values, limits;
-                nullable=nullable)
-            if _nestedwriteneedsscan(shape)
-                for value in values
-                    _nestedwritescan!(shape, value)
-                end
-            end
-            push!(fragments, _nestedwriteschema(shape, limits))
-            push!(shapes, shape)
-        end
+        # Compiled for each column's type: `_barrier`.
+        fragment, shape = _barrier(_columnfragment, name, values, nullable,
+            limits)::Tuple{Vector{Metadata.SchemaElement},Any}
+        push!(fragments, fragment)
+        push!(shapes, shape)
     end
     elements, schema, semantic = _schemafromfragments(fragments, options)
     fields = _FieldSpec[]
@@ -200,6 +189,23 @@ function _inferschema(columns::Vector{Pair{String,AbstractVector}}, options::_Wr
     end
     return _WriteSchema(elements, schema, semantic, fields,
         _leafspecs(schema, semantic, options), false), shapes
+end
+
+# The schema fragment of one input column, and its nested shape (`nothing` when the
+# column is flat).
+function _columnfragment(name::String, values::AbstractVector, nullable::Bool,
+        limits::Limits)
+    if _flatwritable(values)
+        optional = nullable || Missing <: eltype(values)
+        return Metadata.SchemaElement[_flatelement(name, values, optional, limits)], nothing
+    end
+    shape = _nestedwriteshape(name, eltype(values), values, limits; nullable=nullable)
+    if _nestedwriteneedsscan(shape)
+        for value in values
+            _nestedwritescan!(shape, value)
+        end
+    end
+    return _nestedwriteschema(shape, limits), shape
 end
 
 # A Parquet.Table rewrite keeps the table's stored schema exactly.
@@ -214,8 +220,8 @@ function _storedschema(table::Table, options::_WriteOptions)
         range = _nestedleafrange(child)
         isempty(range) && throw(ArgumentError(
             "schema-bearing writes do not support zero-leaf group " *
-            repr(child.source.element.name)))
-        name = child.source.element.name
+            repr(_plansource(child).element.name)))
+        name = _plansource(child).element.name
         push!(fields, child isa _NestedLeafPlan ? _FlatField(name, Int(first(range))) :
             _NestedField(name, Int(first(range)):Int(last(range)), fragments[index]))
     end
@@ -343,6 +349,9 @@ function _writearrowhints!(hints, node::_NestedWriteNode)
     return hints
 end
 
+_nestedbinding(values::AbstractVector, shape, plan) =
+    _NestedBinding(values, _nestedwritebind(shape, plan))
+
 # Binds one column of a later table: its declared type must give the field's schema.
 function _bindcolumn(schema::_WriteSchema, index::Int, name::String,
         values::AbstractVector, shape, options::_WriteOptions)
@@ -401,6 +410,13 @@ _segments(column, first::Int, last::Int) = nothing
 function _encodesegments(leaf::_LeafSpec, segments::Vector, convert, optional::Bool,
         name::String, options::_ChunkOptions)
     chunk = _ChunkWriter(leaf, options, _encodescratch())
+    # The chunk's buffers take the leaf's physical type, known at run time.
+    return _barrier(_encodesegments!, chunk, segments, convert, optional,
+        name)::_EncodedChunk
+end
+
+function _encodesegments!(chunk::_ChunkWriter, segments::Vector, convert, optional::Bool,
+        name::String)
     base = 0
     for (vector, first, last) in segments
         _writerows!(chunk, _FlatRows(vector, first, last, convert, optional, name, base))
@@ -409,8 +425,8 @@ function _encodesegments(leaf::_LeafSpec, segments::Vector, convert, optional::B
     return _finishchunk(chunk)
 end
 
-function _encodefield(schema::_WriteSchema, field::_NestedField, binding::_NestedBinding,
-        range::UnitRange{Int}, options::_WriteOptions)
+Base.@nospecializeinfer function _encodefield(schema::_WriteSchema, field::_NestedField,
+        binding::_NestedBinding, range::UnitRange{Int}, options::_WriteOptions)
     Base.@nospecialize binding
     offset = firstindex(binding.column) - 1
     return _encodenested(schema.semantic, binding.node, binding.column,
@@ -668,27 +684,30 @@ function write(writer::Writer, table)
     return writer
 end
 
+# The columns of a Parquet.Table to rewrite, and its row count.
+function _storedcolumns(table::Table)
+    names = String[String(name) for name in Tables.columnnames(table)]
+    vectors = AbstractVector[column for column in values(_tablecolumns(table))]
+    rows = _tablerows(table)
+    for (name, vector) in zip(names, vectors)
+        length(vector) == rows || throw(ArgumentError("Parquet.Table column " *
+            "$(repr(name)) has $(length(vector)) values for $rows rows"))
+    end
+    return Pair{String,AbstractVector}[name => vector
+        for (name, vector) in zip(names, vectors)], rows
+end
+
 # Writes the rows of `table` and returns their count. Row r of `table` is row `offset + r`
 # of the input (`offset + indices[r]` when `table` holds rows `indices` of a partition),
 # which is the row an error names.
-function _writetable!(writer::Writer, table, source, offset::Int=0,
+Base.@nospecializeinfer function _writetable!(writer::Writer, table, source, offset::Int=0,
         indices::Union{Nothing,Vector{Int}}=nothing)
     Base.@nospecialize table source
     options = writer.options
     stored = table isa Table
-    if stored
-        names = String[String(name) for name in Tables.columnnames(table)]
-        vectors = AbstractVector[column for column in values(_tablecolumns(table))]
-        rows = _tablerows(table)
-        for (name, vector) in zip(names, vectors)
-            length(vector) == rows || throw(ArgumentError("Parquet.Table column " *
-                "$(repr(name)) has $(length(vector)) values for $rows rows"))
-        end
-        columns = Pair{String,AbstractVector}[name => vector
-            for (name, vector) in zip(names, vectors)]
-    else
-        columns, rows = _writeinputcolumns(table, options.limits)
-    end
+    # One assignment of `rows`: the encoding closures below capture it unboxed.
+    columns, rows = (stored ? _storedcolumns(table) : _writeinputcolumns(table,
+        options.limits))::Tuple{Vector{Pair{String,AbstractVector}},Int}
     shapes = nothing
     isfirst = writer.schema === nothing
     if isfirst
@@ -705,27 +724,31 @@ function _writetable!(writer::Writer, table, source, offset::Int=0,
                 "accepts only Parquet.Table inputs with the same stored schema, and the " *
                 "reverse; write Tables.columntable(table) instead"))
     end
-    length(columns) == length(writer.schema.fields) || _bindmismatch(writer.schema, columns)
+    length(columns) == length(writer.schema.fields) ||
+        _barrier(_bindmismatch, writer.schema, columns)
     retyped = isfirst || writer.schema.stored ? Int[] : _retypenullcolumns!(writer, columns)
     schema = writer.schema
+    # Each column binds and encodes behind `_barrier`, compiled for its own type.
     bindings = _FieldBinding[]
     for (index, (name, values)) in enumerate(columns)
         if shapes !== nothing && shapes[index] !== nothing
-            push!(bindings, _NestedBinding(values,
-                _nestedwritebind(shapes[index], schema.semantic.root.children[index])))
+            push!(bindings, _barrier(_nestedbinding, values, shapes[index],
+                schema.semantic.root.children[index])::_FieldBinding)
         else
-            push!(bindings, _bindcolumn(schema, index, name, values, nothing, options))
+            push!(bindings, _barrier(_bindcolumn, schema, index, name, values, nothing,
+                options)::_FieldBinding)
         end
     end
     if isfirst
         stored && merge!(writer.arrowhints, _arrowhints(_tablemetadata(table),
             _tableschema(table), options.limits))
         for (field, binding) in zip(schema.fields, bindings)
-            _writearrowhints!(writer.arrowhints, schema, field, binding)
+            _barrier(_writearrowhints!, writer.arrowhints, schema, field, binding)
         end
     end
     for index in retyped
-        _writearrowhints!(writer.arrowhints, schema, schema.fields[index], bindings[index])
+        _barrier(_writearrowhints!, writer.arrowhints, schema, schema.fields[index],
+            bindings[index])
     end
     rows == 0 && return rows
     size = something(options.rowgroupsize, rows)
@@ -741,9 +764,11 @@ function _writetable!(writer::Writer, table, source, offset::Int=0,
         return map(fields) do fieldindex
             field = schema.fields[fieldindex]
             try
-                return _encodefield(schema, field, bindings[fieldindex], range, options)
+                return _barrier(_encodefield, schema, field, bindings[fieldindex], range,
+                    options)::Vector{_EncodedChunk}
             catch err
-                throw(_encodefielderror(field, err, range, offset, indices))
+                # Error paths stay out of the encoding's inference.
+                throw(_barrier(_encodefielderror, field, err, range, offset, indices))
             end
         end
     end
@@ -1032,41 +1057,46 @@ function _keyvalues(entries, what::String)
     entries === nothing && return nothing
     output = Metadata.KeyValue[]
     for (key, value) in (entries isa NamedTuple ? pairs(entries) : entries)
-        name = String(string(key))
+        name = String(string(key))::String
         name == "ARROW:schema" && throw(ArgumentError(
             "the ARROW:schema $what key is reserved for the writer"))
         push!(output, Metadata.KeyValue(key=name,
-            value=value === nothing ? nothing : String(string(value))))
+            value=value === nothing ? nothing : String(string(value))::String))
     end
     return isempty(output) ? nothing : output
 end
 
-function _inputmetadata(table)
+# Compiled once for every input type; the DataAPI methods of the input's type are
+# called behind `_barrier`.
+Base.@nospecializeinfer function _inputmetadata(table)
     Base.@nospecialize table
     table isa Table && return nothing
-    DataAPI.metadatasupport(typeof(table)).read || return nothing
+    _barrier(DataAPI.metadatasupport, typeof(table)).read || return nothing
     entries = Pair{String,String}[]
-    for key in DataAPI.metadatakeys(table)
-        name = String(string(key))
+    for key in _barrier(DataAPI.metadatakeys, table)
+        name = String(string(key))::String
         name in _SOURCE_SCHEMA_KEYS && continue
-        push!(entries, name => string(DataAPI.metadata(table, key)))
+        push!(entries, name => string(_barrier(DataAPI.metadata, table, key))::String)
     end
     return entries
 end
 
-function _inputcolmetadata(table, names::Vector{String})
+Base.@nospecializeinfer function _inputcolmetadata(table, names::Vector{String})
     Base.@nospecialize table
-    DataAPI.colmetadatasupport(typeof(table)).read || return nothing
+    _barrier(DataAPI.colmetadatasupport, typeof(table)).read || return nothing
     output = Dict{String,Vector{Pair{String,String}}}()
     for name in names
-        entries = Pair{String,String}[String(string(key)) => string(DataAPI.colmetadata(
-            table, Symbol(name), key)) for key in DataAPI.colmetadatakeys(table, Symbol(name))]
+        column = Symbol(name)
+        entries = Pair{String,String}[String(string(key))::String =>
+            string(_barrier(DataAPI.colmetadata, table, column, key))::String
+            for key in _barrier(DataAPI.colmetadatakeys, table,
+                column)]::Vector{Pair{String,String}}
         isempty(entries) || (output[name] = entries)
     end
     return output
 end
 
-function _resolvemetadata!(writer::Writer, source, table, columns)
+Base.@nospecializeinfer function _resolvemetadata!(writer::Writer, source, table, columns)
     Base.@nospecialize source table
     options = writer.options
     limits = options.limits
@@ -1074,8 +1104,10 @@ function _resolvemetadata!(writer::Writer, source, table, columns)
         if table isa Table
             writer.metadata = _writekeyvaluemetadata(table, limits)
         else
-            entries = _inputmetadata(source)
-            entries === nothing && source !== table && (entries = _inputmetadata(table))
+            # The input's metadata methods are found for its type at run time.
+            entries = _barrier(_inputmetadata, source)
+            entries === nothing && source !== table &&
+                (entries = _barrier(_inputmetadata, table))
             writer.metadata = _keyvalues(entries, "metadata")
         end
     else
@@ -1084,13 +1116,13 @@ function _resolvemetadata!(writer::Writer, source, table, columns)
     names = String[first(column) for column in columns]
     colmetadata = options.colmetadata
     if colmetadata === nothing
-        colmetadata = _inputcolmetadata(source, names)
+        colmetadata = _barrier(_inputcolmetadata, source, names)
         colmetadata === nothing && source !== table &&
-            (colmetadata = _inputcolmetadata(table, names))
+            (colmetadata = _barrier(_inputcolmetadata, table, names))
     end
     if colmetadata !== nothing
         for (key, entries) in (colmetadata isa NamedTuple ? pairs(colmetadata) : colmetadata)
-            name = String(string(key))
+            name = String(string(key))::String
             name in names || throw(ArgumentError(
                 "colmetadata names $(repr(name)), which is not a column"))
             values = _keyvalues(entries, "colmetadata")

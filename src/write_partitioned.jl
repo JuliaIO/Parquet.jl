@@ -99,26 +99,28 @@ function _partitionwriter!(state::_PartitionedWrite, directory::String)
     return writer
 end
 
-function _writepartitioned(root::String, table, partitionby, existing::Symbol, kwargs)
+Base.@nospecializeinfer function _writepartitioned(root::String, table, partitionby,
+        existing::Symbol, kwargs)
     Base.@nospecialize table kwargs
     keys = String[String(name) for name in (partitionby isa Union{Symbol,AbstractString} ?
         (partitionby,) : partitionby)]
     isempty(keys) && throw(ArgumentError("partitionby names no columns"))
     allunique(keys) || throw(ArgumentError("partitionby names a column twice"))
     existing in (:error, :delete_matching) || throw(ArgumentError(
-        "existing must be :error or :delete_matching, got $(repr(existing))"))
+        "existing must be :error or :delete_matching, got :$existing"))
     isfile(root) && throw(ArgumentError("partitioned output $(repr(root)) is a file"))
     existing === :error && isdir(root) && !isempty(readdir(root)) && throw(ArgumentError(
         "partitioned output directory $(repr(root)) is not empty; remove it first, or " *
         "pass existing=:delete_matching to replace only the partitions this write produces"))
     metadata = get(kwargs, :metadata, nothing)
-    metadata === nothing && (metadata = _inputmetadata(table))
+    metadata === nothing && (metadata = _barrier(_inputmetadata, table))
     colmetadata = get(kwargs, :colmetadata, nothing)
     # Only a table with column metadata is asked for its columns (a stream is not read).
-    colmetadata === nothing && DataAPI.colmetadatasupport(typeof(table)).read &&
-        (colmetadata = _inputcolmetadata(table,
-            String[String(name) for name in Tables.columnnames(Tables.columns(table))]))
-    colmetadata === nothing || (colmetadata = [String(string(name)) => entries
+    colmetadata === nothing && _barrier(DataAPI.colmetadatasupport, typeof(table)).read &&
+        (colmetadata = _barrier(_inputcolmetadata, table, String[String(name)::String
+            for name in Tables.columnnames(Tables.columns(table))]))
+    colmetadata === nothing || (colmetadata = Pair{String,Any}[
+        String(string(name))::String => entries
         for (name, entries) in pairs(colmetadata) if !(String(string(name)) in keys)])
     nullable = Tables.partitions(table) isa Tuple{Any} ? nothing : true
     options = _writeoptions(; nullable=nullable, metadata=metadata, colmetadata=colmetadata,
@@ -141,8 +143,8 @@ function _writepartitioned(root::String, table, partitionby, existing::Symbol, k
 end
 
 # Writes the rows of `part`, rows `offset + 1` on of the input, and returns their count.
-function _writepartition!(state::_PartitionedWrite, part, keys::Vector{String},
-        offset::Int)
+Base.@nospecializeinfer function _writepartition!(state::_PartitionedWrite, part,
+        keys::Vector{String}, offset::Int)
     Base.@nospecialize part
     columns = Tables.columns(part)
     names = String[String(name) for name in Tables.columnnames(columns)]
@@ -153,28 +155,38 @@ function _writepartition!(state::_PartitionedWrite, part, keys::Vector{String},
     data = Symbol[Symbol(name) for name in names if !(name in keys)]
     isempty(data) && throw(ArgumentError(
         "partitionby uses every column, so the files would have no columns"))
-    keycolumns = Tuple(Tables.getcolumn(columns, Symbol(key)) for key in keys)
-    datacolumns = AbstractVector[_partitioncolumn(String(name),
+    keycolumns = Tuple(Any[Tables.getcolumn(columns, Symbol(key)) for key in keys])
+    datacolumns = AbstractVector[_barrier(_partitioncolumn, String(name),
         Tables.getcolumn(columns, name)) for name in data]
     rows = length(first(keycolumns))
     # Errors count rows of the input from 1, and `indices` index the key columns.
     base = offset + 1 - firstindex(first(keycolumns))
-    for (key, indices) in _partitiongroups(keycolumns, rows)
+    # The key columns' types are known at run time.
+    groups = _barrier(_partitiongroups, keycolumns, rows)
+    _barrier(_writegroups!, state, groups, keys, data, datacolumns, base)
+    return rows
+end
+
+# Writes each group of rows (key => indices) to its partition's file.
+function _writegroups!(state::_PartitionedWrite, groups::Vector{<:Pair},
+        keys::Vector{String}, data::Vector{Symbol}, datacolumns::Vector{AbstractVector},
+        base::Int)
+    for (key, indices) in groups
         directory = join((name * "=" * _hivevalue(DataAPI.unwrap(value), name)
             for (name, value) in zip(keys, key)), '/')
-        group = NamedTuple{Tuple(data)}(Tuple(view(column, indices)
-            for column in datacolumns))
+        group = NamedTuple{Tuple(data)}(Tuple(Any[_barrier(view, column, indices)
+            for column in datacolumns]))
         writer = _partitionwriter!(state, directory)
         _writetable!(writer, group, group, base, indices)
         state.template === nothing && (state.template = writer)
     end
-    return rows
+    return
 end
 
 # Abstractly typed columns narrow once for the whole input, not per file.
 function _partitioncolumn(name::String, values)
     values isa AbstractVector || throw(ArgumentError("Parquet columns must be vectors"))
     DataAPI.refpool(values) === nothing && !_writedeclared(eltype(values)) &&
-        (values = _narrowwritecolumn(name, Base.inferencebarrier(values)))
-    return _writeextensioncolumn(name, values)
+        (values = _barrier(_narrowwritecolumn, name, values))
+    return _barrier(_writeextensioncolumn, name, values)::AbstractVector
 end
