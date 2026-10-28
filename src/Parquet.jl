@@ -74,7 +74,7 @@ if VERSION >= v"1.11"
         :FormatError, :JSONValue, :LimitError, :Limits, :ListValue, :ListVector,
         :LogicalColumn, :MapValue, :MapVector, :StructValue, :StructVector, :Table,
         :UnsupportedFeatureError, :Writer, :col, :colcmp, :colin, :concurrentreads,
-        :isnull, :metadata, :read, :readrange, :sourcelength, :write))
+        :isnull, :metadata, :read, :readrange, :sourcelength, :statistics, :write))
 end
 
 end

@@ -935,3 +935,29 @@ end
     push!(c.l, c.l[1])
     @test t.s[1] == "a" && length(t.l) == 2
 end
+
+@testset "metadata display and typed statistics" begin
+    source = (id=[1, 2, 3, 4], name=["b", "a", missing, "d"],
+        day=[Date(2024, 1, 2), Date(2024, 1, 1), Date(2025, 3, 1), Date(2023, 5, 5)],
+        tags=[[1], [2], Int[], [3]])
+    bytes = take!(Parquet.write(IOBuffer(), source; rowgroupsize=2,
+        metadata=Dict("owner" => "me")))
+    file = Parquet.File(bytes)
+    text = sprint(show, MIME"text/plain"(), Parquet.metadata(file))
+    @test startswith(text, "Parquet file metadata: 4 rows in 2 row groups, 4 columns")
+    @test occursin("columns: id, name, day, tags", text) && occursin("owner", text) &&
+        occursin("created by: Parquet.jl", text) && length(text) < 400
+    @test Parquet.statistics(file, :id) ==
+        [(rows=2, nulls=0, min=1, max=2), (rows=2, nulls=0, min=3, max=4)]
+    @test Parquet.statistics(file, "name") ==
+        [(rows=2, nulls=0, min="a", max="b"), (rows=2, nulls=1, min="d", max="d")]
+    @test Parquet.statistics(file, 3)[2] ==
+        (rows=2, nulls=0, min=Date(2023, 5, 5), max=Date(2025, 3, 1))
+    @test_throws ArgumentError Parquet.statistics(file, :tags)
+    @test_throws ArgumentError Parquet.statistics(file, :nope)
+    @test_throws ArgumentError Parquet.statistics(file, 5)
+    close(file)
+    bare = Parquet.File(take!(Parquet.write(IOBuffer(), source; statistics=false)))
+    @test Parquet.statistics(bare, :id) == [(rows=4, nulls=nothing, min=nothing, max=nothing)]
+    close(bare)
+end

@@ -937,10 +937,79 @@ end
 
 The footer metadata of a [`Parquet.File`](@ref) or of the file a [`Parquet.Table`](@ref)
 was read from (restricted to the columns read): schema, row groups, column chunk
-encodings and statistics, and key-value metadata.
+encodings and statistics, and key-value metadata. It displays as a summary; its fields
+are the Thrift structures of the format. [`Parquet.statistics`](@ref) decodes a
+column's statistics.
 """
 metadata(file::File) = file.metadata
 metadata(table::Table) = _tablemetadata(table)
+
+function Base.show(io::IO, ::MIME"text/plain", metadata::Metadata.FileMetaData)
+    groups = something(metadata.row_groups, Metadata.RowGroup[])
+    schema = metadata.schema
+    root = isempty(schema) ? nothing : first(schema)
+    names = String[]
+    if root !== nothing
+        element = 2
+        for _ in 1:something(root.num_children, Int32(0))
+            element > length(schema) && break
+            push!(names, schema[element].name)
+            element = _subtreeend(schema, element) + 1
+        end
+    end
+    print(io, "Parquet file metadata: ", metadata.num_rows, " rows in ", length(groups),
+        " row groups, ", length(names), " columns")
+    isempty(names) || print(io, "\n  columns: ", join(first(names, 10), ", "),
+        length(names) > 10 ? ", … ($(length(names) - 10) more)" : "")
+    metadata.created_by === nothing || print(io, "\n  created by: ", metadata.created_by)
+    keys = unique(String[entry.key
+        for entry in something(metadata.key_value_metadata, Metadata.KeyValue[])])
+    isempty(keys) || print(io, "\n  key-value metadata: ", join(keys, ", "))
+    return
+end
+
+"""
+    Parquet.statistics(file::Parquet.File, column) -> Vector
+
+The statistics of a flat column of `file` (its name or its index among the columns the
+file reads) in each row group, as `(rows, nulls, min, max)` named tuples. `min` and `max`
+have the column's element type; a statistic the file leaves out, or one that does not
+hold (see [Statistics](@ref)), is `nothing`.
+
+```julia
+stats = Parquet.statistics(Parquet.File("trips.parquet"), :fare)
+stats[1].max  # the largest fare in the first row group
+```
+"""
+function statistics(file::File, column::Union{Symbol,AbstractString,Integer})
+    plan = file.plan
+    names = _tablenames(plan.schema, plan.limits)
+    index = column isa Integer ? Int(column) : findfirst(==(Symbol(column)), names)
+    (index === nothing || !(1 <= index <= length(names))) && throw(ArgumentError(
+        "$(repr(column)) is not a column of this file; its columns are " *
+        join(names, ", ")))
+    node = plan.schema.root.children[index]
+    field = _prunefield(node, plan)
+    field === nothing && throw(ArgumentError("column $(names[index]) is nested; " *
+        "Parquet.metadata(file) has the statistics of its leaves"))
+    return map(plan.metadata.row_groups) do group
+        md = _chunkcolumnmetadata(group, node)
+        facts = md === nothing ? nothing : try
+            _statisticsfacts(plan.schema, Int(node.column_index),
+                plan.metadata.created_by, plan.metadata.column_orders, md;
+                limits=plan.limits)
+        catch err
+            err isa Union{FormatError,LimitError,ArgumentError} || rethrow()
+            nothing
+        end
+        facts === nothing &&
+            return (rows=Int(group.num_rows), nulls=nothing, min=nothing, max=nothing)
+        bound(fact) = fact.state === :known ? _boundvalue(field, fact.raw) : nothing
+        nulls = facts.null_count.state === :known ? Int(facts.null_count.value) : nothing
+        return (rows=Int(group.num_rows), nulls=nulls, min=bound(facts.lower),
+            max=bound(facts.upper))
+    end
+end
 
 # Parquet's key-value metadata as DataAPI metadata (style `:default`).
 DataAPI.metadatasupport(::Type{<:Union{File,Table}}) = (read=true, write=false)

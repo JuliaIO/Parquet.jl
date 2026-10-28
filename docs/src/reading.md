@@ -150,10 +150,14 @@ The reader also accepts the legacy list and map layouts of older writers.
 `DataAPI.colmetadata(table, :price)` a column's (from the file's ARROW:schema, as
 pyarrow and Polars store it, or from its column chunks, as `Parquet.write` does), and
 [`Parquet.metadata`](@ref) the raw footer: schema, row groups, encodings, statistics.
+[`Parquet.statistics`](@ref) decodes one column's statistics in each row group.
 
 ```@example reading
-md = Parquet.metadata(table)
-(rowgroups=length(md.row_groups), rows=md.num_rows, writer=md.created_by)
+Parquet.metadata(table)
+```
+
+```@example reading
+Parquet.statistics(Parquet.File(path), :fare)
 ```
 
 ## Sources

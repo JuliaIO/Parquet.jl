@@ -12,6 +12,7 @@ Parquet.File
 Parquet.Dataset
 Parquet.read
 Parquet.metadata
+Parquet.statistics
 Parquet.write
 Parquet.Writer
 Parquet.Limits
