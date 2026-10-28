@@ -961,3 +961,27 @@ end
     @test Parquet.statistics(bare, :id) == [(rows=4, nulls=nothing, min=nothing, max=nothing)]
     close(bare)
 end
+
+@testset "select and drop: functions, and errors in the keywords' terms" begin
+    bytes = take!(Parquet.write(IOBuffer(), (a=[1], b=[2], c=[3])))
+    @test Tables.columnnames(Parquet.Table(bytes; select=(i, name) -> name != :b)) == (:a, :c)
+    @test Tables.columnnames(Parquet.Table(bytes; drop=(i, name) -> i == 1)) == (:b, :c)
+    @test Tables.columnnames(Parquet.File(bytes; select=(i, name) -> i > 1)) == (:b, :c)
+    lake = mktempdir()
+    Parquet.write(joinpath(lake, "x.parquet"), (a=[1], b=[2]))
+    @test Tables.columnnames(Parquet.Table(lake; select=(i, name) -> name === :b)) == (:b,)
+    for (keywords, needle) in (((select=[:nope],), "select names no column :nope"),
+            ((select=:nope,), "select names no column :nope"),
+            ((select=[5],), "select names no column 5"),
+            ((select=r"zz",), "select names no column r\"zz\""),
+            ((drop=[:nope],), "drop names no column :nope"))
+        err = try
+            Parquet.Table(bytes; keywords...)
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin(needle, err.msg) &&
+            occursin("the columns are a, b, c", err.msg) && !occursin("validate", err.msg) &&
+            !occursin("Not(", err.msg)
+    end
+end

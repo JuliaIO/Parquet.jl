@@ -41,10 +41,11 @@ Parquet.Table(path; stringtype=String).zone
 
 ## Choose columns and rows
 
-`select` and `drop` choose columns (names, indices, a regex, or a vector of them),
-`filter` keeps the rows where a predicate is `true`, and `limit` caps the row count.
-Only the columns a read selects or filters on are decoded; the other column chunks are
-never read, so a column this package cannot decode can be dropped to read the rest.
+`select` and `drop` choose columns (names, indices, a regex, a vector of them, or a
+function `(i, name) -> Bool` as in CSV.jl), `filter` keeps the rows where a predicate is
+`true`, and `limit` caps the row count. Only the columns a read selects or filters on are
+decoded; the other column chunks are never read, so a column this package cannot decode
+can be dropped to read the rest.
 
 ```@example reading
 subset = Parquet.Table(path; select=[:id, :fare], filter=Parquet.col(:fare) > 10, limit=2)

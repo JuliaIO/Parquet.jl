@@ -442,7 +442,9 @@ function _outputcolmetadata(plan::_ReadPlan)
     return [plan.colmetadata[column.index] for column in plan.bound.columns]
 end
 
-# The scan the read keywords ask for, or `nothing` for a whole-file read.
+# The scan the read keywords ask for: `nothing` for a whole-file read, the `scan`, or for
+# the select/drop/filter/limit keywords a function of the columns' names that returns the
+# scan (`_scanfor`).
 function _scanrequest(select, drop, filter, limit, scan)
     sugar = select !== nothing || drop !== nothing || filter !== nothing ||
         limit !== nothing
@@ -454,8 +456,36 @@ function _scanrequest(select, drop, filter, limit, scan)
     sugar || return nothing
     select === nothing || drop === nothing || throw(ArgumentError(
         "pass `select` or `drop`, not both"))
-    columns = drop === nothing ? something(select, Tables.All()) : Tables.Not(drop)
-    return Tables.Scan(; select=columns, filter=filter, limit=limit)
+    # The filter and limit are checked now, before the file is read.
+    Tables.Scan(; filter=filter, limit=limit)
+    return names -> begin
+        columns = drop === nothing ? _selection(:select, something(select, Tables.All()),
+            names) : Tables.Not(_selection(:drop, drop, names))
+        Tables.Scan(; select=columns, filter=filter, limit=limit)
+    end
+end
+
+# The scan a read request asks for over columns `names`.
+_scanfor(request, names) = request isa Function ? request(names) : request
+
+# The columns `select` or `drop` (`keyword`) names among `names`: a function `(i, name) ->
+# Bool` picks them by index and name, as in CSV.jl; names, indices, and patterns must
+# each match a column.
+function _selection(keyword::Symbol, selection, names)
+    selection isa Function &&
+        return Int[index for (index, name) in enumerate(names) if selection(index, name)]
+    items = selection isa Union{Symbol,AbstractString,Integer,Regex,Pair} ? (selection,) :
+        selection isa Union{AbstractVector,Tuple} ? selection : ()
+    for item in items
+        ref = item isa Pair ? first(item) : item
+        found = ref isa Union{Symbol,AbstractString} ? Symbol(ref) in names :
+            ref isa Integer ? 1 <= ref <= length(names) :
+            ref isa Regex ? any(name -> occursin(ref, String(name)), names) : true
+        found || throw(ArgumentError("$keyword names no column $(repr(ref)); the " *
+            "columns are $(join(first(names, 20), ", "))" *
+            (length(names) > 20 ? ", … ($(length(names)) in all)" : "")))
+    end
+    return selection
 end
 
 function _readplan(metadata::Metadata.FileMetaData, schema::Schema, scan, ntasks::Int,
@@ -464,7 +494,7 @@ function _readplan(metadata::Metadata.FileMetaData, schema::Schema, scan, ntasks
     scan === nothing && return _ReadPlan(nothing, metadata, schema, ntasks, options, limits,
         colmetadata)
     sourcenames = _tablenames(schema, limits)
-    bound = Tables.resolve(scan, sourcenames)
+    bound = Tables.resolve(_scanfor(scan, sourcenames), sourcenames)
     any(column -> column.type !== nothing, bound.columns) && throw(ArgumentError(
         "Parquet does not apply scan type overrides; convert the columns after reading"))
     positions = sort!(unique!(vcat(Int[column.index for column in bound.columns],
@@ -708,7 +738,8 @@ directory, a glob pattern, a vector of paths or sources, or a
 dataset's partition columns (`partitioning`).
 
 - `select` keeps the given columns, in that order (names, indices, a regex, or a vector
-  of them); `drop` keeps all but the given columns.
+  of them, or a function `(i, name) -> Bool` as in CSV.jl); `drop` keeps all but the
+  given columns.
 - `filter` keeps the rows where a predicate built from [`Parquet.col`](@ref) is `true`,
   for example `filter=Parquet.col(:fare) > 10`. Row groups and pages that statistics,
   page indexes, bloom filters, or dictionary pages show cannot match are skipped, and
