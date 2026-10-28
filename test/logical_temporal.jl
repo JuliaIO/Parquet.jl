@@ -143,22 +143,23 @@ end
     for unit in (:millis, :micros, :nanos)
         wrongtime = unit === :millis ? MD.Type.INT64 : MD.Type.INT32
         time = MD.TimeType(isAdjustedToUTC=true, unit=temporaltestunit(unit))
-        @test_throws Parquet.FormatError Parquet._temporallogicalkind(
+        # An annotation the physical type cannot carry reads as none.
+        @test Parquet._temporallogicalkind(
             temporaltestelement("bad", wrongtime;
-                logical=MD.LogicalType(TIME=time)))
+                logical=MD.LogicalType(TIME=time))) === nothing
         timestamp = MD.TimestampType(isAdjustedToUTC=true,
             unit=temporaltestunit(unit))
-        @test_throws Parquet.FormatError Parquet._temporallogicalkind(
+        @test Parquet._logicalkind(
             temporaltestelement("bad", MD.Type.INT32;
-                logical=MD.LogicalType(TIMESTAMP=timestamp)))
+                logical=MD.LogicalType(TIMESTAMP=timestamp))) === nothing
     end
 
     for width in (8, 16, 32, 64)
         wrong = width == 64 ? MD.Type.INT32 : MD.Type.INT64
         integer = MD.IntType(bitWidth=Int8(width), isSigned=true)
-        @test_throws Parquet.FormatError Parquet._temporallogicalkind(
+        @test Parquet._temporallogicalkind(
             temporaltestelement("bad", wrong;
-                logical=MD.LogicalType(INTEGER=integer)))
+                logical=MD.LogicalType(INTEGER=integer))) === nothing
     end
     for width in (-128, 0, 7, 24, 63, 65)
         integer = MD.IntType(bitWidth=Int8(width), isSigned=true)
@@ -178,8 +179,8 @@ end
         (MD.ConvertedType.UINT_64, MD.Type.INT32),
     )
     for (converted, physical) in legacybad
-        @test_throws Parquet.FormatError Parquet._temporallogicalkind(
-            temporaltestelement("bad", physical; converted=converted))
+        @test Parquet._temporallogicalkind(
+            temporaltestelement("bad", physical; converted=converted)) === nothing
     end
 end
 

@@ -57,14 +57,16 @@ end
     @test Parquet._logicalvalues(plain, integers) === integers
     @test Parquet._logicalvalues(unknownlegacy, integers) === integers
 
-    @test_throws Parquet.FormatError Parquet._logicalkind(
-        logicaltestelement("bad", MD.Type.INT32; logical=stringtype))
-    @test_throws Parquet.FormatError Parquet._logicalkind(
-        logicaltestelement("bad", MD.Type.INT64; logical=datetype))
-    @test_throws Parquet.FormatError Parquet._logicalkind(
-        logicaltestelement("bad", MD.Type.INT32; converted=MD.ConvertedType.UTF8))
-    @test_throws Parquet.FormatError Parquet._logicalkind(
-        logicaltestelement("bad", MD.Type.INT64; converted=MD.ConvertedType.DATE))
+    # An annotation the physical type cannot carry reads as none.
+    for element in (
+            logicaltestelement("bad", MD.Type.INT32; logical=stringtype),
+            logicaltestelement("bad", MD.Type.INT64; logical=datetype),
+            logicaltestelement("bad", MD.Type.INT32; converted=MD.ConvertedType.UTF8),
+            logicaltestelement("bad", MD.Type.INT64; converted=MD.ConvertedType.DATE))
+        @test Parquet._logicalkind(element) === nothing
+        @test Parquet._incompatibleannotation(element)
+    end
+    @test !Parquet._incompatibleannotation(plain)
 end
 
 @testset "DATE scalar conversion" begin

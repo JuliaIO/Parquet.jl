@@ -99,12 +99,10 @@ function Base.copy(value::BSONValue)
     return BSONValue(collect(value.bytes), Val(:validated))
 end
 
-function _requirefixedlogical(element::Metadata.SchemaElement, width::Int,
-    annotation::Symbol)
-    _requirelogicalphysical(element, Metadata.Type.FIXED_LEN_BYTE_ARRAY, annotation)
-    element.type_length == width && return
-    throw(FormatError("$annotation annotation on $(repr(element.name)) requires " *
-        "FIXED_LEN_BYTE_ARRAY length $width, got $(element.type_length)"))
+function _requirefixedlogical(element::Metadata.SchemaElement, width::Int)
+    _requirelogicalphysical(element, Metadata.Type.FIXED_LEN_BYTE_ARRAY)
+    element.type_length == width || throw(_IncompatibleAnnotation())
+    return
 end
 
 function _requireunknownphysical(element::Metadata.SchemaElement)
@@ -120,22 +118,22 @@ end
 function _binarymodernkind(element::Metadata.SchemaElement,
     logical::Metadata.LogicalType)
     if logical.ENUM !== nothing
-        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY, :ENUM)
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
         return :enum
     elseif logical.UNKNOWN !== nothing
         _requireunknownphysical(element)
         return :unknown
     elseif logical.JSON !== nothing
-        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY, :JSON)
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
         return :json
     elseif logical.BSON !== nothing
-        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY, :BSON)
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
         return :bson
     elseif logical.UUID !== nothing
-        _requirefixedlogical(element, 16, :UUID)
+        _requirefixedlogical(element, 16)
         return :uuid
     elseif logical.FLOAT16 !== nothing
-        _requirefixedlogical(element, 2, :FLOAT16)
+        _requirefixedlogical(element, 2)
         return :float16
     end
     return nothing
@@ -144,22 +142,25 @@ end
 function _binarylegacykind(element::Metadata.SchemaElement)
     converted = element.converted_type
     if converted == Metadata.ConvertedType.ENUM
-        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY, :ENUM)
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
         return :enum
     elseif converted == Metadata.ConvertedType.JSON
-        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY, :JSON)
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
         return :json
     elseif converted == Metadata.ConvertedType.BSON
-        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY, :BSON)
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
         return :bson
     elseif converted == Metadata.ConvertedType.INTERVAL
-        _requirefixedlogical(element, 12, :INTERVAL)
+        _requirefixedlogical(element, 12)
         return :interval
     end
     return nothing
 end
 
-function _binarylogicalkind(element::Metadata.SchemaElement)
+_binarylogicalkind(element::Metadata.SchemaElement) =
+    _compatiblekind(_binaryannotationkind, element)
+
+function _binaryannotationkind(element::Metadata.SchemaElement)
     logical = element.logicalType
     logical === nothing || return _binarymodernkind(element, logical)
     return _binarylegacykind(element)

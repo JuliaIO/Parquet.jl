@@ -273,6 +273,26 @@ end
         (:a, :a_1, :a_2)
 end
 
+@testset "an annotation the physical type cannot carry reads as that type" begin
+    # As parquet-testing's int32_with_uuid_logical_type.parquet: INT32 annotated UUID.
+    bytes = take!(Parquet.write(IOBuffer(), (good=Int32[1, 2, 3], bad=Int32[4, 5, 6])))
+    metadata = Parquet.File(bytes).metadata
+    uuid = Parquet.Metadata.LogicalType(UUID=Parquet.Metadata.UUIDType())
+    schema = [element.name == "bad" ? Parquet._withfields(element; logicalType=uuid) :
+        element for element in metadata.schema]
+    annotated = tablerewritefooter(bytes, Parquet._withfields(metadata; schema=schema))
+    table = Parquet.Table(annotated)
+    @test table.bad == Int32[4, 5, 6] && eltype(table.bad) === Int32
+    # Its statistics are not trusted: they are absent and never prune.
+    @test only(Parquet.statistics(Parquet.File(annotated), "bad")).min === nothing
+    @test Parquet.Table(annotated;
+        filter=Parquet.colcmp(==, Parquet.col(:bad), Int32(5))).good == Int32[2]
+    # A rewrite drops the annotation.
+    rewritten = Parquet.File(take!(Parquet.write(IOBuffer(), table)))
+    @test rewritten.metadata.schema[3].logicalType === nothing
+    @test Parquet.Table(rewritten).bad == Int32[4, 5, 6]
+end
+
 @testset "table name validation rollback and precedence" begin
     required = Parquet.Metadata.FieldRepetitionType.REQUIRED
     for (names, message) in ((("valid", "nul\0name"), "containing NUL"),)

@@ -2,27 +2,53 @@ import Dates
 
 const _PARQUET_DATE_EPOCH = Dates.value(Dates.Date(1970, 1, 1))
 
-function _requirelogicalphysical(element::Metadata.SchemaElement,
-    expected::Metadata.Type.T, annotation::Symbol)
-    element.type_ == expected && return
-    throw(FormatError("$annotation annotation on $(repr(element.name)) requires " *
-        "physical type $expected, got $(element.type_)"))
+# An annotation the leaf's physical type cannot carry, such as UUID on INT32. As the
+# parquet-testing corpus asks, a read ignores it and reads the physical type.
+struct _IncompatibleAnnotation <: Exception end
+
+function _requirelogicalphysical(element::Metadata.SchemaElement, expected::Metadata.Type.T)
+    element.type_ == expected || throw(_IncompatibleAnnotation())
+    return
 end
 
-function _logicalkind(element::Metadata.SchemaElement)
+# `kind(element)`, with an annotation the physical type cannot carry read as none.
+function _compatiblekind(kind, element::Metadata.SchemaElement)
+    return try
+        kind(element)
+    catch err
+        err isa _IncompatibleAnnotation || rethrow()
+        nothing
+    end
+end
+
+_logicalkind(element::Metadata.SchemaElement) = _compatiblekind(_annotationkind, element)
+
+# Whether `element` is a leaf with an annotation its physical type cannot carry.
+function _incompatibleannotation(element::Metadata.SchemaElement)
+    element.type_ === nothing && return false
+    try
+        _annotationkind(element)
+        return false
+    catch err
+        err isa _IncompatibleAnnotation || rethrow()
+        return true
+    end
+end
+
+function _annotationkind(element::Metadata.SchemaElement)
     element.type_ == Metadata.Type.INT96 && return :int96
     logical = element.logicalType
     if logical !== nothing
         if logical.STRING !== nothing
-            _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY, :STRING)
+            _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
             return :string
         elseif logical.DATE !== nothing
-            _requirelogicalphysical(element, Metadata.Type.INT32, :DATE)
+            _requirelogicalphysical(element, Metadata.Type.INT32)
             return :date
         end
-        kind = _temporallogicalkind(element)
+        kind = _temporalannotationkind(element)
         kind === nothing || return kind
-        kind = _binarylogicalkind(element)
+        kind = _binaryannotationkind(element)
         kind === nothing || return kind
         kind = _decimallogicalkind(element)
         kind === nothing || return kind
@@ -30,15 +56,15 @@ function _logicalkind(element::Metadata.SchemaElement)
     end
     converted = element.converted_type
     if converted == Metadata.ConvertedType.UTF8
-        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY, :UTF8)
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
         return :string
     elseif converted == Metadata.ConvertedType.DATE
-        _requirelogicalphysical(element, Metadata.Type.INT32, :DATE)
+        _requirelogicalphysical(element, Metadata.Type.INT32)
         return :date
     end
-    kind = _temporallogicalkind(element)
+    kind = _temporalannotationkind(element)
     kind === nothing || return kind
-    kind = _binarylogicalkind(element)
+    kind = _binaryannotationkind(element)
     kind === nothing || return kind
     kind = _decimallogicalkind(element)
     kind === nothing || return kind

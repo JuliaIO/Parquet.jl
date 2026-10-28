@@ -84,7 +84,8 @@ end
     @test Parquet._binarylogicalkind(opaquemodern) === nothing
     @test Parquet._binarylogicalkind(binarylogicalelement("plain", MD.Type.INT32)) === nothing
 
-    badlogical = (
+    # Annotations the physical type cannot carry read as none.
+    incompatible = (
         binarylogicalelement("enum", MD.Type.INT32;
             logical=MD.LogicalType(ENUM=MD.EnumType())),
         binarylogicalelement("json", MD.Type.INT32;
@@ -105,6 +106,12 @@ end
             converted=MD.ConvertedType.INTERVAL),
         binarylogicalelement("interval", MD.Type.FIXED_LEN_BYTE_ARRAY; width=8,
             converted=MD.ConvertedType.INTERVAL),
+    )
+    for element in incompatible
+        @test Parquet._binarylogicalkind(element) === nothing
+        @test Parquet._logicalkind(element) === nothing
+    end
+    badlogical = (
         binarylogicalelement("unknown", MD.Type.INT32;
             logical=MD.LogicalType(UNKNOWN=MD.NullType()),
             repetition=MD.FieldRepetitionType.REQUIRED),

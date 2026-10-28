@@ -27,6 +27,10 @@ elements are `Union{Missing,T}`.
 | VARIANT, GEOMETRY, GEOGRAPHY | their storage: VARIANT's `metadata` and `value` bytes (and any shredded `typed_value`), WKB bytes |
 | LIST, MAP, groups | list, map, and struct rows ([Nested columns](@ref)) |
 
+- An annotation the physical type cannot carry, such as UUID on an INT32 column, is
+  ignored, as the parquet-testing corpus asks: the column reads as its physical type, its
+  statistics are reported absent and never prune a filter, and rewriting the table drops
+  the annotation.
 - A `DataString` refers to the column's decoded bytes rather than to a copy per value;
   `String(value)` makes one. Strings of up to 12 bytes are stored in the value itself.
 - pyarrow, Polars, and other Arrow-based writers store their Arrow schema in the file's
@@ -116,9 +120,9 @@ read with (nanoseconds, or the `int96` resolution).
 
 ## Rewriting a table
 
-Writing a `Parquet.Table` keeps its stored scalar annotations and file key-value
-metadata. A Tables.jl copy of its columns has only their Julia types, so some
-annotations change on the way back, while the values stay exact:
+Writing a `Parquet.Table` keeps the stored scalar annotations its columns read with, and
+its file key-value metadata. A Tables.jl copy of its columns has only their Julia types,
+so some annotations change on the way back, while the values stay exact:
 
 - An ENUM column reads as strings and is written back as STRING.
 - A millisecond or microsecond TIME column reads as `Dates.Time` and is written back as

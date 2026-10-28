@@ -74,8 +74,7 @@ end
     end
     legacy = decimaltestelement("legacy", DMD.Type.INT64, 18, 4; modern=false)
     @test Parquet._decimallogicalkind(legacy) === :decimal
-    @test_throws Parquet.FormatError Parquet._decimallogicalkind(
-        decimaltestelement("bad", DMD.Type.FLOAT, 5, 2))
+    @test Parquet._logicalkind(decimaltestelement("bad", DMD.Type.FLOAT, 5, 2)) === nothing
     @test_throws Parquet.FormatError Parquet._decimallogicalkind(
         decimaltestelement("bad", DMD.Type.INT32, 10, 2))
     @test_throws Parquet.FormatError Parquet._decimallogicalkind(

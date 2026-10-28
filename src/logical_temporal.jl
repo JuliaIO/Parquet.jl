@@ -49,14 +49,14 @@ end
 
 function _validatetimephysical(element::Metadata.SchemaElement, unit::UInt8)
     expected = unit == _TEMPORAL_MILLIS ? Metadata.Type.INT32 : Metadata.Type.INT64
-    _requirelogicalphysical(element, expected, :TIME)
+    _requirelogicalphysical(element, expected)
     return
 end
 
 function _validateintegerphysical(element::Metadata.SchemaElement,
     kind::_IntegerLogicalKind)
     expected = kind.bitwidth == 64 ? Metadata.Type.INT64 : Metadata.Type.INT32
-    _requirelogicalphysical(element, expected, :INTEGER)
+    _requirelogicalphysical(element, expected)
     return
 end
 
@@ -90,7 +90,7 @@ function _moderntemporallogicalkind(element::Metadata.SchemaElement,
         return _TimeLogicalKind(unit, logical.TIME.isAdjustedToUTC)
     elseif logical.TIMESTAMP !== nothing
         unit = _requiretemporalunit(element, :TIMESTAMP, logical.TIMESTAMP.unit)
-        _requirelogicalphysical(element, Metadata.Type.INT64, :TIMESTAMP)
+        _requirelogicalphysical(element, Metadata.Type.INT64)
         return _TimestampLogicalKind(unit, logical.TIMESTAMP.isAdjustedToUTC)
     elseif logical.INTEGER !== nothing
         return _modernintegerkind(element, logical.INTEGER)
@@ -101,16 +101,16 @@ end
 function _legacytemporallogicalkind(element::Metadata.SchemaElement,
     converted::Metadata.ConvertedType.T)
     if converted == Metadata.ConvertedType.TIME_MILLIS
-        _requirelogicalphysical(element, Metadata.Type.INT32, :TIME_MILLIS)
+        _requirelogicalphysical(element, Metadata.Type.INT32)
         return _TimeLogicalKind(_TEMPORAL_MILLIS, true)
     elseif converted == Metadata.ConvertedType.TIME_MICROS
-        _requirelogicalphysical(element, Metadata.Type.INT64, :TIME_MICROS)
+        _requirelogicalphysical(element, Metadata.Type.INT64)
         return _TimeLogicalKind(_TEMPORAL_MICROS, true)
     elseif converted == Metadata.ConvertedType.TIMESTAMP_MILLIS
-        _requirelogicalphysical(element, Metadata.Type.INT64, :TIMESTAMP_MILLIS)
+        _requirelogicalphysical(element, Metadata.Type.INT64)
         return _TimestampLogicalKind(_TEMPORAL_MILLIS, true)
     elseif converted == Metadata.ConvertedType.TIMESTAMP_MICROS
-        _requirelogicalphysical(element, Metadata.Type.INT64, :TIMESTAMP_MICROS)
+        _requirelogicalphysical(element, Metadata.Type.INT64)
         return _TimestampLogicalKind(_TEMPORAL_MICROS, true)
     end
     kind = _legacyintegerkind(converted)
@@ -119,7 +119,10 @@ function _legacytemporallogicalkind(element::Metadata.SchemaElement,
     return kind
 end
 
-function _temporallogicalkind(element::Metadata.SchemaElement)
+_temporallogicalkind(element::Metadata.SchemaElement) =
+    _compatiblekind(_temporalannotationkind, element)
+
+function _temporalannotationkind(element::Metadata.SchemaElement)
     logical = element.logicalType
     logical !== nothing && return _moderntemporallogicalkind(element, logical)
     converted = element.converted_type

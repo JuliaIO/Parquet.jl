@@ -83,8 +83,7 @@ function _validatedecimalmetadata(element::Metadata.SchemaElement,
             "fixed DECIMAL column $(repr(element.name)) has precision $precision " *
             "above its $width-byte capacity $capacity"))
     elseif physical != Metadata.Type.BYTE_ARRAY
-        throw(FormatError("DECIMAL annotation on $(repr(element.name)) requires " *
-            "INT32, INT64, BYTE_ARRAY, or FIXED_LEN_BYTE_ARRAY physical storage"))
+        throw(_IncompatibleAnnotation())
     end
     return
 end

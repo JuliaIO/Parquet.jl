@@ -231,11 +231,16 @@ function _storedschema(table::Table, options::_WriteOptions)
         _leafspecs(schema, semantic, options), true)
 end
 
-# The schema a rewrite of `table` writes: its stored schema, except that INT96 leaves
+# The schema a rewrite of `table` writes: its stored schema, except that a leaf loses an
+# annotation its physical type cannot carry (reads ignore it), and INT96 leaves
 # (deprecated, not written) become INT64 TIMESTAMPs, not adjusted to UTC as INT96 values
 # are read, in the unit the table's INT96 columns were read in (`int96`).
 function _storedelements(table::Table)
-    elements = copy(_tablemetadata(table).schema)
+    elements = Metadata.SchemaElement[!_incompatibleannotation(element) ? element :
+        Metadata.SchemaElement(type_=element.type_, type_length=element.type_length,
+            repetition_type=element.repetition_type, name=element.name,
+            field_id=element.field_id)
+        for element in _tablemetadata(table).schema]
     any(element -> element.type_ == Metadata.Type.INT96, elements) || return elements
     unit = Dates.Nanosecond
     for (child, column) in zip(_tableschema(table).root.children, _tablecolumns(table))
