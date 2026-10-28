@@ -47,6 +47,21 @@ Predicates are the `Tables.col` family: [`Parquet.col`](@ref) with `<`, `<=`, `>
 [`Parquet.colcmp`](@ref) for equality and for other values such as dates and timestamps;
 [`Parquet.colin`](@ref) for membership; and [`Parquet.isnull`](@ref) for missing values.
 
+A literal must be of its column's kind: comparing a string column with a number is an
+`ArgumentError` that names both types. A `Date`, `DateTime`, or `Durations.Timestamp`
+compared with a UTC timestamp column (pandas' time-zone-aware data, DuckDB's
+TIMESTAMPTZ) is that time in UTC. A column in another zone needs a
+`Durations.ZonedTimestamp`, and the error says how to write one.
+
+```@example reading
+using Dates
+events = joinpath(dir, "events.parquet")
+Parquet.write(events, (id=1:4, at=Parquet.LogicalColumn(
+    [DateTime(2025, 1, day, 12) for day in 1:4], :timestamp; unit=:micros, adjusted=true)))
+recent = Parquet.Table(events; filter=Parquet.colcmp(>=, Parquet.col(:at), DateTime(2025, 1, 3)))
+recent.at
+```
+
 A filter skips the row groups that column statistics, bloom filters, or dictionary pages
 show cannot match, and the pages that the page index or page statistics rule out. It
 decodes the filter columns first and the other columns only for the rows that match. A

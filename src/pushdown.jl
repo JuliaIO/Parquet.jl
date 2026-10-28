@@ -108,6 +108,87 @@ function _invalues(values)
     return _InValues(members, hasmissing, hasnan, sorted)
 end
 
+## Binding a filter to column types
+
+# `bound` with each comparison checked against the element type of its column (`types`;
+# columns it lacks are not checked).
+function _bindscan(bound::Tables.BoundScan, types::AbstractDict{Symbol,Type})
+    bound.filter === nothing && return bound
+    return Tables.BoundScan(bound.columns, _bindfilter(bound.filter, types),
+        bound.filtercols, bound.limit, bound.offset, bound.validate)
+end
+
+# The element type a filter on the top-level field `node` compares with, or `nothing`
+# for a nested field.
+function _filtertype(node::SchemaNode, limits::Limits, options::_ReadOptions)
+    isempty(node.children) && node.max_repetition_level == 0 || return nothing
+    convert, L = _valueconverter(node, limits, options)
+    convert isa _StringPayloads{true} && return DataStrings.DataString
+    convert isa _StringPayloads{false} && return DataStrings.DataBytes
+    return L
+end
+
+function _bindfilter(expr, types::AbstractDict{Symbol,Type})
+    if expr isa Union{Tables.AndExpr,Tables.OrExpr}
+        args = Tables.ScanExpr[_bindfilter(arg, types) for arg in expr.args]
+        return expr isa Tables.AndExpr ? Tables.AndExpr(args) : Tables.OrExpr(args)
+    elseif expr isa Tables.NotExpr
+        return Tables.NotExpr(_bindfilter(expr.arg, types))
+    elseif expr isa Union{Tables.Cmp,Tables.In,Tables.StrPred}
+        ref = expr.lhs.ref
+        T = ref isa Symbol ? get(types, ref, nothing) : nothing
+        T === nothing && return expr
+        S = Base.nonmissingtype(T)
+        S === Union{} && return expr
+        if expr isa Tables.StrPred
+            _filterkind(S) in (nothing, :string) || throw(ArgumentError(
+                "the filter matches text in column $ref, which holds $S values"))
+            return expr
+        elseif expr isa Tables.Cmp
+            return Tables.Cmp(expr.op, expr.lhs, _bindliteral(ref, S, expr.rhs))
+        end
+        bound = Any[_bindliteral(ref, S, value) for value in expr.values]
+        return all(((a, b),) -> a === b, zip(bound, expr.values)) ? expr :
+            Tables.In(expr.lhs, bound)
+    end
+    return expr
+end
+
+# What a column of `T` values compares with: values of the same kind, or anything for a
+# kind not listed.
+_filterkind(::Type{T}) where {T} =
+    T <: Real ? :number :
+    T <: AbstractString ? :string :
+    T <: AbstractChar ? :char :
+    T <: Durations.ZonedTimestamp ? :zoned :
+    T <: Union{Dates.Date,Dates.DateTime,Durations.Timestamp} ? :local :
+    T <: Dates.Time ? :time :
+    T <: Dates.Period ? :period : nothing
+
+# A filter literal for a column of `S` values: a `Date`, `DateTime`, or `Timestamp`
+# compared with a UTC timestamp is that time in UTC.
+function _bindliteral(name::Symbol, ::Type{S}, value) where {S}
+    ismissing(value) && return value
+    column, literal = _filterkind(S), _filterkind(typeof(value))
+    if column === :zoned && literal === :local
+        utc = value isa Durations.Timestamp ? repr(value) :
+            "Durations.Timestamp{Millisecond}($(repr(value)))"
+        S.parameters[2] === :UTC || throw(ArgumentError("the filter compares column " *
+            "$name, which holds times in zone $(S.parameters[2]), with $(repr(value)), " *
+            "which has no zone; compare with a time in that zone, such as $S($utc, " *
+            "Dates.UTC) for $(repr(value)) in UTC"))
+        stamp = value isa Durations.Timestamp ? value :
+            Durations.Timestamp{Dates.Millisecond}(value)
+        return Durations.ZonedTimestamp{_timestampperiod(stamp),:UTC}(stamp, Dates.UTC)
+    end
+    column === nothing || literal === nothing || column === literal ||
+        throw(ArgumentError("the filter compares column $name, which holds $S values, " *
+            "with $(repr(value))::$(typeof(value))"))
+    return value
+end
+
+_timestampperiod(::Durations.Timestamp{P}) where {P} = P
+
 function _preparepredicate(expr, names, leaves::Vector{_PredLeaf})
     if expr isa Tables.AndExpr
         return _PredAll(_Pred[_preparepredicate(arg, names, leaves) for arg in expr.args])

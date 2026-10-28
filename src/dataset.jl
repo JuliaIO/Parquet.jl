@@ -116,7 +116,8 @@ function _dataset(inputs::Vector{Any}, paths::Vector{Union{Nothing,String}}, bas
             partition[index] = position
         end
     end
-    bound = request === nothing ? nothing : Tables.resolve(request, names)
+    bound = request === nothing ? nothing :
+        _bindscan(Tables.resolve(request, names), Dict{Symbol,Type}(zip(names, types)))
     bound === nothing || any(column -> column.type !== nothing, bound.columns) &&
         throw(ArgumentError("Parquet does not apply scan type overrides; convert the " *
             "columns after reading"))

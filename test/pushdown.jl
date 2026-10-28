@@ -421,3 +421,50 @@ end
         @test Parquet.Table(renamed; filter=Parquet.colcmp(>, Parquet.col(:f), 1.5)).f == [2, 3]
     end
 end
+
+@testset "pushdown: filter literals bind to column types" begin
+    Durations = Parquet.Durations
+    zoned(P, Z, t) = Durations.ZonedTimestamp{P,Z}(Durations.Timestamp{P}(t), Dates.UTC)
+    days = [DateTime(2020, 1, day) for day in 1:5]
+    table = (id=1:5, utc=zoned.(Microsecond, :UTC, days),
+        ny=zoned.(Millisecond, Symbol("America/New_York"), days), s=string.('a':'e'),
+        ts=Durations.Timestamp{Microsecond}.(days), l=[[day] for day in 1:5])
+    bytes = pdbytes(table; rowgroupsize=2)
+    lake = mktempdir()
+    Parquet.write(joinpath(lake, "part.parquet"), table)
+    # With a list column the residual scan filters; without one the flat read does.
+    for select in ([:id, :l], [:id]), source in (bytes, lake)
+        read(filter) = Parquet.Table(source; filter=filter, select=select).id
+        # A Date, DateTime, or Timestamp is a UTC time for a UTC column, in statistics,
+        # page, and row filters alike.
+        @test read(Parquet.colcmp(>=, Parquet.col(:utc), days[3])) == [3, 4, 5]
+        @test read(Parquet.colcmp(==, Parquet.col(:utc), Date(2020, 1, 2))) == [2]
+        @test read(Parquet.colcmp(<, Parquet.col(:utc),
+            Durations.Timestamp{Nanosecond}(days[2]) + Nanosecond(1))) == [1, 2]
+        @test read(Parquet.colin(Parquet.col(:utc), [days[1], days[5]])) == [1, 5]
+        @test read(Parquet.colcmp(>, Parquet.col(:ts), days[4])) == [5]
+        # Other zones, and literals of another kind, fail before reading.
+        err = try
+            read(Parquet.colcmp(>=, Parquet.col(:ny), days[3]))
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("America/New_York", err.msg) &&
+            occursin("Dates.UTC", err.msg)
+        for (filter, needle) in ((Parquet.col(:s) > 1, "DataString values, with 1::Int64"),
+                (Parquet.colcmp(==, Parquet.col(:id), "1"), "Int64 values, with \"1\""),
+                (Parquet.colin(Parquet.col(:s), ["a", 2]), "with 2::Int64"),
+                (Parquet.colcmp(>, Parquet.col(:ts), zoned(Microsecond, :UTC, days[2])),
+                    "Timestamp{Microsecond} values"),
+                (startswith(Parquet.col(:id), "1"), "text in column id"))
+            err = try
+                read(filter)
+            catch e
+                e
+            end
+            @test err isa ArgumentError && occursin(needle, err.msg)
+        end
+        @test read(Parquet.col(:id) > 3.5) == [4, 5]
+        @test isempty(read(Parquet.colcmp(==, Parquet.col(:id), missing)))
+    end
+end

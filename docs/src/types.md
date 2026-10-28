@@ -33,8 +33,9 @@ elements are `Union{Missing,T}`.
   units of durations from it, including inside nested columns; the Parquet schema decides
   everything else, and an `ARROW:schema` that does not match the file is ignored.
 - A `Durations.Timestamp` compares with `Dates.DateTime`, so
-  `Parquet.colcmp(>=, Parquet.col(:pickup), DateTime(2025, 1, 1))` filters on it; compare
-  a UTC timestamp with a `Durations.ZonedTimestamp`.
+  `Parquet.colcmp(>=, Parquet.col(:pickup), DateTime(2025, 1, 1))` filters on it. A
+  filter also compares such a literal with a UTC timestamp column, as a UTC time
+  ([Choose columns and rows](@ref)).
 - INT96 values (Spark, Hive, and Impala write them by default) are not adjusted to UTC, as
   pyarrow reads them. A value outside the nanosecond range (years 1677 to 2262), such as
   Spark's `9999-12-31` placeholder, throws `Parquet.UnsupportedFeatureError`; read such

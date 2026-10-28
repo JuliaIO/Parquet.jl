@@ -439,7 +439,13 @@ function _readplan(metadata::Metadata.FileMetaData, schema::Schema, scan, ntasks
         bound.filtercols)))
     metadata, schema = _selectfields(metadata, schema, positions,
         String[String(sourcenames[position]) for position in positions], limits)
-    return _ReadPlan(bound, metadata, schema, ntasks, options, limits, colmetadata)
+    types = Dict{Symbol,Type}()
+    for (position, node) in zip(positions, schema.root.children)
+        T = _filtertype(node, limits, options)
+        T === nothing || (types[sourcenames[position]] = T)
+    end
+    return _ReadPlan(_bindscan(bound, types), metadata, schema, ntasks, options, limits,
+        colmetadata)
 end
 
 """
@@ -969,6 +975,10 @@ A filter comparison, the same as `Tables.colcmp`; `op` is `==`, `!=`, `<`, `<=`,
 `>=`. Use it for equality (`Parquet.col(:x) == 3` is the ordinary `==`, which is `false`)
 and for values the operator forms of [`Parquet.col`](@ref) do not cover, such as dates
 and timestamps: `Parquet.colcmp(>=, Parquet.col(:day), Date(2025, 1, 1))`.
+
+A read checks `value` against the column's type: a value of another kind, such as a
+number for a string column, is an `ArgumentError`, and a `Date`, `DateTime`, or
+`Durations.Timestamp` compared with a UTC timestamp column is that time in UTC.
 """
 const colcmp = Tables.colcmp
 
