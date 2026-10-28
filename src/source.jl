@@ -37,9 +37,12 @@ The `count` bytes of `src` starting at the zero-based byte `offset`, as a vector
 """
 function readrange end
 
-mutable struct OwnerRegion{B<:AbstractVector{UInt8},I}
+# The bytes a source reads from, and the file they map (`nothing` for bytes in memory).
+# The file is not a type parameter, so reads of a path and of a byte vector share their
+# compiled code.
+mutable struct OwnerRegion{B<:AbstractVector{UInt8}}
     bytes::B
-    io::I
+    io::Union{Nothing,IOStream}
     @atomic closed::Bool
 end
 

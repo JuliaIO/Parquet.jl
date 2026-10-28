@@ -48,7 +48,8 @@ const _FOOTER_TAIL_BYTES = Int64(64 * 1024)
 
 # The footer from the end of `src`. A source that is not in memory is read with one
 # request for the last `_FOOTER_TAIL_BYTES` (and a second only for a larger footer); its
-# leading magic is checked when that read covers the whole file.
+# leading magic is checked when that read covers the whole file. The footer keeps a copy
+# of its bytes, so every `File` has the same footer type and shares compiled code.
 function readfooter(src::AbstractSource, limits::Limits=Limits())
     total = _checkedsourcelength(src)
     total >= 12 || throw(FormatError("file is shorter than the minimum 12 bytes"))
@@ -71,7 +72,8 @@ function readfooter(src::AbstractSource, limits::Limits=Limits())
     bytes = footerlength + 8 <= tail ?
         view(tailbytes, (tail - 7 - footerlength):(tail - 8)) :
         _readrangeexact(src, total, footeroffset, footerlength)
-    return Footer(footeroffset, footerlength, trailingmagic === :encrypted, bytes)
+    return Footer(footeroffset, footerlength, trailingmagic === :encrypted,
+        Vector{UInt8}(_contiguous(bytes)))
 end
 
 # The file metadata a footer encodes. Encrypted files are refused: a PARE footer is

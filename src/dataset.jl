@@ -388,8 +388,7 @@ function _datasetfile(input, path, partitions::Vector{Any}, stringtype::Type, in
             index = last + 1
         end
         footer = file.footer
-        return _DatasetFile(input, path, Footer(footer.offset, footer.length,
-            footer.encrypted, Vector{UInt8}(footer.bytes)), metadata,
+        return _DatasetFile(input, path, footer, metadata,
             collect(Symbol, schema.names), collect(Type, schema.types), subtrees,
             file.plan.colmetadata, partitions)
     catch err
