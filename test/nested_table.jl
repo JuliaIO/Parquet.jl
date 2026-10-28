@@ -402,3 +402,31 @@ end
         @test !occursin("Core.Box", string(Base.uncompressed_ir(m)))
     end
 end
+
+@testset "columns nested deeper than 8 levels read with untyped rows" begin
+    # Typed rows nest one type per level, and the first read compiles them all: a column
+    # deeper than 8 levels reads with untyped rows at every level, as Arrow.jl's do.
+    for depth in (8, 9, 20)
+        structs::Any = [1, 2]
+        lists::Any = [1, 2]
+        for _ in 1:depth
+            structs = [(f=value, g=Int32(7)) for value in structs]
+            lists = [[value] for value in lists]
+        end
+        table = Parquet.Table(take!(Parquet.write(IOBuffer(), (s=structs, l=lists))))
+        row, list = table.s[2], table.l[2]
+        for _ in 1:depth
+            if depth <= 8
+                @test row isa NamedTuple && list isa Parquet.ListValue{<:Any}
+                @test !(eltype(list) === Any)
+            else
+                @test row isa Parquet.StructValue && list isa Parquet.ListValue{Any}
+            end
+            row, list = row isa NamedTuple ? row.f : row["f"], only(list)
+        end
+        @test row == 2 && list == 2
+        # They write back as read.
+        back = Parquet.Table(take!(Parquet.write(IOBuffer(), table)))
+        @test back.s[2] == table.s[2] && back.l[2] == table.l[2]
+    end
+end

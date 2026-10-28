@@ -100,15 +100,15 @@ end
         maps = Parquet.MapVector([0, 1], Int[1], maps)
     end
     @test count("MapVector", sprint(show, typeof(maps))) == 1
-    # Struct rows are NamedTuples up to 32 levels deep; structs above that read as
-    # Pair rows, so a deep schema has at most 32 NamedTuple row types along a path.
+    # Struct rows are NamedTuples up to 8 levels deep; structs above that read as
+    # Pair rows, so a deep schema has at most 8 NamedTuple row types along a path.
     structs::AbstractVector = Int32[7]
     for level in 1:40
         structs = Parquet.StructVector(["f$level"], (structs,))
     end
     @test eltype(structs) == Parquet.StructValue
     inner = structs
-    for _ in 1:8
+    for _ in 1:32
         inner = only(inner.children)
     end
     @test eltype(inner) <: NamedTuple

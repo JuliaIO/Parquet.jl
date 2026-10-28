@@ -72,12 +72,22 @@ struct _FieldAssembly
     items::Vector{Vector{Tuple{Int,Int}}}
 end
 
+# `untyped` builds the rows of a field nested deeper than `_MAX_ROW_DEPTH` as
+# `StructValue`, `ListValue{Any}`, and `MapValue{Any,Any}`.
 mutable struct _AssemblyBuilder
     limits::Limits
     options::_ReadOptions
     nodes::Int
     paths::Vector{_LeafPath}
+    untyped::Bool
 end
+
+# Levels of nested structs, lists, and maps in a field's values.
+_rowlevels(::_NestedLeafPlan) = 0
+_rowlevels(plan::_NestedStructPlan) = 1 + maximum(_rowlevels, plan.children; init=0)
+_rowlevels(plan::_NestedListPlan) = 1 + _rowlevels(plan.element)
+_rowlevels(plan::_NestedMapPlan) = 1 + max(_rowlevels(plan.key),
+    plan.value === nothing ? 0 : _rowlevels(something(plan.value)))
 
 # The element type a leaf reads as.
 function _leafeltype(node::SchemaNode, limits::Limits, options::_ReadOptions)
@@ -135,7 +145,7 @@ function _assemblynode!(builder::_AssemblyBuilder, plan::_NestedPlan, keyed::Boo
     if plan isa _NestedStructPlan
         children = _AssemblyNode[_assemblynode!(builder, child, false, entries, stack)
             for child in plan.children]
-        R = _structrowtype(
+        R = builder.untyped ? StructValue : _structrowtype(
             String[_plansource(child).element.name for child in plan.children],
             Type[child.eltype for child in children],
             1 + maximum(child -> child.depth, children; init=0))
@@ -146,14 +156,14 @@ function _assemblynode!(builder::_AssemblyBuilder, plan::_NestedPlan, keyed::Boo
         if plan isa _NestedListPlan
             children = _AssemblyNode[_assemblynode!(builder, plan.element, false, entries,
                 stack)]
-            R = ListValue{children[1].eltype}
+            R = builder.untyped ? ListValue{Any} : ListValue{children[1].eltype}
         else
             mapplan = plan::_NestedMapPlan
             children = _AssemblyNode[_assemblynode!(builder, mapplan.key, true, entries,
                 stack)]
             mapplan.value === nothing || push!(children, _assemblynode!(builder,
                 something(mapplan.value), false, entries, stack))
-            R = MapValue{children[1].eltype,
+            R = builder.untyped ? MapValue{Any,Any} : MapValue{children[1].eltype,
                 length(children) == 2 ? children[2].eltype : Missing}
         end
         pop!(entries)
@@ -164,7 +174,8 @@ function _assemblynode!(builder::_AssemblyBuilder, plan::_NestedPlan, keyed::Boo
 end
 
 function _fieldassembly(plan::_NestedPlan, limits::Limits, options::_ReadOptions)
-    builder = _AssemblyBuilder(limits, options, 0, _LeafPath[])
+    builder = _AssemblyBuilder(limits, options, 0, _LeafPath[],
+        _rowlevels(plan) > _MAX_ROW_DEPTH)
     root = _assemblynode!(builder, plan, false, UInt16[],
         Tuple{Int,UInt8,Int,Int,Int,Bool}[])
     items = [Tuple{Int,Int}[] for _ in 1:(2 * builder.nodes)]

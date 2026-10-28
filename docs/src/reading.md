@@ -120,12 +120,18 @@ Lists, structs, and maps read as typed rows, in [`Parquet.ListVector`](@ref),
 - A list row is a [`Parquet.ListValue{T}`](@ref Parquet.ListValue), a read-only
   `AbstractVector{T}` view of the column's elements; `copy(row)` gives a `Vector{T}`.
 - A struct row is a `NamedTuple` of its fields, so `row.field` is type-stable. A struct
-  whose field names repeat or number more than 64, or that holds more than 32 levels of
-  nested values, reads as a [`Parquet.StructValue`](@ref) of `name => value` pairs
-  instead; `row["name"]` looks one up.
+  whose field names repeat or number more than 64 reads as a
+  [`Parquet.StructValue`](@ref) of `name => value` pairs instead; `row["name"]` looks one
+  up.
 - A map row is a [`Parquet.MapValue{K,V}`](@ref Parquet.MapValue): the map's
   `key => value` pairs in file order, duplicate keys included; `Dict(row)` builds a
   dictionary (the last duplicate wins).
+
+Each level of a typed row nests one more type, and Julia compiles deep ones slowly: the
+first read of structs 17 levels deep took 11 s with typed rows, and 32 levels over 15
+minutes. A column nested more than 8 levels deep therefore reads with untyped rows at
+every level, as Arrow.jl's do: structs as `StructValue`, lists as `ListValue{Any}`, and
+maps as `MapValue{Any,Any}` (a first read of any depth then takes well under a second).
 
 `T` includes `Missing` only when the schema allows null elements, and a null list,
 struct, or map reads as `missing`. Copies and subsets of a nested column (`copy`,

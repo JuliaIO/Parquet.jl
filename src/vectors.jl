@@ -95,10 +95,9 @@ end
 """
     Parquet.StructValue <: AbstractVector{Pair{String,Any}}
 
-A row of a struct column whose field names repeat or number more than 64, or that holds
-more than 32 levels of nested values: its fields as read-only `name => value` pairs, in
-schema order. `row["name"]` (or `row[:name]`) looks a field up. Other struct rows are
-`NamedTuple`s.
+A row of a struct whose field names repeat or number more than 64, or of a column nested
+more than 8 levels deep: its fields as read-only `name => value` pairs, in schema order.
+`row["name"]` (or `row[:name]`) looks a field up. Other struct rows are `NamedTuple`s.
 """
 struct StructValue <: AbstractVector{Pair{String,Any}}
     names::Vector{String}
@@ -107,9 +106,11 @@ struct StructValue <: AbstractVector{Pair{String,Any}}
 end
 
 const _MAX_NAMEDTUPLE_FIELDS = 64
-# A struct's rows are NamedTuples only up to this many levels of nested values (counting
-# itself), so a deep schema yields a bounded number of row types for code to compile.
-const _MAX_ROW_DEPTH = 32
+# Columns nested deeper than this read with untyped rows at every level (`_rowlevels`),
+# as Arrow.jl's do: each typed level nests the row type one more time, and Julia's
+# compile time grows steeply with it (a first read of structs 17 deep took 11 s, of
+# lists 17 deep 3 s, and of lists 32 deep over 15 minutes).
+const _MAX_ROW_DEPTH = 8
 
 # Row `i` is `missing` where `validity[i]` is false, else the `ListValue` of
 # `values[(offsets[i] + 1):offsets[i + 1]]`. `validity` is empty when `T` excludes
