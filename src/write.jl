@@ -500,12 +500,20 @@ function _writepromote(A::Type, B::Type, name::String)
 end
 
 function _writenarrowed(::Type{T}, value, name::String) where {T}
-    converted = convert(T, value)
+    converted = try
+        convert(T, value)
+    catch err
+        err isa InexactError || rethrow()
+        _notexact(T, value, name)
+    end
     T <: Union{Real,Durations.Timestamp} && !isequal(converted, value) &&
-        throw(ArgumentError("column $(repr(name)) value $value does not convert to " *
-            "$T exactly"))
+        _notexact(T, value, name)
     return converted
 end
+
+@noinline _notexact(T, value, name) = throw(ArgumentError("column $(repr(name)) value " *
+    "$value does not convert to $T exactly, the one type its values promote to, so its " *
+    "values have no common type; convert the column to one element type first"))
 
 function _writeleafplans(semantic::_NestedSchemaPlan)
     emptyschema = Metadata.SchemaElement[]

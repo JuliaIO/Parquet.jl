@@ -151,6 +151,9 @@ end
         (value=Union{Nothing,Int}[1, nothing],))
     @test_throws "does not convert to Float64 exactly" wtwrite(
         (value=Any[2^53 + 1, 0.5],))
+    # Int8 and UInt64 promote to UInt64, which cannot hold -1.
+    @test_throws "column \"value\" value -1 does not convert to UInt64 exactly" wtwrite(
+        (value=Any[Int8(-1), UInt64(2)^63],))
 end
 
 @testset "write errors for types Parquet cannot store" begin
