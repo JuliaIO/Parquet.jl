@@ -123,8 +123,10 @@ Base.@nospecializeinfer function _writepartitioned(root::String, table, partitio
         String(string(name))::String => entries
         for (name, entries) in pairs(colmetadata) if !(String(string(name)) in keys)])
     nullable = Tables.partitions(table) isa Tuple{Any} ? nothing : true
-    options = _writeoptions(; nullable=nullable, metadata=metadata, colmetadata=colmetadata,
-        Base.structdiff(kwargs, NamedTuple{(:metadata, :colmetadata)})...)
+    # The keywords are untyped here; the options are built behind `_barrier`.
+    options = _barrier(_writeoptions; nullable=nullable, metadata=metadata,
+        colmetadata=colmetadata,
+        Base.structdiff(kwargs, NamedTuple{(:metadata, :colmetadata)})...)::_WriteOptions
     state = _PartitionedWrite(root, options, existing, Dict{String,Writer}(), String[],
         Dict{String,Int}(), nothing)
     try

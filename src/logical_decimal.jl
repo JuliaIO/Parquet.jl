@@ -76,7 +76,9 @@ function _validatedecimalmetadata(element::Metadata.SchemaElement,
         width = element.type_length
         width !== nothing && width > 0 || throw(FormatError(
             "fixed DECIMAL column $(repr(element.name)) has no positive width"))
-        capacity = _fixeddecimalprecision(width)
+        # Behind `_barrier`: on Julia 1.15 the BigFloat arithmetic goes through code that
+        # loading CategoricalArrays invalidates, which would reach every schema.
+        capacity = _barrier(_fixeddecimalprecision, width)::Int64
         precision <= capacity || throw(FormatError(
             "fixed DECIMAL column $(repr(element.name)) has precision $precision " *
             "above its $width-byte capacity $capacity"))

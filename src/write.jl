@@ -83,7 +83,7 @@ end
 
 function _validatewritecolumnnames(names)
     normalized = String[]
-    sizehint!(normalized, length(names))
+    sizehint!(normalized, length(names)::Int)
     seen = Set{String}()
     for raw in names
         name = _writecolumnname(raw)::String
@@ -297,7 +297,7 @@ Base.@nospecializeinfer function _writeinputcolumns(table, limits::Limits)
     names = collect(Tables.columnnames(columns))
     normalized = _validatewritecolumnnames(names)
     output = Pair{String,AbstractVector}[]
-    sizehint!(output, length(names))
+    sizehint!(output, length(names)::Int)
     rows = nothing
     for (raw, name) in zip(names, normalized)
         values = Tables.getcolumn(columns, raw)
