@@ -57,11 +57,16 @@ function _readleafchunks(file::File, metadata::Metadata.FileMetaData,
         state = sink.state
         before = state.slots[1]
         state.chunkstart = true
-        _readchunk!(sink, _physicaleltype(node.element.type_), L, convert, file.source, md,
-            node, start, stop, limits, budget, buffers; checksum=options.checksum)
-        state.slots[1] - before == group.num_rows || throw(FormatError(
-            "leaf $(path.leaf) has $(state.slots[1] - before) rows in a row group of " *
-            "$(group.num_rows)"))
+        try
+            _readchunk!(sink, _physicaleltype(node.element.type_), L, convert, file.source,
+                md, node, start, stop, limits, budget, buffers; checksum=options.checksum)
+            state.slots[1] - before == group.num_rows || throw(FormatError(
+                "leaf $(path.leaf) has $(state.slots[1] - before) rows in a row group of " *
+                "$(group.num_rows)"))
+        catch err
+            err isa FormatError || rethrow()
+            throw(_chunkerror(err, file, group, node))
+        end
         total += Int(group.num_rows)
     end
     counts = _finishleaf!(sink, total)

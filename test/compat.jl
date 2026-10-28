@@ -37,7 +37,13 @@ end
     other = vcat(bytes[1:start], footer, reinterpret(UInt8, [htol(UInt32(length(footer)))]),
         b"PAR1")
     @test Parquet.Table(other).i64 == [1, 2, 3]
-    @test_throws Parquet.FormatError("page CRC32 mismatch") Parquet.Table(other; checksum=true)
+    err = try
+        Parquet.Table(other; checksum=true)
+    catch e
+        e
+    end
+    @test err isa Parquet.FormatError &&
+        err.message == "row group 1, column i32: page CRC32 mismatch"
 end
 
 @testset "TIME of 24:00:00" begin

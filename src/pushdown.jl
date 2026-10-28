@@ -1308,6 +1308,18 @@ function _decodepart(file::File, metadata::Metadata.FileMetaData, part::_GroupRo
         budget::_ByteBudget, buffers::_PageBuffers, options::_ReadOptions,
         gather::Union{Nothing,_PageGather,_PageFilter}=nothing; pages=missing)
     group = metadata.row_groups[part.group]
+    try
+        return _decodechunk(file, group, wanted, node, limits, budget, buffers, options,
+            gather, pages)
+    catch err
+        err isa FormatError || rethrow()
+        throw(_chunkerror(err, file, group, node))
+    end
+end
+
+function _decodechunk(file::File, group::Metadata.RowGroup, wanted::Vector{UnitRange{Int}},
+        node::SchemaNode, limits::Limits, budget::_ByteBudget, buffers::_PageBuffers,
+        options::_ReadOptions, gather, pages)
     chunk = group.columns[Int(node.column_index)]
     md = _chunkmetadata(chunk, node)
     md.num_values == group.num_rows || throw(FormatError(

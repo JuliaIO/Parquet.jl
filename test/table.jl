@@ -1005,3 +1005,25 @@ end
     @test err isa ArgumentError && occursin("Parquet.File was closed", err.msg)
     rm(path)
 end
+
+@testset "page errors name the row group and column" begin
+    source = (a=collect(1:1000), b=[string(i) for i in 1:1000], l=[[i] for i in 1:1000])
+    bytes = take!(Parquet.write(IOBuffer(), source; rowgroupsize=500, compress=:zstd,
+        checksum=true))
+    md = Parquet.metadata(Parquet.File(bytes))
+    for (column, path) in ((2, "b"), (3, "l.list.element"))
+        chunk = md.row_groups[2].columns[column].meta_data
+        corrupt = copy(bytes)
+        offset = chunk.data_page_offset + chunk.total_compressed_size ÷ 2
+        corrupt[offset:(offset + 7)] .= 0x5a
+        for keywords in ((;), (ntasks=1,), (filter=Parquet.col(:a) > 400,))
+            err = try
+                Parquet.Table(corrupt; checksum=true, keywords...)
+            catch e
+                e
+            end
+            @test err isa Parquet.FormatError &&
+                startswith(err.message, "row group 2, column $path: ")
+        end
+    end
+end

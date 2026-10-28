@@ -190,15 +190,35 @@ function _readtablechunk!(column::Vector, offset::Int, file::File,
         metadata::Metadata.FileMetaData, rowindex::Int, node::SchemaNode,
         limits::Limits, budget::_ByteBudget, buffers::_PageBuffers, options::_ReadOptions)
     group = metadata.row_groups[rowindex]
-    md = _chunkmetadata(group.columns[Int(node.column_index)], node)
-    md.num_values == group.num_rows || throw(FormatError(
-        "flat column $(node.column_index) has $(md.num_values) values for " *
-        "$(group.num_rows) rows"))
-    start, stop = _chunkrange(md, file.footer.offset)
-    convert, _ = _valueconverter(node, limits, options)
-    _readflatchunk!(column, offset, _physicaleltype(md.type_), convert, file.source, md,
-        node, start, stop, limits, budget, buffers; checksum=options.checksum)
-    return convert isa _StringPayloads ? convert.buffers : nothing
+    try
+        md = _chunkmetadata(group.columns[Int(node.column_index)], node)
+        md.num_values == group.num_rows || throw(FormatError(
+            "flat column $(node.column_index) has $(md.num_values) values for " *
+            "$(group.num_rows) rows"))
+        start, stop = _chunkrange(md, file.footer.offset)
+        convert, _ = _valueconverter(node, limits, options)
+        _readflatchunk!(column, offset, _physicaleltype(md.type_), convert, file.source, md,
+            node, start, stop, limits, budget, buffers; checksum=options.checksum)
+        return convert isa _StringPayloads ? convert.buffers : nothing
+    catch err
+        err isa FormatError || rethrow()
+        throw(_chunkerror(err, file, group, node))
+    end
+end
+
+# A FormatError met reading `node`'s column chunk in row group `group` (of a subset of
+# `file`'s row groups or columns), with the row group, numbered in the file, and the
+# column in its message. A chunk's first data page offset finds its row group.
+function _chunkerror(err::FormatError, file::File, group::Metadata.RowGroup,
+        node::SchemaNode)
+    chunk = get(group.columns, Int(node.column_index), nothing)
+    md = chunk === nothing ? nothing : chunk.meta_data
+    index = md === nothing ? nothing : findfirst(file.metadata.row_groups) do candidate
+        any(other -> other.meta_data !== nothing &&
+            other.meta_data.data_page_offset == md.data_page_offset, candidate.columns)
+    end
+    place = index === nothing ? "" : "row group $index, "
+    return FormatError("$(place)column $(join(node.path, '.')): $(err.message)")
 end
 
 # A STRING (or binary) column from its payloads and each row group's page buffers.
