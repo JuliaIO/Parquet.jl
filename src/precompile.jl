@@ -40,6 +40,18 @@ using PrecompileTools: @compile_workload, @setup_workload
         pairs=cycle([["a" => i, "b" => -i] for i in 1:3]),
         tuple=cycle([(i, i + 1) for i in 1:3]),
     )
+    # pyarrow stores DECIMAL(15,2) (TPC-H prices) as 7-byte FIXED_LEN_BYTE_ARRAY where
+    # the writer uses INT64, so reading its layout needs a sample of its own: a
+    # 3-row nullable column written by pyarrow 25 with default options.
+    pyarrowdecimal = hex2bytes(
+        "504152311504151c15204c150415001200000e3400000000000064ffffffffffff06150015121516" *
+        "2c15061510150615061c1807000000000000641807ffffffffffff06160228070000000000006418" *
+        "07ffffffffffff06111100000009200200000003050103021504192c35001806736368656d611502" *
+        "00150e150e1502180164250a1504151e2c5c1504151e0000001606191c191c26001c150e19350006" *
+        "10191801641502160616c00116c801264426081c1807000000000000641807ffffffffffff061602" *
+        "2807000000000000641807ffffffffffff06111100192c15041500150200150015101502003c2906" *
+        "1926020400000016c0011606260816c801002820706172717565742d6370702d6172726f77207665" *
+        "7273696f6e2032352e302e31191c1c000000c200000050415231")
     # One nested column sends every column of a table down the nested reader.
     mixed = merge(scalars, NamedTuple{Symbol.(:o_, keys(optional))}(values(optional)),
         nested)
@@ -64,6 +76,7 @@ using PrecompileTools: @compile_workload, @setup_workload
             readback = Table(path; scan=Tables.Scan(select=(first(keys(table)),)))
             close(readback)
         end
+        Tables.columns(Table(pyarrowdecimal))
         bytes = take!(write(IOBuffer(), scalars))
         readback = Table(bytes; scan=Tables.Scan(select=(:i64, :str),
             filter=Tables.col(:i64) > 0, limit=2))
