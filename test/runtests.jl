@@ -11,6 +11,7 @@ function pqstamp(ticks::Integer, unit::Symbol, adjusted::Bool)
 end
 
 include("api.jl")
+include("invalidations.jl")
 include("limits.jl")
 include("nested_vectors.jl")
 include("source.jl")
