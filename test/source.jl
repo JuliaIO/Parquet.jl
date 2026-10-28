@@ -276,3 +276,18 @@ end
     close(table)
     @test table.a == Int32[1]
 end
+
+@testset "URL strings point at CloudStore" begin
+    for url in ("s3://bucket/trips.parquet", "https://example.com/trips.parquet",
+            "gs://bucket/lake/*.parquet")
+        for read in (Parquet.Table, Parquet.File, Parquet.Dataset)
+            err = try
+                read(url)
+            catch e
+                e
+            end
+            @test err isa ArgumentError && occursin("is a URL", err.msg) &&
+                occursin("CloudStore", err.msg)
+        end
+    end
+end

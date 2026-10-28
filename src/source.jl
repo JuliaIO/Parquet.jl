@@ -148,7 +148,12 @@ end
 function source(path::AbstractString; budget::_ByteBudget=_UNCAPPED)
     isdir(path) && throw(ArgumentError(
         "$(repr(path)) is a directory; read it with Parquet.Dataset or Parquet.Table"))
-    io = open(path, "r")
+    io = try
+        open(path, "r")
+    catch err
+        err isa SystemError && _isurl(path) && throw(ArgumentError(_urlmessage(path)))
+        rethrow()
+    end
     try
         count = filesize(io)
         bytes = iszero(count) ? UInt8[] : Mmap.mmap(io, Vector{UInt8}, count)
@@ -161,6 +166,13 @@ function source(path::AbstractString; budget::_ByteBudget=_UNCAPPED)
         rethrow()
     end
 end
+
+# A path string that names a URL (`s3://`, `https://`, ...) rather than a local file.
+_isurl(path::AbstractString) = occursin(r"^[A-Za-z][A-Za-z0-9+.-]*://", path)
+
+_urlmessage(path::AbstractString) = "$(repr(path)) is a URL, and a path string names a " *
+    "local file; with CloudStore.jl loaded, read a CloudStore.Object, or a dataset with " *
+    "Parquet.Dataset(bucket, prefix), or pass the downloaded bytes"
 
 # Bytes are read from a closed region only through a `Parquet.File` that was closed.
 _closederror() = ArgumentError("the Parquet.File was closed; open it again to read it")
