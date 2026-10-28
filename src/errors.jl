@@ -34,7 +34,8 @@ end
 
 A size or count exceeded a cap in [`Parquet.Limits`](@ref). `resource` names the
 quantity (for example `:page_bytes` for `max_page_bytes`); `requested` is the size
-the file asked for and `maximum` the cap. Raise the cap to read the file.
+the file asked for and `maximum` the cap. Raise the cap to read the file; the message
+names the `Parquet.Limits` field.
 """
 struct LimitError <: Exception
     resource::Symbol
@@ -45,6 +46,12 @@ end
 function Base.showerror(io::IO, err::LimitError)
     print(io, "Parquet ", err.resource, " limit exceeded: requested ", err.requested,
         ", maximum ", err.maximum)
+    field = Symbol(:max_, err.resource)
+    if hasfield(Limits, field)
+        print(io, "; raise it with limits=Parquet.Limits(", field, "=...)")
+    elseif err.resource === :nested_read_depth
+        print(io, "; drop the column to read the others")
+    end
     return
 end
 
@@ -58,7 +65,8 @@ throws a `LimitError`.
   (1 GiB), `max_page_index_bytes` (64 MiB): sizes of single metadata and page frames.
 - `max_statistics_value_bytes` (4096): one written minimum or maximum.
 - `max_string_bytes` (256 MiB), `max_decimal_bytes` (1 MiB): one value.
-- `max_schema_name_bytes` (1 MiB): new column names one operation may intern.
+- `max_schema_name_bytes` (64 MiB): new column names one operation may intern, each
+  counted as 256 bytes plus twice its length (about 240,000 short names).
 - `max_metadata_depth` (128): schema and nested-value depth.
 - `max_materialized_bytes` (unlimited): optional cap on the bytes one read allocates.
   Writes are not capped.
@@ -75,7 +83,7 @@ Base.@kwdef struct Limits
     max_page_index_bytes::Int64 = 64 * 1024 * 1024
     max_statistics_value_bytes::Int64 = 4096
     max_materialized_bytes::Int64 = typemax(Int64)
-    max_schema_name_bytes::Int64 = 1024 * 1024
+    max_schema_name_bytes::Int64 = 64 * 1024 * 1024
     max_string_bytes::Int64 = 256 * 1024 * 1024
     max_decimal_bytes::Int64 = 1024 * 1024
     max_container_elements::Int64 = typemax(Int64)

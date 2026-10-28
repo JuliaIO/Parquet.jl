@@ -1,3 +1,5 @@
+using Tables
+
 @testset "read byte budget" begin
     budget = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=10))
     Parquet._charge!(budget, 4)
@@ -48,6 +50,35 @@ end
     @test_throws Parquet.UnsupportedFeatureError Parquet._internschemanames(
         String["nul\0name"], Parquet.Limits())
     @test Parquet._internedschemanamebytes() == before + charge + secondcharge
+end
+
+@testset "wide schemas read under default limits" begin
+    # Names never interned before, so all 5,000 count against one read's budget.
+    names = ["wide_schema_regression_$i" for i in 1:5_000]
+    bytes = take!(Parquet.write(IOBuffer(), Tables.table(ones(Int, 2, 5_000); header=names)))
+    table = Parquet.Table(bytes)
+    @test collect(Tables.columnnames(table)) == Symbol.(names)
+    @test Tables.getcolumn(table, Symbol(names[end])) == [1, 1]
+end
+
+@testset "limit errors name the Limits field" begin
+    for resource in (:container_elements, :decimal_bytes, :footer_bytes, :materialized_bytes,
+            :metadata_depth, :page_bytes, :page_header_bytes, :page_index_bytes,
+            :schema_name_bytes, :string_bytes)
+        @test hasfield(Parquet.Limits, Symbol(:max_, resource))
+        @test occursin("limits=Parquet.Limits(max_$resource=...)",
+            sprint(showerror, Parquet.LimitError(resource, 2, 1)))
+    end
+    @test occursin("drop the column",
+        sprint(showerror, Parquet.LimitError(:nested_read_depth, 2000, 1024)))
+    bytes = take!(Parquet.write(IOBuffer(), (id=collect(1:100),)))
+    err = try
+        Parquet.Table(bytes; limits=Parquet.Limits(max_container_elements=10))
+    catch e
+        e
+    end
+    @test err isa Parquet.LimitError &&
+        occursin("Parquet.Limits(max_container_elements=", sprint(showerror, err))
 end
 
 @testset "isolated schema-name boundary and precedence" begin

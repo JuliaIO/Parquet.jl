@@ -13,8 +13,8 @@ conflicting column types across a dataset's files):
   package does not read, or holds a value the Julia type cannot represent. The message
   names it and, where there is one, the way to read the file.
 - [`Parquet.LimitError`](@ref): a size or count exceeded a cap in `Parquet.Limits`. Its
-  `resource` names the cap (for example `:page_bytes` for `max_page_bytes`); raise the
-  cap to read the file.
+  `resource` names the cap (for example `:page_bytes` for `max_page_bytes`), and the
+  message names the field to raise.
 
 ```@example limits
 using Parquet
@@ -41,7 +41,7 @@ Pass a [`Parquet.Limits`](@ref) to `Parquet.Table`, `Parquet.File`, `Parquet.Dat
 | `max_statistics_value_bytes` | 4096 | one written minimum or maximum |
 | `max_string_bytes` | 256 MiB | one string or byte-array value |
 | `max_decimal_bytes` | 1 MiB | one DECIMAL value |
-| `max_schema_name_bytes` | 1 MiB | the new column names one operation may intern |
+| `max_schema_name_bytes` | 64 MiB | the new column names one operation may intern |
 | `max_metadata_depth` | 128 | schema and nested-value depth |
 | `max_materialized_bytes` | unlimited | the bytes one read allocates |
 | `max_container_elements` | unlimited | row and element counts |
@@ -64,7 +64,9 @@ end
 ```
 
 Column names become `Symbol`s, which last for the rest of the process, so
-`max_schema_name_bytes` bounds the bytes of new names one operation interns.
+`max_schema_name_bytes` bounds the new names one operation interns. Each counts 256 bytes
+plus twice its length, so the default admits about 240,000 short names, more than a
+file within `max_footer_bytes` usually holds.
 
 Schema parsing does not recurse and accepts deep schemas under a raised
 `max_metadata_depth`. Nested reading and writing recurse once per level: a read rejects
