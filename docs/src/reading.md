@@ -54,12 +54,12 @@ TIMESTAMPTZ) is that time in UTC. A column in another zone needs a
 `Durations.ZonedTimestamp`, and the error says how to write one.
 
 ```@example reading
-using Dates
+using Dates, Durations
 events = joinpath(dir, "events.parquet")
-Parquet.write(events, (id=1:4, at=Parquet.LogicalColumn(
-    [DateTime(2025, 1, day, 12) for day in 1:4], :timestamp; unit=:micros, adjusted=true)))
+Parquet.write(events, (id=1:4,
+    at=[Durations.ZonedTimestamp{Microsecond,:UTC}(2025, 1, day, 12) for day in 1:4]))
 recent = Parquet.Table(events; filter=Parquet.colcmp(>=, Parquet.col(:at), DateTime(2025, 1, 3)))
-recent.at
+recent.id
 ```
 
 A filter skips the row groups that column statistics, bloom filters, or dictionary pages
