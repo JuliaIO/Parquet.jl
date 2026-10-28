@@ -60,9 +60,8 @@ function _validatetablerowgroupmetadata(group::Metadata.RowGroup,
         (iszero(offset) || 4 <= offset < footeroffset) || throw(FormatError(
             "row group $rowindex file offset $offset is outside the file body"))
     end
-    ordinal = group.ordinal
-    ordinal === nothing || ordinal >= 0 || throw(FormatError(
-        "row group $rowindex has a negative ordinal"))
+    # `ordinal` is an i16 that parquet-java writes past 32,767 row groups as negative
+    # numbers; nothing reads it.
     sorting = group.sorting_columns
     sorting === nothing && return
     for column in sorting

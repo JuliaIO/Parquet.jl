@@ -339,8 +339,6 @@ end
         tablereplace(metadata; row_groups=[tablereplace(group;
             file_offset=footeroffset + 1)]),
         tablereplace(metadata; row_groups=[tablereplace(group;
-            ordinal=Int16(-1))]),
-        tablereplace(metadata; row_groups=[tablereplace(group;
             sorting_columns=[sortingnegative])]),
         tablereplace(metadata; row_groups=[tablereplace(group;
             sorting_columns=[sortingpast])]),
@@ -355,7 +353,7 @@ end
     )
     messages = ("negative row count", "negative total byte size",
         "negative compressed byte size", "negative file offset",
-        "outside the file body", "outside the file body", "negative ordinal",
+        "outside the file body", "outside the file body",
         "sorting column index", "sorting column index", "negative file offset",
         "negative column chunk size", "negative data page offset")
     for (hostilemetadata, message) in zip(malformed, messages)
@@ -1064,4 +1062,18 @@ end
     @test Parquet.Table(bytes; filter=Parquet.col(:i) > 1).i == [typemax(Int128), Int128(2)^100]
     @test Parquet.Table(bytes; filter=Parquet.col(:u) < 4, select=[:u]).u == UInt128[0, 1, 3]
     @test isequal(Parquet.Table(take!(Parquet.write(IOBuffer(), table))).m, source.m)
+end
+
+@testset "row group ordinals do not matter" begin
+    # parquet-java writes RowGroup.ordinal as an i16, negative past 32,767 row groups.
+    bytes = take!(Parquet.write(IOBuffer(), (x=collect(1:6),); rowgroupsize=2))
+    n = length(bytes)
+    start = n - 8 - Int(Parquet._readu32le(bytes, n - 7))
+    metadata = Parquet.Thrift.decode(view(bytes, (start + 1):(n - 8)),
+        Parquet.Metadata.FileMetaData)
+    groups = [Parquet._withfields(group; ordinal=Int16(-32768 + index))
+        for (index, group) in enumerate(metadata.row_groups)]
+    wrapped = tablerewritefooter(bytes, Parquet._withfields(metadata; row_groups=groups))
+    @test Parquet.Table(wrapped).x == 1:6
+    @test Parquet.File(wrapped)[3].x == [5, 6]
 end
