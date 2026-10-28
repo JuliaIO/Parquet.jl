@@ -8,8 +8,10 @@ import CRC32
 # Calls `f(args...)` as a dynamic call that inference does not look into. Used where
 # column types are known only at run time (from a file's schema or the input table):
 # `f` then compiles for the concrete types alone, instead of also being inferred for
-# abstract ones, whose code loading other packages would invalidate.
-_barrier(f, args...; kwargs...) = Base.inferencebarrier(f)(args...; kwargs...)
+# abstract ones, whose code loading other packages would invalidate. Not specialized,
+# so it compiles once for every call site.
+_barrier(@nospecialize(f), @nospecialize(args...); kwargs...) =
+    Base.inferencebarrier(f)(args...; kwargs...)
 
 include("errors.jl")
 include("thrift.jl")
