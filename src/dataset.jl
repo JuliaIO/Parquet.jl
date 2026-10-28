@@ -909,11 +909,8 @@ function _colmetadataentries(ds::Dataset)
     return Symbol[name for (_, name) in outputs], [ds.colmetadata[index] for (index, _) in outputs]
 end
 
-# The first file's key-value metadata, without its ARROW:schema (as for a `File`).
-function _keyvaluemetadata(ds::Dataset)
-    entries = something(first(ds.files).metadata.key_value_metadata, Metadata.KeyValue[])
-    return filter(entry -> entry.key != "ARROW:schema", entries)
-end
+# The first file's key-value metadata, as for a `File`.
+_keyvaluemetadata(ds::Dataset) = _filekeyvalues(first(ds.files).metadata, ds.limits)
 
 DataAPI.metadatakeys(ds::Dataset) = unique!(String[entry.key for entry in _keyvaluemetadata(ds)])
 

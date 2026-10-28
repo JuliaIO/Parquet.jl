@@ -123,7 +123,15 @@ function _arrowfield(table::_FBTable, limits::Limits, depth::Int)
 end
 
 # The fields of a base64 `ARROW:schema` value.
-function _decodearrowschema(text::AbstractString, limits::Limits)
+_decodearrowschema(text::AbstractString, limits::Limits) = _ArrowField[_arrowfield(field,
+    limits, 1) for field in _fbtables(_arrowschematable(text, limits), 1, limits)]
+
+# The schema-level key-value metadata of a base64 `ARROW:schema` value.
+_decodearrowschemametadata(text::AbstractString, limits::Limits) =
+    _arrowkeyvalues(_arrowschematable(text, limits), 2, limits)
+
+# The Schema table of a base64 `ARROW:schema` value.
+function _arrowschematable(text::AbstractString, limits::Limits)
     bytes = try
         Base64.base64decode(text)
     catch
@@ -141,7 +149,27 @@ function _decodearrowschema(text::AbstractString, limits::Limits)
         _arrowschemaerror("the message is not a schema")
     schema = _fbsubtable(message, 2)
     schema === nothing && _arrowschemaerror("the schema is missing")
-    return _ArrowField[_arrowfield(field, limits, 1) for field in _fbtables(schema, 1, limits)]
+    return schema
+end
+
+# A file's key-value metadata as a read reports it: the footer's entries without the
+# ARROW:schema, after the ARROW:schema's own schema metadata for keys the footer lacks
+# (pyarrow writes both; the footer's entry wins where they differ).
+function _filekeyvalues(metadata::Metadata.FileMetaData, limits::Limits=Limits())
+    entries = something(metadata.key_value_metadata, Metadata.KeyValue[])
+    footer = Metadata.KeyValue[entry for entry in entries if entry.key != "ARROW:schema"]
+    index = findlast(entry -> entry.key == "ARROW:schema", entries)
+    (index === nothing || entries[index].value === nothing) && return footer
+    arrow = try
+        _decodearrowschemametadata(entries[index].value, limits)
+    catch err
+        err isa Union{FormatError,LimitError} || rethrow()
+        return footer
+    end
+    keys = Set{String}(entry.key for entry in footer)
+    added = Metadata.KeyValue[Metadata.KeyValue(key=key, value=value)
+        for (key, value) in arrow if !(key in keys)]
+    return isempty(added) ? footer : vcat(added, footer)
 end
 
 # A FlatBuffers table to write: one entry per field slot, `nothing` when absent. Scalars

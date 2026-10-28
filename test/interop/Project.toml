@@ -1,4 +1,5 @@
 [deps]
+DataAPI = "9a962f9c-6df0-11e9-0e5d-c546b8b5ee8a"
 DataDecimals = "3e2245cb-6932-498d-a7cf-39d39de8bde3"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Durations = "41ac09f5-0a95-4810-aa18-c88bf48ee130"

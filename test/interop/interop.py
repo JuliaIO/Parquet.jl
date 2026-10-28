@@ -235,6 +235,14 @@ def write_pyarrow(out):
     table = decimal()
     pq.write_table(table, out / "decimal_int.parquet", store_decimal_as_integer=True)
     save(out / "decimal_int.json", canon_table(table))
+    # File and field metadata, which pyarrow stores in the ARROW:schema (field metadata
+    # only there).
+    table = flat()
+    schema = table.schema.set(0, table.schema.field(0).with_metadata({"unit": "count"}))
+    table = pa.Table.from_arrays(table.columns, schema=schema.with_metadata({"owner": "interop"}))
+    pq.write_table(table, out / "metadata.parquet")
+    save(out / "metadata.json", dict(canon_table(table), metadata={"owner": "interop"},
+                                     colmetadata={"i8": {"unit": "count"}}))
     table = partitioned()
     pq.write_to_dataset(table, out / "partitioned", partition_cols=KEYS)
     save(out / "partitioned.json", dataset_values(table))

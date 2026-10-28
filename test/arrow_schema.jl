@@ -1,5 +1,6 @@
 using Dates
 using Tables
+import DataAPI
 
 # ARROW:schema values written by pyarrow 25.0.1 and Polars 1.43.2. pyarrow's schema:
 # ts_ny timestamp[us, America/New_York], ts_off timestamp[ms, +05:30], ts_utc
@@ -93,4 +94,33 @@ end
     @test rewritten.st[1].t isa DS.ZonedTimestamp{Microsecond,Symbol("Europe/Paris")}
     @test eltype(rewritten.lst[1]) == DS.ZonedTimestamp{Millisecond,Symbol("Asia/Tokyo")}
     @test last(only(rewritten.m[1])) == Nanosecond(9)
+end
+
+@testset "ARROW:schema metadata joins the file metadata" begin
+    @test Parquet._decodearrowschemametadata(ARROW_SCHEMA_PYARROW, Parquet.Limits()) ==
+        ["origin" => "pyarrow"]
+    @test isempty(Parquet._decodearrowschemametadata(ARROW_SCHEMA_POLARS, Parquet.Limits()))
+    # Parquet.write stores the metadata in the footer and in the ARROW:schema. Keep only
+    # the ARROW:schema's copy of "owner", and give "shared" another value in the footer.
+    bytes = take!(Parquet.write(IOBuffer(), (a=[1, 2],);
+        metadata=["owner" => "me", "shared" => "arrow"], colmetadata=Dict(:a => ["unit" => "m"])))
+    n = length(bytes)
+    start = n - 8 - Int(Parquet._readu32le(bytes, n - 7))
+    metadata = Parquet.Thrift.decode(view(bytes, (start + 1):(n - 8)),
+        Parquet.Metadata.FileMetaData)
+    entries = [entry for entry in metadata.key_value_metadata if entry.key == "ARROW:schema"]
+    push!(entries, Parquet.Metadata.KeyValue(key="shared", value="footer"))
+    footer = Parquet.Thrift.encode(Parquet._withfields(metadata; key_value_metadata=entries))
+    edited = vcat(bytes[1:start], footer, reinterpret(UInt8, [htol(UInt32(length(footer)))]),
+        b"PAR1")
+    expected = Dict("owner" => "me", "shared" => "footer")
+    table = Parquet.Table(edited)
+    @test DataAPI.metadata(table) == expected && DataAPI.metadata(Parquet.File(edited)) == expected
+    @test DataAPI.metadata(table, "owner") == "me" && DataAPI.colmetadata(table, :a) == Dict("unit" => "m")
+    @test DataAPI.metadata(Parquet.Dataset([edited])) == expected
+    # A rewrite keeps it, now in the footer too.
+    back = take!(Parquet.write(IOBuffer(), table))
+    @test DataAPI.metadata(Parquet.Table(back)) == expected
+    stored = Parquet.metadata(Parquet.File(back)).key_value_metadata
+    @test any(entry -> entry.key == "owner" && entry.value == "me", stored)
 end

@@ -37,9 +37,8 @@ function _tablerows(table::Table)
 end
 
 function _writekeyvaluemetadata(table::Table, limits::Limits)
-    metadata = _tablemetadata(table).key_value_metadata
-    metadata === nothing && return nothing
-    return _rewritekeyvaluemetadata(metadata, limits)
+    _tablemetadata(table).key_value_metadata === nothing && return nothing
+    return _rewritekeyvaluemetadata(_filekeyvalues(_tablemetadata(table), limits), limits)
 end
 
 function _tablenames(schema::Schema, limits::Limits)
@@ -551,10 +550,12 @@ are those of [`Parquet.Table`](@ref) and apply to every table the file yields.
   With both a filter and a `limit` (or a scan `offset`), which row groups contribute
   is known only while reading, so such a file can be iterated but not indexed.
 - `DataAPI.nrow(file)` is the row count of an unfiltered read.
-- `DataAPI.metadata(file)` gives the file's key-value metadata (without the
-  `ARROW:schema` entry, which sets column types), `DataAPI.colmetadata(file, column)` a
-  column's (its ARROW:schema field metadata and its column chunks' key-value metadata),
-  and [`Parquet.metadata`](@ref) the raw footer metadata (statistics, encodings).
+- `DataAPI.metadata(file)` gives the file's key-value metadata and the schema metadata of
+  its `ARROW:schema` (the footer's entry wins where both have a key; the `ARROW:schema`
+  entry itself, which sets column types, is left out), `DataAPI.colmetadata(file,
+  column)` a column's (its ARROW:schema field metadata and its column chunks' key-value
+  metadata), and [`Parquet.metadata`](@ref) the raw footer metadata (statistics,
+  encodings).
 - As a Tables.jl source (for example `DataFrame(file)`), the file reads every row group.
 
 `source` is a path, a byte vector, an `IO`, or a [`Parquet.AbstractSource`](@ref). A
@@ -1102,11 +1103,9 @@ end
 DataAPI.metadatasupport(::Type{<:Union{File,Table}}) = (read=true, write=false)
 
 # A file's ARROW:schema becomes column types (time zones, durations), so DataAPI
-# metadata leaves it out, as pyarrow does; `Parquet.metadata` still has it.
-function _keyvaluemetadata(x::Union{File,Table})
-    entries = something(metadata(x).key_value_metadata, Metadata.KeyValue[])
-    return filter(entry -> entry.key != "ARROW:schema", entries)
-end
+# metadata leaves it out, as pyarrow does, but has the schema metadata it holds
+# (`_filekeyvalues`); `Parquet.metadata` still has it.
+_keyvaluemetadata(x::Union{File,Table}) = _filekeyvalues(metadata(x))
 
 function DataAPI.metadatakeys(x::Union{File,Table})
     return unique!(String[entry.key for entry in _keyvaluemetadata(x)])

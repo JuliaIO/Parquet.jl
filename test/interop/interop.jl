@@ -9,6 +9,7 @@
 #
 # Values compare in the canonical JSON form that interop.py describes.
 using Parquet, Tables, JSON, Dates, PooledArrays, DataDecimals, Durations
+import DataAPI
 
 canon(::Missing) = nothing
 canon(x::Bool) = x
@@ -59,6 +60,18 @@ function difference(expected, actual)
     return nothing
 end
 
+# File and column metadata a tool wrote, as DataAPI reads them.
+function metadatadifference(expected, table)
+    found = DataAPI.metadata(table)
+    all(get(found, key, nothing) == value for (key, value) in expected["metadata"]) ||
+        return "metadata $found, expected $(expected["metadata"])"
+    for (name, values) in expected["colmetadata"]
+        found = DataAPI.colmetadata(table, Symbol(name))
+        found == values || return "column $name metadata $found, expected $values"
+    end
+    return nothing
+end
+
 function readall(directory)
     failures = 0
     for tool in sort(readdir(directory)), file in sort(readdir(joinpath(directory, tool)))
@@ -69,13 +82,12 @@ function readall(directory)
                 actual = sortrows(canontable(Parquet.Table(Parquet.Dataset(case))))
             else
                 table = Parquet.Table(case * ".parquet")
-                actual = try
-                    canontable(table)
-                finally
-                    close(table)
-                end
+                actual = canontable(table)
             end
-            difference(JSON.parsefile(case * ".json"), actual)
+            expected = JSON.parsefile(case * ".json")
+            mismatch = difference(expected, actual)
+            mismatch === nothing && haskey(expected, "metadata") ?
+                metadatadifference(expected, table) : mismatch
         catch err
             sprint(showerror, err)
         end

@@ -148,10 +148,11 @@ The reader also accepts the legacy list and map layouts of older writers.
 
 ## Metadata
 
-`DataAPI.metadata(table)` gives the file's key-value metadata,
+`DataAPI.metadata(table)` gives the file's key-value metadata, with the schema metadata
+of its ARROW:schema (the footer's entry wins where both have a key),
 `DataAPI.colmetadata(table, :price)` a column's (from the file's ARROW:schema, as
-pyarrow and Polars store it, or from its column chunks, as `Parquet.write` does), and
-[`Parquet.metadata`](@ref) the raw footer: schema, row groups, encodings, statistics.
+pyarrow and Polars store it, or from its column chunks), and [`Parquet.metadata`](@ref)
+the raw footer: schema, row groups, encodings, statistics. A rewrite keeps both.
 [`Parquet.statistics`](@ref) decodes one column's statistics in each row group.
 
 ```@example reading
