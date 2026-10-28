@@ -92,8 +92,9 @@ Complete coverage of the format is not a goal. Reading these throws
   `file_path`); read the file the chunk names.
 - LZO compression, in either direction: every implementation is GPL-2 and this package
   is MIT.
-- TIME values of 24:00:00, INTERVAL values past 2^31 - 1 months or days, and INT96
-  values outside the chosen resolution's range ([Type mapping](@ref)).
+- TIME values of 24:00:00, INTERVAL values past 2^31 - 1 months or days, INT96 values
+  outside the chosen resolution's range, and DECIMAL values with more digits than their
+  precision that the column's storage integer cannot hold ([Type mapping](@ref)).
 
 These are read or written in a reduced form:
 

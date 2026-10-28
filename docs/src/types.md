@@ -45,6 +45,11 @@ elements are `Union{Missing,T}`.
   pyarrow reads them. A value outside the nanosecond range (years 1677 to 2262), such as
   Spark's `9999-12-31` placeholder, throws `Parquet.UnsupportedFeatureError`; read such
   files with `int96=Dates.Microsecond`, Spark's own precision.
+- A DECIMAL value with more digits than its precision, which some writers store, reads
+  as stored, as pyarrow and DuckDB read it, when the column's storage integer holds it: a
+  DECIMAL(10, 2) column on INT64 holds any INT64. A value its storage integer cannot
+  hold, such as 10^12 in a DECIMAL(9, 2) column on INT64 (stored in `Int32`), throws
+  `Parquet.UnsupportedFeatureError`; `drop` the column to read the rest.
 - An INTERVAL value with more than 2^31 - 1 months or days throws
   `Parquet.UnsupportedFeatureError`, and so does a TIME of 24:00:00, which `Dates.Time`
   cannot hold; `drop` the column to read the rest.

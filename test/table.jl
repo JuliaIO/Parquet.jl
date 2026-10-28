@@ -818,17 +818,23 @@ end
     asstring(element) = withlogical(element;
         logical=MD.LogicalType(STRING=MD.StringType()), converted=MD.ConvertedType.UTF8)
 
-    # INT64 DECIMAL values copy in bulk and are then checked against the precision.
-    D = Parquet.DataDecimals.Decimal{5,2,Int64}
+    # INT64 DECIMAL values copy in bulk into Int64 storage and convert into Int32 storage.
+    # A value with more digits than the precision reads as stored when the storage holds it.
     for pageversion in (:v1, :v2), dictionary in (false, true)
-        good = rewritelogicalschema(decimal(5, 2),
-            Parquet._encodefile((d=Int64[1, -99_999, 99_999],); pageversion, dictionary))
-        table = Parquet.Table(good)
-        @test table.d == [reinterpret(D, Int64(v)) for v in (1, -99_999, 99_999)]
+        values = Int64[1, -99_999, typemin(Int64), typemax(Int64)]
+        wide = rewritelogicalschema(decimal(10, 2),
+            Parquet._encodefile((d=values,); pageversion, dictionary))
+        table = Parquet.Table(wide)
+        @test table.d == reinterpret.(Parquet.DataDecimals.Decimal{10,2,Int64}, values)
         close(table)
-        bad = rewritelogicalschema(decimal(5, 2),
-            Parquet._encodefile((d=Int64[1, 100_000],); pageversion, dictionary))
-        @test_throws Parquet.FormatError Parquet.Table(bad)
+        values = Int64[1, -99_999, 100_000, typemin(Int32)]
+        narrow = rewritelogicalschema(decimal(5, 2),
+            Parquet._encodefile((d=values,); pageversion, dictionary))
+        @test Parquet.Table(narrow).d ==
+            reinterpret.(Parquet.DataDecimals.Decimal{5,2,Int32}, Int32.(values))
+        toolarge = rewritelogicalschema(decimal(5, 2),
+            Parquet._encodefile((d=Int64[1, typemax(Int32) + 1],); pageversion, dictionary))
+        @test_throws Parquet.UnsupportedFeatureError Parquet.Table(toolarge)
     end
 
     # PLAIN STRING pages: inline (up to 12 bytes) and view values, ASCII and not,
@@ -906,13 +912,26 @@ end
             table = Parquet.Table(bytes)
             @test [Parquet.DataDecimals.unscaled(x) for x in table.d] == values
         end
-        # A value at 10^precision is past the declared precision.
+        # A value at 10^precision, past the declared precision, reads as stored.
         over = rewritelogicalschema(Parquet._encodefile((d=[encode(Int64(1)), encode(bound)],))) do element
             withlogical(element; logical=MD.LogicalType(DECIMAL=MD.DecimalType(
                 scale=Int32(2), precision=Int32(precision))),
                 converted=MD.ConvertedType.DECIMAL, precision=Int32(precision), scale=Int32(2))
         end
-        bound < Int64(2)^(8width - 1) && @test_throws Parquet.FormatError Parquet.Table(over)
+        bound < Int64(2)^(8width - 1) &&
+            @test [Parquet.DataDecimals.unscaled(x) for x in Parquet.Table(over).d] == [1, bound]
+    end
+    # A value its storage integer cannot hold (DECIMAL(3, 0) is stored in Int32), first on
+    # the one-load path, then last, on the per-value path.
+    encode5(x) = ntuple(i -> UInt8((x >> (8 * (5 - i))) & 0xff), 5)
+    for values in (Int64[2^35, 1], Int64[1, 2^35])
+        toolarge = rewritelogicalschema(Parquet._encodefile((d=encode5.(values),);
+                dictionary=false)) do element
+            withlogical(element; logical=MD.LogicalType(DECIMAL=MD.DecimalType(
+                scale=Int32(0), precision=Int32(3))),
+                converted=MD.ConvertedType.DECIMAL, precision=Int32(3), scale=Int32(0))
+        end
+        @test_throws Parquet.UnsupportedFeatureError Parquet.Table(toolarge)
     end
 end
 

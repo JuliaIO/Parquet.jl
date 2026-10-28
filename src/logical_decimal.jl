@@ -100,13 +100,11 @@ function _decimaldigits(value::BigInt)
     return ndigits(abs(value); base=10)
 end
 
-function _checkdecimalvalue(value::BigInt, precision::Int32, name::String,
-    error::Type{<:Exception})
+function _checkdecimalvalue(value::BigInt, precision::Int32, name::String)
     digits = _decimaldigits(value)
     digits <= precision && return
-    message = "DECIMAL column $(repr(name)) contains a $digits-digit value " *
-        "for precision $precision"
-    throw(error(message))
+    throw(ArgumentError("DECIMAL column $(repr(name)) contains a $digits-digit value " *
+        "for precision $precision"))
 end
 
 function _contiguousdecimalbytes(bytes::AbstractVector{UInt8})
@@ -188,7 +186,7 @@ function _preflightdecimalconversion(element::Metadata.SchemaElement, limits::Li
 end
 
 function _fromparquetdecimal(element::Metadata.SchemaElement, value, limits::Limits)
-    precision, scale = something(_decimalparameters(element))
+    _, scale = something(_decimalparameters(element))
     physical = element.type_
     unscaled = if physical == Metadata.Type.INT32
         value isa Int32 || throw(FormatError(
@@ -208,10 +206,22 @@ function _fromparquetdecimal(element::Metadata.SchemaElement, value, limits::Lim
                 "fixed DECIMAL column $(repr(element.name)) has a value with the wrong width"))
         _fromtwoscomplement(value)
     end
-    _checkdecimalvalue(unscaled, precision, element.name, FormatError)
+    # A value with more digits than the precision reads as stored, as pyarrow and DuckDB
+    # read it, when the Julia type holds it.
     D = _decimalhost(element)
     D === Decimal && return Decimal(unscaled, scale)
+    T = _decimalstorage(D)
+    typemin(T) <= unscaled <= typemax(T) || _decimalrangeerror(element, D)
     return reinterpret(D, unscaled)
+end
+
+_decimalstorage(::Type{DataDecimals.Decimal{P,S,T}}) where {P,S,T} = T
+
+@noinline function _decimalrangeerror(element::Metadata.SchemaElement, ::Type{D}) where {D}
+    precision, _ = something(_decimalparameters(element))
+    throw(UnsupportedFeatureError("DECIMAL column $(repr(element.name)) holds a value " *
+        "with more than $precision digits, which $D cannot hold; read the other columns " *
+        "with drop=[:$(element.name)]"))
 end
 
 function _toparquetdecimal(element::Metadata.SchemaElement, value, limits::Limits)
@@ -227,12 +237,12 @@ function _toparquetdecimal(element::Metadata.SchemaElement, value, limits::Limit
         "DECIMAL column $(repr(element.name)) requires scale $scale, got $(value.scale)"))
     physical = element.type_
     if physical == Metadata.Type.INT32
-        _checkdecimalvalue(value.unscaled, precision, element.name, ArgumentError)
+        _checkdecimalvalue(value.unscaled, precision, element.name)
         typemin(Int32) <= value.unscaled <= typemax(Int32) || throw(ArgumentError(
             "DECIMAL value does not fit in INT32"))
         return Int32(value.unscaled)
     elseif physical == Metadata.Type.INT64
-        _checkdecimalvalue(value.unscaled, precision, element.name, ArgumentError)
+        _checkdecimalvalue(value.unscaled, precision, element.name)
         typemin(Int64) <= value.unscaled <= typemax(Int64) || throw(ArgumentError(
             "DECIMAL value does not fit in INT64"))
         return Int64(value.unscaled)
@@ -241,7 +251,7 @@ function _toparquetdecimal(element::Metadata.SchemaElement, value, limits::Limit
         Int(element.type_length) : _twoscomplementwidth(value.unscaled)
     _checklimit(:decimal_bytes, width, limits.max_decimal_bytes)
     _checklimit(:string_bytes, width, limits.max_string_bytes)
-    _checkdecimalvalue(value.unscaled, precision, element.name, ArgumentError)
+    _checkdecimalvalue(value.unscaled, precision, element.name)
     return _totwoscomplement(value.unscaled, width)
 end
 
@@ -291,36 +301,24 @@ end
 
 # DECIMAL values of precision up to 76 decode straight into the storage integer `T` of
 # `D = DataDecimals.Decimal{P,S,T}`: INT32 and INT64 values convert, byte arrays are
-# big-endian two's complement. `bound` is 10^P; a value at or past it has more digits
-# than the column's precision. `maxbytes` is the limit on one byte-array value.
+# big-endian two's complement. A value with more than P digits reads as stored when `T`
+# holds it, as in `_fromparquetdecimal`. `maxbytes` is the limit on one byte-array value.
 struct _DecimalValue{D,T}
-    bound::T
     element::Metadata.SchemaElement
     maxbytes::Int64
 end
 
 function _DecimalValue(::Type{D}, element::Metadata.SchemaElement,
         limits::Limits) where {P,S,T,D<:DataDecimals.Decimal{P,S,T}}
-    return _DecimalValue{D,T}(_decimalbound(T, Val(P)), element, limits.max_decimal_bytes)
+    return _DecimalValue{D,T}(element, limits.max_decimal_bytes)
 end
 
-@noinline function _decimalrangeerror(convert::_DecimalValue{D}) where {D}
-    precision, _ = something(_decimalparameters(convert.element))
-    throw(FormatError("DECIMAL column $(repr(convert.element.name)) contains a value " *
-        "with more than $precision digits"))
-end
-
-@inline function _checkeddecimal(convert::_DecimalValue{D,T}, value::T) where {D,T}
-    bound = convert.bound
-    (value < bound) & (value > -bound) || _decimalrangeerror(convert)
-    return reinterpret(D, value)
-end
+_decimalrangeerror(convert::_DecimalValue{D}) where {D} =
+    _decimalrangeerror(convert.element, D)
 
 function (convert::_DecimalValue{D,T})(value::Union{Int32,Int64}) where {D,T}
-    W = promote_type(T, typeof(value))
-    wide = W(value)
-    bound = W(convert.bound)
-    (wide < bound) & (wide > -bound) || _decimalrangeerror(convert)
+    wide = promote_type(T, typeof(value))(value)
+    typemin(T) <= wide <= typemax(T) || _decimalrangeerror(convert)
     return reinterpret(D, wide % T)
 end
 
@@ -341,22 +339,5 @@ function (convert::_DecimalValue{D,T})(bytes::AbstractVector{UInt8}) where {D,T}
     end
     value = signed(bits)
     extra > 0 && signbit(value) != negative && _decimalrangeerror(convert)
-    return _checkeddecimal(convert, value)
-end
-
-# PLAIN INT32/INT64 values whose storage type matches copy in bulk; `_aftercopy!` then
-# checks them against the precision bound.
-function _aftercopy!(convert::_DecimalValue{D,T}, dest::Vector, offset::Int,
-        count::Int) where {D,T}
-    bound = convert.bound
-    valid = true
-    GC.@preserve dest begin
-        values = Ptr{T}(pointer(dest, offset + 1))
-        @inbounds for index in 1:count
-            value = unsafe_load(values, index)
-            valid &= (value < bound) & (value > -bound)
-        end
-    end
-    valid || _decimalrangeerror(convert)
-    return
+    return reinterpret(D, value)
 end

@@ -126,7 +126,6 @@ function _plain!(dest::Vector{L}, offset::Int, count::Int, ::Type{P}, convert::C
         source = Ptr{P}(pointer(bytes, position))
         if (L === P && convert === identity) || (_bitcopy(convert) && sizeof(L) == sizeof(P))
             unsafe_copyto!(Ptr{P}(pointer(dest, offset + 1)), source, count)
-            _aftercopy!(convert, dest, offset, count)
         else
             @inbounds for index in 1:count
                 dest[offset + index] = convert(ltoh(unsafe_load(source, index)))
@@ -192,13 +191,12 @@ function _plainshortdecimals!(dest::Vector{D}, offset::Int, count::Int,
     T <: Union{Int32,Int64,Int128} || return 1
     fast = clamp(fld(length(bytes) - 8 - position + 1, width) + 1, 0, count)
     shift = 64 - 8width
-    bound = Int128(convert.bound)
     GC.@preserve bytes begin
         base = pointer(bytes, position)
         @inbounds for index in 1:fast
             raw = bswap(unsafe_load(Ptr{UInt64}(base + (index - 1) * width)))
             value = reinterpret(Int64, raw) >> shift
-            (value < bound) & (value > -bound) || _decimalrangeerror(convert)
+            typemin(T) <= value <= typemax(T) || _decimalrangeerror(convert)
             dest[offset + index] = reinterpret(D, value % T)
         end
     end

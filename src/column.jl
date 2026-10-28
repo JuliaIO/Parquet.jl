@@ -246,11 +246,10 @@ function (::_FixedBytesValue{N})(bytes::Union{_ByteView,Vector{UInt8}}) where {N
 end
 
 # Whether a conversion only reinterprets the bits of each physical value, so PLAIN
-# values copy in bulk; `_aftercopy!` then validates the copied values.
+# values copy in bulk.
 _bitcopy(convert) = false
 _bitcopy(::_TimestampValue) = true
 _bitcopy(::_DecimalValue) = true
-_aftercopy!(convert, dest::Vector, offset::Int, count::Int) = nothing
 
 # Choices a read makes where the file leaves one: `int96` is the resolution of INT96
 # timestamps, `arrow` the types the file's ARROW:schema gives its leaves (see

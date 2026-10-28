@@ -309,6 +309,32 @@ end
     @test elapsed < 5.0
 end
 
+@testset "DECIMAL values past the precision read as stored" begin
+    # As pyarrow and DuckDB read them, when the column's Julia type holds them.
+    limits = Parquet.Limits()
+    int64 = decimaltestelement("d", DMD.Type.INT64, 10, 2)
+    D = Parquet._decimalhost(int64)
+    @test Parquet._DecimalValue(D, int64, limits)(typemax(Int64)) ===
+        reinterpret(D, typemax(Int64))
+    @test Parquet._fromparquetdecimal(int64, typemax(Int64), limits) ===
+        reinterpret(D, typemax(Int64))
+    fixed = decimaltestelement("d", DMD.Type.FIXED_LEN_BYTE_ARRAY, 2, 1; width=1)
+    D = Parquet._decimalhost(fixed)
+    @test Parquet._DecimalValue(D, fixed, limits)(view(UInt8[0x80], 1:1)) ===
+        reinterpret(D, Int32(-128))
+    wide = decimaltestelement("d", DMD.Type.BYTE_ARRAY, 77, 0)
+    @test Parquet._fromparquetdecimal(wide,
+        Parquet._totwoscomplement(-big(10)^78, 33), limits) == Parquet.Decimal(-big(10)^78, 0)
+    # Otherwise the error names the column.
+    narrow = decimaltestelement("d", DMD.Type.INT64, 9, 2)
+    D = Parquet._decimalhost(narrow)
+    for read in (() -> Parquet._DecimalValue(D, narrow, limits)(Int64(10)^12),
+            () -> Parquet._fromparquetdecimal(narrow, Int64(10)^12, limits))
+        err = try read(); nothing catch caught; caught end
+        @test err isa Parquet.UnsupportedFeatureError && occursin("drop=[:d]", err.message)
+    end
+end
+
 @testset "DECIMAL storage-integer reads agree with the exact path" begin
     # Flat reads decode straight into the storage integer of the column's
     # DataDecimals.Decimal; every value and every error must match the BigInt path.
@@ -332,7 +358,7 @@ end
                 Parquet._fromtwoscomplement(bytes) == x || continue
                 exact = try Parquet._fromparquetdecimal(element, bytes, limits) catch err; err end
                 fast = try convert(view(bytes, 1:n)) catch err; err end
-                @test exact isa Exception ? fast isa Parquet.FormatError : fast === exact
+                @test exact isa Exception ? typeof(fast) === typeof(exact) : fast === exact
             end
         end
     end
@@ -344,7 +370,7 @@ end
                 -(P(10)^p), typemax(P), typemin(P))
             exact = try Parquet._fromparquetdecimal(element, x, limits) catch err; err end
             fast = try convert(x) catch err; err end
-            @test exact isa Exception ? fast isa Parquet.FormatError : fast === exact
+            @test exact isa Exception ? typeof(fast) === typeof(exact) : fast === exact
         end
     end
     element = decimaltestelement("d", DMD.Type.BYTE_ARRAY, 20, 2)

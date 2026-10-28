@@ -493,7 +493,7 @@ function _nestedwritedecimalcheck(element::Metadata.SchemaElement, value,
     value.scale == scale || throw(ArgumentError(
         "DECIMAL field $(repr(element.name)) requires scale $scale, got " *
         "$(value.scale)"))
-    _checkdecimalvalue(value.unscaled, precision, element.name, ArgumentError)
+    _checkdecimalvalue(value.unscaled, precision, element.name)
     physical = element.type_
     if physical == Metadata.Type.INT32
         typemin(Int32) <= value.unscaled <= typemax(Int32) || throw(ArgumentError(
