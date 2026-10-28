@@ -23,6 +23,12 @@ using PrecompileTools: @compile_workload, @setup_workload
         utc=cycle([Durations.ZonedTimestamp{Dates.Microsecond,:UTC}(
             Durations.Timestamp{Dates.Microsecond}(Dates.UTInstant(Dates.Microsecond(i))),
             Dates.UTC) for i in 0:2]),
+        # pandas' time zone aware timestamps, which pyarrow stores in nanoseconds.
+        utcns=cycle([Durations.ZonedTimestamp{Dates.Nanosecond,:UTC}(
+            Durations.Timestamp{Dates.Nanosecond}(Dates.UTInstant(Dates.Nanosecond(i))),
+            Dates.UTC) for i in 0:2]),
+        # A DateTime difference, and a broadcast comparison's BitVector.
+        elapsed=cycle(Dates.Millisecond.(0:2)), bits=BitVector(cycle(Bool[true, false])),
         duration=cycle([Durations.Duration(i, 0, 1_000_000i) for i in 0:2]),
         time=cycle(Dates.Time(1) .+ Dates.Minute.(0:2)),
         dec=cycle(reinterpret(DataDecimals.Decimal{15,2,Int64}, Int64[100, -250, 7])),
@@ -66,8 +72,9 @@ using PrecompileTools: @compile_workload, @setup_workload
             write(IOBuffer(), Tables.columntable(readback); option...)
             close(readback)
             # A fresh name each time: Windows cannot reopen a file a read still maps.
-            path = write(tempname(dir) * ".parquet", table; option...)
-            readback = Table(path)
+            # Paths are written and read on two tasks, as with more than one thread.
+            path = write(tempname(dir) * ".parquet", table; ntasks=2, option...)
+            readback = Table(path; ntasks=2)
             Tables.columns(readback)
             Tables.schema(readback)
             # A rewrite of a read table takes the schema-bearing writer.
