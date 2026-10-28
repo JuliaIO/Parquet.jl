@@ -713,6 +713,8 @@ _isdataset(input) = false
 function _scanresidual(columns::NamedTuple, rows::Int, bound::Tables.BoundScan,
         metadata::Metadata.FileMetaData, schema::Schema, limits::Limits,
         offset::Int=bound.offset, limit=bound.limit)
+    # Compiled once, not for each set of column types: only the residual scan needs them.
+    @nospecialize columns
     readpositions = sort!(unique!(vcat(Int[column.index for column in bound.columns],
         bound.filtercols)))
     positions = Int[searchsortedfirst(readpositions, column.index)
