@@ -125,9 +125,6 @@ end
     @test isequal(Parquet._physicalvalues(stringtype, optionalstrings), optionalbytes)
 
     @test_throws Parquet.FormatError Parquet._logicalvalues(stringtype, [UInt8[0xff]])
-    invalid = String(copy(UInt8[0xff]))
-    @test !isvalid(invalid)
-    @test_throws ArgumentError Parquet._physicalvalues(stringtype, [invalid])
     @test_throws Parquet.FormatError Parquet._logicalvalue(stringtype, Int32(1))
     @test_throws ArgumentError Parquet._physicalvalue(stringtype, UInt8[0x61])
 end

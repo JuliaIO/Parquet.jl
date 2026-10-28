@@ -3,6 +3,7 @@ using Dates
 import Tables
 import DataAPI
 using PooledArrays, CategoricalArrays
+import SentinelArrays
 
 const WRMD = Parquet.Metadata
 
@@ -311,5 +312,55 @@ end
         @test only(only(Parquet.metadata(file).row_groups).columns
             ).meta_data.codec == WRMD.CompressionCodec.ZSTD
         close(file)
+    end
+end
+
+@testset "STRING and ENUM values must be UTF-8" begin
+    bad = String(UInt8[0x61, 0xff])
+    sink() = IOBuffer()
+    invalid(column, row) = "column \"$column\" has a string at row $row that is not valid UTF-8"
+    @test_throws invalid("s", 3) Parquet.write(sink(), (s=["a", "b", bad],))
+    @test_throws "write binary data as Vector{UInt8} values" Parquet.write(sink(), (s=[bad],))
+    @test_throws invalid("s", 3) Parquet.write(sink(),
+        (s=Union{Missing,String}["a", missing, bad],))
+    @test_throws invalid("s", 5) Parquet.write(sink(), (s=["a", "b", "c", "d", bad],);
+        rowgroupsize=2)
+    @test_throws invalid("s", 10) Parquet.write(sink(), (s=[fill("ok", 9); bad],);
+        pagesize=10)
+    @test_throws invalid("s", 3) Parquet.write(sink(), (s=repeat(["a", "b", bad], 1000),))
+    @test_throws invalid("s", 2) Parquet.write(sink(), (s=PooledArray(["a", bad, "a"]),))
+    @test_throws invalid("s", 4) Parquet.write(sink(),
+        (s=SentinelArrays.ChainedVector([["a", "b"], ["c", bad]]),))
+    @test_throws invalid("s", 2) Parquet.write(sink(), (s=[:a, Symbol(bad)],))
+    @test_throws invalid("s", 2) Parquet.write(sink(), (s=['a', '\xff'],))
+    @test_throws invalid("value", 2) Parquet.write(sink(),
+        (value=Parquet.LogicalColumn(String["ok", bad], :enum),))
+    @test_throws "column \"s\" (field \"s.list.element\") has a string at row 2" Parquet.write(
+        sink(), (s=[["a"], ["b", bad]],))
+    @test_throws "column \"s\" (field \"s.x\") has a string at row 2" Parquet.write(sink(),
+        (s=[(x="a",), (x=bad,)],))
+    @test_throws "column \"s\" (field \"s.key_value.key\") has a string at row 2" Parquet.write(
+        sink(), (s=[Dict("a" => 1), Dict(bad => 2)],))
+    # Rows count from the start of the table given to this call, across its partitions.
+    writer = Parquet.Writer(sink())
+    Parquet.write(writer, (s=["a", "b"],))
+    @test_throws invalid("s", 2) Parquet.write(writer, (s=["c", bad],))
+    @test_throws invalid("s", 4) Parquet.write(sink(),
+        Tables.partitioner([(s=["a", "b"],), (s=["c", bad],)]))
+    mktempdir() do directory
+        @test_throws invalid("s", 4) Parquet.write(joinpath(directory, "data"),
+            (k=[1, 2, 1, 2], s=["a", "b", "c", bad]); partitionby=:k)
+    end
+    text = [repeat("é", 200), "ü"^3, "abc", ""]
+    # A 200-byte value's length prefix has its high bit set.
+    ascii = [repeat("x", 200), "abc", "", "d"]
+    table = Parquet.Table(take!(Parquet.write(sink(),
+        (s=text, a=ascii, p=PooledArray(text)))))
+    try
+        @test table.s == text
+        @test table.a == ascii
+        @test table.p == text
+    finally
+        close(table)
     end
 end

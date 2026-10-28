@@ -129,7 +129,7 @@ function _leafspecs(schema::Schema, semantic::_NestedSchemaPlan, options::_Write
             "nanosecond TIMESTAMP"))
         push!(leaves, _LeafSpec(element, copy(node.path), Int(node.max_repetition_level),
             Int(node.max_definition_level), _statisticorder(element), choice.encoding,
-            choice.dictionary, bloom))
+            choice.dictionary, bloom, _isutf8leaf(element)))
     end
     return leaves
 end
@@ -379,7 +379,17 @@ function _encodefield(schema::_WriteSchema, field::_NestedField, binding::_Neste
         _LeafSpec[schema.leaves[index] for index in field.leaves], options.chunk)
 end
 
-function _encodefielderror(field::_FieldSpec, err)
+function _encodefielderror(field::_FieldSpec, err, range::UnitRange{Int}, offset::Int,
+        indices::Union{Nothing,Vector{Int}})
+    if err isa _InvalidUTF8
+        row = first(range) + err.row - 1
+        row = offset + (indices === nothing ? row : indices[row])
+        leaf = join(err.leaf, ".")
+        where = leaf == field.name ? "" : " (field $(repr(leaf)))"
+        return ArgumentError("column $(repr(field.name))$where has a string at row $row " *
+            "that is not valid UTF-8; STRING values must be UTF-8 text, so write binary " *
+            "data as Vector{UInt8} values")
+    end
     err isa Union{ArgumentError,InexactError,OverflowError} || return err
     message = err isa ArgumentError ? err.msg : sprint(showerror, err)
     occursin(repr(field.name), message) && return err
@@ -583,9 +593,10 @@ Append the rows of `table` (every partition of a `Tables.partitions` source) to 
 """
 function write(writer::Writer, table)
     writer.closed && throw(ArgumentError("the Parquet.Writer is closed"))
+    offset = 0
     try
         for part in Tables.partitions(table)
-            _writetable!(writer, part, table)
+            offset += _writetable!(writer, part, table, offset)
         end
     catch
         _abandon!(writer)
@@ -594,7 +605,11 @@ function write(writer::Writer, table)
     return writer
 end
 
-function _writetable!(writer::Writer, table, source)
+# Writes the rows of `table` and returns their count. Row r of `table` is row `offset + r`
+# of the input (`offset + indices[r]` when `table` holds rows `indices` of a partition),
+# which is the row an error names.
+function _writetable!(writer::Writer, table, source, offset::Int=0,
+        indices::Union{Nothing,Vector{Int}}=nothing)
     Base.@nospecialize table source
     options = writer.options
     stored = table isa Table
@@ -645,7 +660,7 @@ function _writetable!(writer::Writer, table, source)
             _writearrowhints!(writer.arrowhints, schema, field, binding)
         end
     end
-    rows == 0 && return
+    rows == 0 && return rows
     size = something(options.rowgroupsize, rows)
     groups = cld(rows, size)
     fieldcount = length(schema.fields)
@@ -661,7 +676,7 @@ function _writetable!(writer::Writer, table, source)
             try
                 return _encodefield(schema, field, bindings[fieldindex], range, options)
             catch err
-                throw(_encodefielderror(field, err))
+                throw(_encodefielderror(field, err, range, offset, indices))
             end
         end
     end
@@ -689,7 +704,7 @@ function _writetable!(writer::Writer, table, source)
         return
     end
     _runordered(work, consume, length(jobs), options.ntasks)
-    return
+    return rows
 end
 
 # A job encodes a run of consecutive fields of one row group: a large field alone, small

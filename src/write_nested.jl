@@ -509,10 +509,7 @@ function _nestedwritebinarycheck(kind::Symbol,
     if kind === :enum
         value isa AbstractString || throw(ArgumentError(
             "ENUM field $(repr(element.name)) contains a non-string value"))
-        bytes = codeunits(value)
-        _checklimit(:string_bytes, length(bytes), limits.max_string_bytes)
-        isvalid(String, bytes) || throw(ArgumentError(
-            "ENUM field $(repr(element.name)) contains invalid UTF-8"))
+        _checklimit(:string_bytes, ncodeunits(value), limits.max_string_bytes)
     elseif kind === :uuid
         value isa UUIDs.UUID || throw(ArgumentError(
             "UUID field $(repr(element.name)) contains a non-UUID value"))
@@ -925,23 +922,6 @@ end
 
 ## Leaf values
 
-# STRING and ENUM values are checked for their byte limit and valid UTF-8.
-struct _CheckedString{F}
-    convert::F
-    limit::Int64
-    label::String
-end
-
-@inline function (check::_CheckedString)(value)
-    text = check.convert(value)
-    bytes = codeunits(text)
-    _checklimit(:string_bytes, length(bytes), check.limit)
-    isvalid(String, bytes) || _invalidutf8(check.label)
-    return text
-end
-
-@noinline _invalidutf8(label::String) = throw(ArgumentError("$label contains invalid UTF-8"))
-
 # Converts a value by its leaf's stored annotation (schema-bearing rewrites).
 struct _StoredConvert{K}
     kind::K
@@ -959,18 +939,12 @@ function _leafconvert(plan::_NestedLeafPlan, value_type::Type, limits::Limits)
         "writing INT96 is not supported; write the table's columns (for example " *
         "Tables.columntable(table)) to store $(repr(element.name)) as an INT64 " *
         "nanosecond TIMESTAMP"))
+    # Byte limits and UTF-8 are checked as values reach their pages.
     kind = _logicalkind(element)
     map = _nestedwriteleafmap(element, value_type)
-    label = "$(uppercase(String(kind isa Symbol ? kind : :string))) field " *
-        repr(element.name)
-    if map !== nothing
-        P = _writephysicaltype(map)
-        P <: AbstractString || return map.convert, P
-        return _CheckedString(map.convert, limits.max_string_bytes, label), P
-    end
-    if kind in (:string, :enum) && value_type <: AbstractString && isconcretetype(value_type)
-        return _CheckedString(identity, limits.max_string_bytes, label), value_type
-    end
+    map === nothing || return map.convert, _writephysicaltype(map)
+    kind in (:string, :enum) && value_type <: AbstractString && isconcretetype(value_type) &&
+        return identity, value_type
     return _StoredConvert(kind, element, limits), _physicaleltype(element.type_)
 end
 

@@ -119,10 +119,10 @@ function _fromparquetstring(value::AbstractVector{UInt8}, limits::Limits)
         data)
 end
 
+# The writer checks that STRING and ENUM values are UTF-8 as they reach their pages.
 function _toparquetstring(value::AbstractString, limits::Limits)
     bytes = codeunits(value)
     _checklimit(:string_bytes, length(bytes), limits.max_string_bytes)
-    isvalid(String, bytes) || throw(ArgumentError("STRING value contains invalid UTF-8"))
     return collect(bytes)
 end
 

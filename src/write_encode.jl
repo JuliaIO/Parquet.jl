@@ -781,7 +781,8 @@ struct _ChunkOptions
     limits::Limits
 end
 
-# One leaf column of the schema and how its chunks are encoded.
+# One leaf column of the schema and how its chunks are encoded. `utf8` marks STRING and
+# ENUM leaves, whose values must be UTF-8.
 struct _LeafSpec
     element::Metadata.SchemaElement
     path::Vector{String}
@@ -791,6 +792,23 @@ struct _LeafSpec
     encoding::Union{Nothing,Metadata.Encoding.T}
     dictionary::Bool
     bloom::Bool
+    utf8::Bool
+end
+
+function _isutf8leaf(element::Metadata.SchemaElement)
+    element.type_ == Metadata.Type.BYTE_ARRAY || return false
+    logical = element.logicalType
+    logical !== nothing && (logical.STRING !== nothing || logical.ENUM !== nothing) &&
+        return true
+    return element.converted_type in (Metadata.ConvertedType.UTF8,
+        Metadata.ConvertedType.ENUM)
+end
+
+# Row `row` (1-based, counted from the start of its column chunk) holds a STRING or ENUM
+# value that is not UTF-8; the writer turns it into an error naming the column.
+struct _InvalidUTF8 <: Exception
+    row::Int
+    leaf::Vector{String}
 end
 
 # A dictionary is probed on the chunk's first page with values: it is kept only when
@@ -1052,10 +1070,48 @@ function _compressinto!(buffer::Vector{UInt8}, options::_ChunkOptions,
     return view(buffer, 1:Int64(written))
 end
 
+# The index of the first value in `buffer` that is not UTF-8, or 0. A buffer whose bytes
+# are all ASCII (length prefixes included) passes in one scan.
+function _invalidutf8value(buffer::_BytesBuffer)
+    data = buffer.data
+    _isasciibytes(view(data, 1:length(data))) && return 0
+    for index in eachindex(buffer.starts)
+        start = buffer.starts[index]
+        value = view(data, start:(start + Int(buffer.lengths[index]) - 1))
+        _isasciibytes(value) || isvalid(String, value) || return index
+    end
+    return 0
+end
+
+# Every value of a STRING or ENUM page must be UTF-8.
+function _checkutf8(chunk::_ChunkWriter{_BytesBuffer}, firstrow::Int)
+    index = _invalidutf8value(chunk.values)
+    index == 0 || throw(_InvalidUTF8(firstrow + _valuerow(chunk, index), chunk.leaf.path))
+    return
+end
+
+_checkutf8(::_ChunkWriter, ::Int) = nothing
+
+# The row, counted from 1 within its page, of the page's `value`-th present value.
+function _valuerow(chunk::_ChunkWriter, value::Int)
+    leaf = chunk.leaf
+    leaf.maxdef == 0 && return value
+    maxdef = UInt16(leaf.maxdef)
+    row = 0
+    seen = 0
+    for (entry, level) in enumerate(chunk.definitions)
+        (leaf.maxrep == 0 || chunk.repetitions[entry] == 0x0000) && (row += 1)
+        level == maxdef && (seen += 1) == value && return row
+    end
+    return row
+end
+
 # Frames the buffered page into `chunk.data` and resets the page buffers.
 function _flushpage!(chunk::_ChunkWriter, rows::Int, firstrow::Int)
     leaf = chunk.leaf
     options = chunk.options
+    # A pooled chunk's values are its dictionary entries, checked when it is built.
+    leaf.utf8 && chunk.state != _DICT_POOLED && _checkutf8(chunk, firstrow)
     entries = _pageentries(chunk)
     count = _pagevalues(chunk)
     nulls = entries - count
@@ -1523,6 +1579,15 @@ function _encodepooledchunk(leaf::_LeafSpec, column, first::Int, last::Int, conv
         push!(poolrefs, ref)
     end
     (isempty(poolrefs) || _bufferbytes(entries) > _DICTIONARY_LIMIT) && return nothing
+    if leaf.utf8 && entries isa _BytesBuffer
+        # The error names the first row that uses an invalid entry.
+        position = _invalidutf8value(entries)
+        if position != 0
+            bad = poolrefs[position]
+            row = findfirst(index -> Int(refs[index]) == bad, first:last)::Int
+            throw(_InvalidUTF8(row, leaf.path))
+        end
+    end
     order = _poolorder(entries, leaf.order)
     codes = zeros(Int32, length(used))
     for (rank, position) in enumerate(order)

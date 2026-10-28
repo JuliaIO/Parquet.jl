@@ -113,8 +113,9 @@ function _writepartitioned(root::String, table, partitionby, existing::Symbol, k
     state = _PartitionedWrite(root, options, existing, Dict{String,Writer}(), String[],
         Dict{String,Int}(), nothing)
     try
+        offset = 0
         for part in Tables.partitions(table)
-            _writepartition!(state, part, keys)
+            offset += _writepartition!(state, part, keys, offset)
         end
         while !isempty(state.opened)
             close(pop!(state.writers, popfirst!(state.opened)))
@@ -126,7 +127,9 @@ function _writepartitioned(root::String, table, partitionby, existing::Symbol, k
     return root
 end
 
-function _writepartition!(state::_PartitionedWrite, part, keys::Vector{String})
+# Writes the rows of `part`, rows `offset + 1` on of the input, and returns their count.
+function _writepartition!(state::_PartitionedWrite, part, keys::Vector{String},
+        offset::Int)
     Base.@nospecialize part
     columns = Tables.columns(part)
     names = String[String(name) for name in Tables.columnnames(columns)]
@@ -141,15 +144,18 @@ function _writepartition!(state::_PartitionedWrite, part, keys::Vector{String})
     datacolumns = AbstractVector[_partitioncolumn(String(name),
         Tables.getcolumn(columns, name)) for name in data]
     rows = length(first(keycolumns))
+    # Errors count rows of the input from 1, and `indices` index the key columns.
+    base = offset + 1 - firstindex(first(keycolumns))
     for (key, indices) in _partitiongroups(keycolumns, rows)
         directory = join((name * "=" * _hivevalue(DataAPI.unwrap(value), name)
             for (name, value) in zip(keys, key)), '/')
-        views = Tuple(view(column, indices) for column in datacolumns)
+        group = NamedTuple{Tuple(data)}(Tuple(view(column, indices)
+            for column in datacolumns))
         writer = _partitionwriter!(state, directory)
-        write(writer, NamedTuple{Tuple(data)}(views))
+        _writetable!(writer, group, group, base, indices)
         state.template === nothing && (state.template = writer)
     end
-    return
+    return rows
 end
 
 # Abstractly typed columns narrow once for the whole input, not per file.

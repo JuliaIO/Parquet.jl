@@ -80,6 +80,9 @@ unless the table says otherwise.
 | `AbstractDict`, `AbstractVector{<:Pair}` | MAP | `AbstractVector{<:Pair}` rows |
 | `Missing` only | a null column | `Missing` |
 
+STRING and ENUM values must be valid UTF-8: a string that is not fails the write with an
+error naming its column and row. Write binary data as `Vector{UInt8}` values instead.
+
 Nested values nest in any combination, with `missing` allowed at every level: a missing
 list, an empty list, and a list holding `missing` stay distinct. Map keys cannot be
 missing. A tuple's elements need one type up to `missing`; use a `NamedTuple` for a
