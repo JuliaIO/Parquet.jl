@@ -82,14 +82,14 @@ function Base.length(bytes::BufferSlice)
 end
 
 function Base.getindex(bytes::BufferSlice, index::Int)
-    (@atomic bytes.region.closed) && throw(ArgumentError("Parquet byte region is closed"))
+    (@atomic bytes.region.closed) && throw(_closederror())
     checkbounds(bytes, index)
     first = firstindex(bytes.region.bytes)
     return bytes.region.bytes[first + Int(bytes.offset) + index - 1]
 end
 
 function Base.copy(bytes::BufferSlice)
-    (@atomic bytes.region.closed) && throw(ArgumentError("Parquet byte region is closed"))
+    (@atomic bytes.region.closed) && throw(_closederror())
     return collect(bytes)
 end
 
@@ -162,12 +162,15 @@ function source(path::AbstractString; budget::_ByteBudget=_UNCAPPED)
     end
 end
 
+# Bytes are read from a closed region only through a `Parquet.File` that was closed.
+_closederror() = ArgumentError("the Parquet.File was closed; open it again to read it")
+
 function source(src::AbstractSource; budget::_ByteBudget=_UNCAPPED)
     return src
 end
 
 function sourcelength(src::MemorySource)
-    (@atomic src.region.closed) && throw(ArgumentError("Parquet byte region is closed"))
+    (@atomic src.region.closed) && throw(_closederror())
     return Int64(length(src.region.bytes))
 end
 
@@ -176,7 +179,7 @@ function concurrentreads(::MemorySource)
 end
 
 function readrange(src::MemorySource, offset::Integer, count::Integer)
-    (@atomic src.region.closed) && throw(ArgumentError("Parquet byte region is closed"))
+    (@atomic src.region.closed) && throw(_closederror())
     return BufferSlice(src.region, offset, count)
 end
 

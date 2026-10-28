@@ -58,7 +58,7 @@ function _contiguous(bytes::SubArray{UInt8,1,Vector{UInt8},Tuple{UnitRange{Int}}
 end
 
 function _contiguous(bytes::BufferSlice)
-    (@atomic bytes.region.closed) && throw(ArgumentError("Parquet byte region is closed"))
+    (@atomic bytes.region.closed) && throw(_closederror())
     first = firstindex(bytes.region.bytes) + Int(bytes.offset)
     return _contiguous(view(bytes.region.bytes, first:(first + Int(bytes.count) - 1)))
 end

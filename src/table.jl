@@ -884,6 +884,8 @@ function _readfilegroup(file::File, (index, offset, limit))
 end
 
 Base.length(file::File) = length(_filegroupsknown(file))
+Base.firstindex(::File) = 1
+Base.lastindex(file::File) = length(file)
 Base.IteratorSize(::Type{<:File}) = Base.SizeUnknown()
 Base.eltype(::Type{<:File}) = Table
 
@@ -945,10 +947,18 @@ Tables.partitions(file::File) = file
 Tables.istable(::Type{<:File}) = true
 Tables.columnaccess(::Type{<:File}) = true
 
-function Tables.columns(file::File)
-    table = _readtable(file, eachindex(file.plan.metadata.row_groups),
+Tables.columns(file::File) = Tables.columns(Table(file))
+
+"""
+    Parquet.Table(file::Parquet.File) -> Parquet.Table
+
+Every row group of `file` read into one table, with the keywords `file` was opened with.
+"""
+function Table(file::File; kw...)
+    isempty(kw) || throw(ArgumentError("Parquet.Table(file) reads with the keywords the " *
+        "Parquet.File was opened with; pass $(join(keys(kw), ", ")) to Parquet.File"))
+    return _readtable(file, eachindex(file.plan.metadata.row_groups),
         _ByteBudget(file.plan.limits))
-    return Tables.columns(table)
 end
 
 # The columns a read returns, from a read of no row groups.
@@ -1181,6 +1191,10 @@ end
 function Tables.getcolumn(table::Table, ::Type{T}, index::Int, name::Symbol) where {T}
     return getfield(_tablecolumns(table), index)
 end
+
+# As for a DataFrame: `table["name"]` is a column, and `names(table)` their names.
+Base.getindex(table::Table, name::AbstractString) = Tables.getcolumn(table, Symbol(name))
+Base.names(x::Union{File,Table}) = String[String(name) for name in Tables.columnnames(x)]
 
 function Tables.schema(table::Table)
     columns = _tablecolumns(table)

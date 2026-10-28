@@ -985,3 +985,23 @@ end
             !occursin("Not(", err.msg)
     end
 end
+
+@testset "Table and File container conveniences" begin
+    path = tempname() * ".parquet"
+    Parquet.write(path, (a=[1, 2, 3], b=["x", "y", "z"]); rowgroupsize=2)
+    table = Parquet.Table(path)
+    @test names(table) == ["a", "b"] && table["b"] == ["x", "y", "z"]
+    file = Parquet.File(path; select=[:b])
+    @test names(file) == ["b"]
+    @test Parquet.Table(file).b == ["x", "y", "z"]
+    @test_throws ArgumentError Parquet.Table(file; select=[:a])
+    @test file[end].b == ["z"] && file[begin].b == ["x", "y"] && lastindex(file) == 2
+    close(file)
+    err = try
+        file[1]
+    catch e
+        e
+    end
+    @test err isa ArgumentError && occursin("Parquet.File was closed", err.msg)
+    rm(path)
+end

@@ -3,8 +3,9 @@
 ## Read a table
 
 `Parquet.Table(source)` reads a Parquet file into columns. A table is a
-`Tables.AbstractColumns`: `table.price`, `table[:price]`, and
-`Tables.getcolumn(table, :price)` return a column, and any Tables.jl sink accepts it.
+`Tables.AbstractColumns`: `table.price`, `table[:price]`, `table["price"]`, and
+`Tables.getcolumn(table, :price)` return a column, `names(table)` lists them, and any
+Tables.jl sink accepts it.
 The table owns its columns: nothing it returns refers to the file, the byte vector, or
 the source it was read from. `Parquet.read(source, sink)` reads the same way and hands
 the columns to a sink such as `DataFrame` without copying them.
@@ -91,9 +92,9 @@ Tables.columntable(renamed)
 `Parquet.File(source)` decodes the footer and reads no column data. It takes the
 keywords of `Parquet.Table`. `Tables.schema(file)` gives the columns a read returns and
 `DataAPI.nrow(file)` the row count. Iterating the file reads one `Parquet.Table` per row
-group, so a file is its own `Tables.partitions`, and `file[i]` reads row group `i`; with
-a filter, row groups whose statistics rule it out are skipped. A path stays mapped until
-`close(file)`.
+group, so a file is its own `Tables.partitions`, `file[i]` (or `file[end]`) reads row
+group `i`, and `Parquet.Table(file)` reads them all; with a filter, row groups whose
+statistics rule it out are skipped. A path stays mapped until `close(file)`.
 
 ```@example reading
 file = Parquet.File(path; select=[:zone, :fare])
