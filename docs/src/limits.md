@@ -99,8 +99,9 @@ These are read or written in a reduced form:
 
 - VARIANT, GEOMETRY, and GEOGRAPHY values read as their storage (VARIANT's `metadata` and
   `value` bytes and any shredded `typed_value`; WKB bytes).
-- INT96 is read but not written, and the deprecated LZ4 codec and BIT_PACKED encoding
-  are read but not written; new files use `:lz4_raw` and RLE.
+- INT96 is read but not written (a rewrite stores INT64 timestamps), and the deprecated
+  LZ4 codec and BIT_PACKED encoding are read but not written; new files use `:lz4_raw`
+  and RLE.
 - `_metadata` and `_common_metadata` summary files are skipped, with every name that
   starts with `_` or `.`.
 

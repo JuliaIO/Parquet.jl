@@ -119,8 +119,18 @@ end
                 @test all(value -> value isa Parquet.Durations.Timestamp{Dates.Nanosecond},
                     values)
                 @test [Dates.value(value) for value in values] == expected
-                @test_throws Parquet.UnsupportedFeatureError Parquet.write(
-                    IOBuffer(), table)
+                # A rewrite of the table stores INT96 as an INT64 nanosecond TIMESTAMP.
+                rewrite = Parquet.Table(take!(Parquet.write(IOBuffer(), table)))
+                try
+                    @test isequal(getproperty(Parquet.Tables.columns(rewrite), column),
+                        values)
+                    element = only(element for element in
+                        Parquet._tablemetadata(rewrite).schema if element.name == String(column))
+                    @test element.type_ == Parquet.Metadata.Type.INT64
+                    @test element.logicalType.TIMESTAMP.unit.NANOS !== nothing
+                finally
+                    close(rewrite)
+                end
                 io = IOBuffer()
                 Parquet.write(io, Tables.columntable(table))
                 rewritten = Parquet.Table(take!(io))
@@ -142,6 +152,12 @@ end
         @test isequal([ismissing(value) ? missing : Dates.value(value) for value in table.a],
             [1704141296123456, 1704070800000000, 253402225200000000, 1735599600000000,
                 missing, 9089380393200000000])
+        # Read at microseconds, the rewrite stores microseconds, which hold year 290000.
+        rewrite = Parquet.Table(take!(Parquet.write(IOBuffer(), table)))
+        @test isequal(rewrite.a, table.a)
+        @test Parquet._tablemetadata(rewrite).schema[2].logicalType.TIMESTAMP.unit.MICROS !==
+            nothing
+        close(rewrite)
         close(table)
         @test_throws ArgumentError Parquet.Table(spark; int96=Dates.Second)
     else

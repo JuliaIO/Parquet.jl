@@ -142,10 +142,6 @@ function _leafspecs(schema::Schema, semantic::_NestedSchemaPlan, options::_Write
     leaves = _LeafSpec[]
     for (node, choice, bloom) in zip(schema.leaves, choices, blooms)
         element = node.element
-        element.type_ == Metadata.Type.INT96 && throw(UnsupportedFeatureError(
-            "writing INT96 is not supported; write the table's columns (for example " *
-            "Tables.columntable(table)) to store $(repr(element.name)) as an INT64 " *
-            "nanosecond TIMESTAMP"))
         push!(leaves, _LeafSpec(element, copy(node.path), Int(node.max_repetition_level),
             Int(node.max_definition_level), _statisticorder(element), choice.encoding,
             choice.dictionary, bloom, _isutf8leaf(element)))
@@ -209,7 +205,7 @@ end
 # A Parquet.Table rewrite keeps the table's stored schema exactly.
 function _storedschema(table::Table, options::_WriteOptions)
     limits = options.limits
-    elements = copy(_tablemetadata(table).schema)
+    elements = _storedelements(table)
     schema = Schema(elements; limits=limits)
     semantic = _nestedplan(schema; limits=limits)
     fragments = _writetopfields(elements)
@@ -225,6 +221,30 @@ function _storedschema(table::Table, options::_WriteOptions)
     end
     return _WriteSchema(elements, schema, semantic, fields,
         _leafspecs(schema, semantic, options), true)
+end
+
+# The schema a rewrite of `table` writes: its stored schema, except that INT96 leaves
+# (deprecated, not written) become INT64 TIMESTAMPs, not adjusted to UTC as INT96 values
+# are read, in the unit the table's INT96 columns were read in (`int96`).
+function _storedelements(table::Table)
+    elements = copy(_tablemetadata(table).schema)
+    any(element -> element.type_ == Metadata.Type.INT96, elements) || return elements
+    unit = Dates.Nanosecond
+    for (child, column) in zip(_tableschema(table).root.children, _tablecolumns(table))
+        child.element.type_ == Metadata.Type.INT96 || continue
+        T = Base.nonmissingtype(eltype(column))
+        T <: Durations.Timestamp && (unit = T.parameters[1])
+        break
+    end
+    map = something(_timestampmap(unit, false))
+    for (index, element) in enumerate(elements)
+        element.type_ == Metadata.Type.INT96 || continue
+        elements[index] = Metadata.SchemaElement(type_=map.physical,
+            repetition_type=element.repetition_type, name=element.name,
+            converted_type=map.converted, logicalType=map.logical,
+            field_id=element.field_id)
+    end
+    return elements
 end
 
 ## Binding a table's columns to the schema
@@ -678,7 +698,7 @@ function _writetable!(writer::Writer, table, source, offset::Int=0,
         _resolvemetadata!(writer, source, table, columns)
     elseif writer.schema.stored || stored
         writer.schema.stored && stored &&
-            _tablemetadata(table).schema == writer.schema.elements ||
+            _storedelements(table) == writer.schema.elements ||
             throw(ArgumentError("a Parquet.Writer that starts with a Parquet.Table " *
                 "accepts only Parquet.Table inputs with the same stored schema, and the " *
                 "reverse; write Tables.columntable(table) instead"))

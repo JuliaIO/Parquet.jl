@@ -938,10 +938,6 @@ end
 # The callable that turns a leaf's present values into physical values, and their type.
 function _leafconvert(plan::_NestedLeafPlan, value_type::Type, limits::Limits)
     element = plan.source.element
-    element.type_ == Metadata.Type.INT96 && throw(UnsupportedFeatureError(
-        "writing INT96 is not supported; write the table's columns (for example " *
-        "Tables.columntable(table)) to store $(repr(element.name)) as an INT64 " *
-        "nanosecond TIMESTAMP"))
     # Byte limits and UTF-8 are checked as values reach their pages.
     kind = _logicalkind(element)
     map = _nestedwriteleafmap(element, value_type)

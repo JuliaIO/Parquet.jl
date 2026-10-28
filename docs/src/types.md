@@ -102,9 +102,9 @@ TIME unit.
 
 A `Durations.Duration` is written as INTERVAL when its components are nonnegative, its
 time component is a whole number of milliseconds, and each component fits UInt32. INT96
-is not written (the format deprecates it). Rewriting a `Parquet.Table` that has an
-INT96 column reports an unsupported feature; write its columns instead to store them as
-INT64 timestamps.
+is not written (the format deprecates it): rewriting a `Parquet.Table` that has an INT96
+column stores it as an INT64 TIMESTAMP, not adjusted to UTC, in the unit the table was
+read with (nanoseconds, or the `int96` resolution).
 
 ## Rewriting a table
 
