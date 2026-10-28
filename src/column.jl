@@ -1012,7 +1012,8 @@ function _uniontags(output::Vector{Union{Missing,L}}) where {L}
     end
 end
 
-_uniontag(::Type{O}, ::Type{T}) where {O,T} =
+# Generated, so the tag is a constant rather than a search per page.
+@generated _uniontag(::Type{O}, ::Type{T}) where {O,T} =
     UInt8(findfirst(==(T), Base.uniontypes(O)) - 1)
 
 _filltags!(tags::Ptr{UInt8}, tag::UInt8, count::Int) =

@@ -337,12 +337,23 @@ function _nodepass!(state::_PathState, validity::Int, offsets::Int,
         repetitions::Vector{UInt16}, definitions::Vector{UInt16}, count::Int)
     path = state.path
     space = path.space[validity > 0 ? validity : offsets]
+    slot = state.slots[space + 1]
+    # Each kind of pass calls its own compiled loop: a `Val(validity > 0)` argument made
+    # the compiler split the call into a slower generic loop (about 5x per entry).
+    if offsets == 0
+        return _nodestore!(state.bits[validity].chunks, Int[], Val(true), Val(false),
+            repetitions, definitions, count, space,
+            (_entrylevel(path, space), path.level[validity], 0x0000), slot, 0)
+    end
     levels = (_entrylevel(path, space), validity > 0 ? path.level[validity] : 0x0000,
-        offsets > 0 ? path.entry[space + 1] : 0x0000)
-    return _nodestore!(validity > 0 ? state.bits[validity].chunks : UInt64[],
-        offsets > 0 ? state.offsets[offsets] : Int[], Val(validity > 0), Val(offsets > 0),
-        repetitions, definitions, count, space, levels, state.slots[space + 1],
-        offsets > 0 ? state.slots[space + 2] : 0)
+        path.entry[space + 1])
+    if validity == 0
+        return _nodestore!(UInt64[], state.offsets[offsets], Val(false), Val(true),
+            repetitions, definitions, count, space, levels, slot, state.slots[space + 2])
+    end
+    return _nodestore!(state.bits[validity].chunks, state.offsets[offsets], Val(true),
+        Val(true), repetitions, definitions, count, space, levels, slot,
+        state.slots[space + 2])
 end
 
 function _nodestore!(chunks::Vector{UInt64}, offsets::Vector{Int}, ::Val{V}, ::Val{O},
@@ -354,22 +365,23 @@ function _nodestore!(chunks::Vector{UInt64}, offsets::Vector{Int}, ::Val{V}, ::V
     chunk = (slot >> 6) + 1
     word = V && shift > 0 ? (@inbounds chunks[chunk]) & ((UInt64(1) << shift) - 1) :
         UInt64(0)
+    # Branch-free: every entry stores the next slot's offset, which stays only if the
+    # entry opens that slot (the offsets have room for one past the page's slots).
     @inbounds for index in 1:count
         repetition = repetitions[index]
         definition = definitions[index]
-        if _opens(repetition, definition, space, entrylevel)
-            slot += 1
-            if V
-                word |= UInt64(definition >= level) << shift
-                shift += 1
-                if shift == 64
-                    chunks[chunk] = word
-                    chunk += 1
-                    shift = 0
-                    word = UInt64(0)
-                end
+        opens = _opens(repetition, definition, space, entrylevel)
+        O && (offsets[slot + 1] = inner)
+        slot += opens
+        if V
+            word |= UInt64(opens & (definition >= level)) << shift
+            shift += opens
+            if shift == 64
+                chunks[chunk] = word
+                chunk += 1
+                shift = 0
+                word = UInt64(0)
             end
-            O && (offsets[slot] = inner)
         end
         O && (inner += _opens(repetition, definition, space + 1, innerlevel))
     end
