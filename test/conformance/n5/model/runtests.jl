@@ -7,6 +7,15 @@ include(joinpath(@__DIR__, "N5ConformanceModel.jl"))
 const N5 = N5ConformanceModel
 const N5_PROPERTY_CASES, N5_PROPERTY_REJECTED = N5.n5propertycases()
 
+# The property cases to check one by one: all of them, or with PARQUET_N5_CASES="k/n" the
+# cases at positions k, k + n, k + 2n, ... (counted from 0), so CI jobs can share them.
+function n5checkedcases(cases)
+    spec = get(ENV, "PARQUET_N5_CASES", "all")
+    spec == "all" && return cases
+    k, n = parse.(Int, split(spec, '/'))
+    return cases[(mod(k, n) + 1):n:end]
+end
+
 function n5frozenwriterreference(expression)
     expression isa Expr && expression.head == :. || return nothing
     length(expression.args) == 2 || return nothing
@@ -828,7 +837,7 @@ end
 end
 
 @testset "N5 256 independent and production property cases" begin
-    for case in N5_PROPERTY_CASES
+    for case in n5checkedcases(N5_PROPERTY_CASES)
         @testset "$(N5.n5propertydiagnostic(case))" begin
             @test 1 <= case.depth <= 6
             @test 1 <= case.width <= 4

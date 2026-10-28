@@ -6,7 +6,9 @@ on:
     tags: ['*']
 jobs:
   test:
-    # The suite (N5 conformance included) takes 16-30 minutes on hosted runners.
+    # Coverage recompiles the package without its precompiled code, so it runs only on the
+    # ubuntu and Julia 1 jobs. Every N5 property case runs on ubuntu Julia 1 (and in the
+    # bounds job); each other job checks one case in eight, chosen by its matrix position.
     timeout-minutes: 45
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
     runs-on: ${{ matrix.os }}
@@ -37,10 +39,15 @@ jobs:
       - uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9 # v2
       - uses: julia-actions/julia-buildpkg@e3eb439fad4f9aba7da2667e7510e4a46ebc46e1 # v1
       - uses: julia-actions/julia-runtest@6e050c8013b833b1195105ff2fce9cd802f53271 # v1
+        with:
+          coverage: ${{ matrix.os == 'ubuntu-latest' || matrix.version == '1' }}
         env:
           JULIA_NUM_THREADS: 4
+          PARQUET_N5_CASES: ${{ matrix.os == 'ubuntu-latest' && matrix.version == '1' && 'all' || format('{0}/8', strategy.job-index) }}
       - uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38 # v1
+        if: matrix.os == 'ubuntu-latest' || matrix.version == '1'
       - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+        if: matrix.os == 'ubuntu-latest' || matrix.version == '1'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
