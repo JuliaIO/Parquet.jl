@@ -63,11 +63,14 @@ Parquet.write("out.parquet", table;
 
 Each column chunk and each page records its minimum, maximum, and null count, and the
 page index stores the per-page bounds where readers find them without reading pages.
-`Parquet.Table(path; filter)`, DuckDB, and Polars use them to skip row groups and pages.
-`statistics=false` leaves out the statistics, the column orders, and the column index;
-`pageindex=false` leaves out the page index. A bound longer than
-`Parquet.Limits().max_statistics_value_bytes` (4096 bytes) drops that chunk's minimum and
-maximum, and page-index bounds of byte arrays are truncated to 64 bytes.
+`Parquet.Table(path; filter)`, pyarrow, DuckDB, and Polars use them to skip row groups and
+pages. Float bounds follow the rules pyarrow writes by: NaN is never a bound (a chunk of
+only NaN has none, and a chunk with a page of only NaN has no column index), a zero
+minimum is -0.0, and a zero maximum is +0.0. `statistics=false` leaves out the
+statistics, the column orders, and the column index; `pageindex=false` leaves out the
+page index. A bound longer than `Parquet.Limits().max_statistics_value_bytes` (4096
+bytes) drops that chunk's minimum and maximum, and page-index bounds of BYTE_ARRAY
+columns are truncated to 64 bytes (strings between characters).
 
 `bloomfilter=true` writes a split-block bloom filter for every column chunk except
 BOOLEAN ones, and `bloomfilter=[:customer_id]` for the named columns. A reader uses a filter
