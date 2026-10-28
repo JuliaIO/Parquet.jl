@@ -1,3 +1,4 @@
+import ArrowTypes
 function jsonbytes(value::AbstractString)
     return collect(codeunits(value))
 end
@@ -153,4 +154,17 @@ end
     bytes = take!(Parquet.write(IOBuffer(), (doc=Parquet.JSONValue.(["[]", "{}"]),)))
     @test Parquet.Table(bytes).doc == Parquet.JSONValue.(["[]", "{}"])
     @test sprint(show, value) == "Parquet.JSONValue(\"{\\\"a\\\": [1, 2]}\")"
+end
+
+@testset "JSON and BSON values in Arrow" begin
+    # With ArrowTypes loaded (as Arrow.jl loads it), Arrow.write stores a JSON column as the
+    # canonical arrow.json extension over its text and a BSON column as plain binary.
+    json = Parquet.JSONValue("{\"a\": 1}")
+    @test ArrowTypes.ArrowType(Parquet.JSONValue) === String
+    @test ArrowTypes.toarrow(json) == "{\"a\": 1}"
+    @test ArrowTypes.arrowname(Parquet.JSONValue) === Symbol("arrow.json")
+    bson = Parquet.BSONValue(UInt8[0x05, 0x00, 0x00, 0x00, 0x00])
+    @test ArrowTypes.ArrowType(Parquet.BSONValue) === Vector{UInt8}
+    @test ArrowTypes.toarrow(bson) == UInt8[0x05, 0x00, 0x00, 0x00, 0x00]
+    @test !ArrowTypes.hasarrowname(Parquet.BSONValue)
 end
