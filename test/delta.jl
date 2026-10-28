@@ -203,12 +203,13 @@ end
         encoded = Parquet.encode_delta_binary_packed(values)
         @test encoded[headerlength + 1] == mindelta && encoded[(headerlength + 2):end] == UInt8[0x00, 0x00, 0x00, 0x00]
     end
-    # INT32 streams must stay within 32 bits: 33-bit miniblocks and header values of 2^32 or more
-    # in magnitude are rejected, while smaller header values (DuckDB writes UINT32 columns' first
-    # values and minimum deltas unsigned) add modulo 2^32
+    # INT32 streams add modulo 2^32: 33-bit miniblocks (DuckDB's V2 writer does not wrap its
+    # deltas) and header values below 2^32 in magnitude (DuckDB writes UINT32 columns' first
+    # values and minimum deltas unsigned) read as their low 32 bits; larger header values
+    # are rejected
     wide = referencedelta(Int64, Int64[0, typemax(Int32), typemin(Int32)])
     @test Parquet.decode_delta_binary_packed(Int64, wide, 3)[1] == Int64[0, typemax(Int32), typemin(Int32)]
-    @test_throws Parquet.FormatError Parquet.decode_delta_binary_packed(Int32, wide, 3)
+    @test Parquet.decode_delta_binary_packed(Int32, wide, 3)[1] == Int32[0, typemax(Int32), typemin(Int32)]
     for values in (Int64[Int64(2)^31], Int64[-Int64(2)^31 - 1], Int64[0, -Int64(2)^31 - 5], Int64[0, Int64(2)^31])
         @test Parquet.decode_delta_binary_packed(Int32, referencedelta(Int64, values), length(values))[1] == values .% Int32
     end
@@ -224,9 +225,11 @@ end
     unused = vcat(deltaheaderbytes(128, 4, 3, Int64(1)), UInt8[0x02, 0x00, 0xff, 0xff, 0xff])
     @test Parquet.decode_delta_binary_packed(Int64, unused, 3) == (Int64[1, 2, 3], length(unused) + 1)
     @test Parquet.decode_delta_binary_packed(Int32, unused, 3) == (Int32[1, 2, 3], length(unused) + 1)
-    # a used miniblock still validates its width against the physical type
+    # a used miniblock still validates its width (up to 64 bits, also for INT32, whose
+    # 33-bit miniblocks add modulo 2^32)
     @test_throws Parquet.FormatError Parquet.decode_delta_binary_packed(Int64, vcat(deltaheaderbytes(128, 4, 3, Int64(1)), UInt8[0x02, 0xff, 0x00, 0x00, 0x00]), 3)
-    @test_throws Parquet.FormatError Parquet.decode_delta_binary_packed(Int32, vcat(deltaheaderbytes(128, 4, 3, Int64(1)), UInt8[0x02, 0x21, 0x00, 0x00, 0x00], zeros(UInt8, 132)), 3)
+    @test_throws Parquet.FormatError Parquet.decode_delta_binary_packed(Int32, vcat(deltaheaderbytes(128, 4, 3, Int64(1)), UInt8[0x02, 0x41, 0x00, 0x00, 0x00], zeros(UInt8, 260)), 3)
+    @test Parquet.decode_delta_binary_packed(Int32, vcat(deltaheaderbytes(128, 4, 3, Int64(1)), UInt8[0x02, 0x21, 0x00, 0x00, 0x00], zeros(UInt8, 132)), 3)[1] == Int32[1, 2, 3]
     @test Parquet.decode_delta_binary_packed(Int64, vcat(deltaheaderbytes(128, 4, 3, Int64(1)), UInt8[0x02, 0x21, 0x00, 0x00, 0x00], zeros(UInt8, 132)), 3)[1] == Int64[1, 2, 3]
     # padding bits of a partially used miniblock are arbitrary
     padded = vcat(deltaheaderbytes(128, 4, 3, Int64(1)), UInt8[0x02, 0x01, 0xff, 0xff, 0xff, 0xfc, 0xff, 0xff, 0xff])
@@ -443,4 +446,14 @@ end
         @test values == [Vector{UInt8}(codeunits("apple_banana_mango$((index - 1)^2)")) for index in 1:1000]
         @test Parquet.decode_delta_length_byte_array(Parquet.encode_delta_length_byte_array(values), count)[1] == values
     end
+end
+
+@testset "DuckDB V2 INT32 columns with 33-bit delta miniblocks" begin
+    # DuckDB 1.5.5 (parquet_version v2) writes random INTEGER and large UINTEGER values with
+    # deltas that need 33 bits; the expected values are DuckDB's own reading of the file.
+    table = Parquet.Table(joinpath(@__DIR__, "fixtures", "duckdb_delta_int32.parquet"))
+    @test sum(Int64, table.x) == -11494611605 && sum(Int64, table.u) == 654322026634
+    @test table.x[1:5] == Int32[-2147483648, 1623253200, -538197422, -1552935226, 457868028]
+    @test table.u[1:5] == UInt32[0, 864237642, 3557914420, 3553173683, 3267879698]
+    @test table.x[end] == 523661019 && table.u[end] == 3269441634
 end

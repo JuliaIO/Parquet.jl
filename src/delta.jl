@@ -101,14 +101,6 @@ function _readdeltaheader(bytes::AbstractVector{UInt8}, offset::Int, count::Int,
     return DeltaHeader(blocksize, miniblocks, miniblockvalues, total, first), position
 end
 
-function _deltawidth(::Type{Int64})
-    return 64
-end
-
-function _deltawidth(::Type{Int32})
-    return 32
-end
-
 function _deltavalue(::Type{Int64}, accumulator::UInt64)
     return reinterpret(Int64, accumulator)
 end
@@ -179,8 +171,10 @@ function _readminiblockwidths!(widths::Vector{UInt8}, bytes::AbstractVector{UInt
     return offset + length(widths)
 end
 
+# INT32 deltas can need up to 33 bits (DuckDB's V2 writer does not wrap them at 32);
+# values are summed in 64 bits and keep their low 32 (`_deltavalue`).
 function _miniblockwidth(::Type{T}, width::UInt8) where {T}
-    width <= _deltawidth(T) || throw(FormatError("delta miniblock bit width $width exceeds the physical width $(_deltawidth(T))"))
+    width <= 64 || throw(FormatError("delta miniblock bit width $width exceeds 64"))
     return Int(width)
 end
 
