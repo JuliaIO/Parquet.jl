@@ -185,3 +185,22 @@ end
     @test collect(Parquet.Tables.columns(
         Parquet.Table(Parquet._encodefile(plainmaps))).m) == [["a" => 1], Pair{String,Int}[]]
 end
+
+@testset "nested values and columns are read-only" begin
+    table = Parquet.Table(take!(Parquet.write(IOBuffer(),
+        (l=[[1, 2], [3]], s=[(a=1,), (a=2,)], m=[Dict("k" => 1), Dict("j" => 2)]))))
+    for (x, name) in ((table.l[1], "ListValue"), (table.m[1], "MapValue"),
+            (table.l, "ListVector"), (table.s, "StructVector"), (table.m, "MapVector"))
+        for mutate! in (x -> push!(x, first(x)), x -> (x[1] = first(x)), x -> append!(x, x))
+            err = try
+                mutate!(x)
+            catch e
+                e
+            end
+            @test err isa ArgumentError && occursin("Parquet.$name is read-only", err.msg)
+        end
+    end
+    row = copy(table.l[1])
+    push!(row, 9)
+    @test row == [1, 2, 9] && table.l[1] == [1, 2]
+end

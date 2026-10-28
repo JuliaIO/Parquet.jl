@@ -141,3 +141,16 @@ end
     allocations = @allocated jsonwritehitslimit(element, largevalue, earlydepth)
     @test allocations < length(large) ÷ 4
 end
+
+@testset "JSONValue from text" begin
+    value = Parquet.JSONValue("{\"a\": [1, 2]}")
+    @test string(value) == "{\"a\": [1, 2]}"
+    @test value == Parquet.JSONValue(codeunits("{\"a\": [1, 2]}"))
+    @test_throws ArgumentError Parquet.JSONValue("{\"a\": ")
+    @test_throws Parquet.LimitError Parquet.JSONValue("[1]";
+        limits=Parquet.Limits(max_string_bytes=2))
+    # A column of them writes as JSON and reads back.
+    bytes = take!(Parquet.write(IOBuffer(), (doc=Parquet.JSONValue.(["[]", "{}"]),)))
+    @test Parquet.Table(bytes).doc == Parquet.JSONValue.(["[]", "{}"])
+    @test sprint(show, value) == "Parquet.JSONValue(\"{\\\"a\\\": [1, 2]}\")"
+end

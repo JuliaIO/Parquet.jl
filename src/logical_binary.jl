@@ -1,12 +1,13 @@
 import UUIDs
 
 """
+    Parquet.JSONValue(text::AbstractString; limits=Parquet.Limits())
     Parquet.JSONValue(bytes::AbstractVector{UInt8}; limits=Parquet.Limits())
 
-A JSON document kept as its UTF-8 bytes, the values of a JSON column. The bytes are
-copied and checked to hold one JSON value (an `ArgumentError` otherwise), without
-building objects from them. `string(value)` is the document text; a column of
-`JSONValue`s writes as a JSON column.
+A JSON document kept as its UTF-8 text, the values of a JSON column. The text is copied
+and checked to hold one JSON value (an `ArgumentError` otherwise), without building
+objects from it. `string(value)` is the document text; a column of `JSONValue`s writes
+as a JSON column: `Parquet.write(io, (doc=Parquet.JSONValue.(["{\"a\":1}", "[]"]),))`.
 """
 struct JSONValue
     bytes::Base.CodeUnits{UInt8,String}
@@ -22,6 +23,9 @@ struct JSONValue
         return new(codeunits(String(bytes)))
     end
 end
+
+JSONValue(text::AbstractString; limits::Limits=Limits()) =
+    JSONValue(codeunits(String(text)); limits=limits)
 
 """
     Parquet.BSONValue(bytes::AbstractVector{UInt8}; limits=Parquet.Limits())

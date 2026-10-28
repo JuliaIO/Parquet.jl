@@ -43,6 +43,17 @@ Parquet.UnsupportedFeatureError
 Parquet.LimitError
 ```
 
+## Nested values
+
+```@docs
+Parquet.ListValue
+Parquet.MapValue
+Parquet.StructValue
+Parquet.ListVector
+Parquet.StructVector
+Parquet.MapVector
+```
+
 ## Logical values
 
 ```@docs

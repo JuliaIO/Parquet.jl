@@ -62,16 +62,29 @@ end
 # through that type: column types take only their element type as a parameter, however
 # deep the schema.
 
-# A row of a list column: a read-only view of `values[first:last]`, where `values` is the
-# column's element vector (a `_columntype(T)`). `copy(row)` gives a `Vector{T}`.
+# A list row views `values[first:last]` of its column's element vector (a
+# `_columntype(T)`).
+"""
+    Parquet.ListValue{T} <: AbstractVector{T}
+
+A row of a list column: a read-only view of one list's elements, which indexes and
+iterates like a `Vector{T}`. `copy(row)` gives a `Vector{T}` of them.
+"""
 struct ListValue{T} <: AbstractVector{T}
     values::Any
     first::Int
     last::Int
 end
 
-# A row of a map column: its entries as ordered `key => value` pairs (duplicate keys are
-# kept; `Dict(row)` keeps the last). `keys` and `values` are the column's entry vectors.
+# A map row views `keys[first:last]` and `values[first:last]` of its column's entry
+# vectors.
+"""
+    Parquet.MapValue{K,V} <: AbstractVector{Pair{K,V}}
+
+A row of a map column: a read-only view of the map's `key => value` entries in file
+order, duplicate keys included. `Dict(row)` builds a dictionary (the last duplicate
+wins), and `copy(row)` gives a `Vector{Pair{K,V}}`.
+"""
 struct MapValue{K,V} <: AbstractVector{Pair{K,V}}
     keys::Any
     values::Any
@@ -79,10 +92,14 @@ struct MapValue{K,V} <: AbstractVector{Pair{K,V}}
     last::Int
 end
 
-# A row of a struct column whose field names repeat or number more than
-# `_MAX_NAMEDTUPLE_FIELDS`, or that holds more than `_MAX_ROW_DEPTH` levels of nested
-# values: its fields as `name => value` pairs. `row[name]` looks a field up by name.
-# Other struct rows are `NamedTuple`s.
+"""
+    Parquet.StructValue <: AbstractVector{Pair{String,Any}}
+
+A row of a struct column whose field names repeat or number more than 64, or that holds
+more than 32 levels of nested values: its fields as read-only `name => value` pairs, in
+schema order. `row["name"]` (or `row[:name]`) looks a field up. Other struct rows are
+`NamedTuple`s.
+"""
 struct StructValue <: AbstractVector{Pair{String,Any}}
     names::Vector{String}
     children::Vector{AbstractVector}
@@ -97,6 +114,13 @@ const _MAX_ROW_DEPTH = 32
 # Row `i` is `missing` where `validity[i]` is false, else the `ListValue` of
 # `values[(offsets[i] + 1):offsets[i + 1]]`. `validity` is empty when `T` excludes
 # `missing`.
+"""
+    Parquet.ListVector{T} <: AbstractVector{T}
+
+A list column as a read returns it: row `i` is a [`Parquet.ListValue`](@ref), or
+`missing` when `T` allows it. The column is read-only; `copy(column)` gives a `Vector`
+of its rows.
+"""
 struct ListVector{T} <: AbstractVector{T}
     offsets::Vector{Int}
     validity::BitVector
@@ -105,6 +129,14 @@ end
 
 # Row `i` is `missing` where `validity[i]` is false, else the row built from element `i`
 # of each child (one vector per field, `length` long).
+"""
+    Parquet.StructVector{T} <: AbstractVector{T}
+
+A struct column as a read returns it: row `i` is a `NamedTuple` (or a
+[`Parquet.StructValue`](@ref)) built from the fields' values when it is accessed, or
+`missing` when `T` allows it. The column is read-only; `copy(column)` gives a `Vector`
+of its rows.
+"""
 struct StructVector{T} <: AbstractVector{T}
     names::Vector{String}
     children::Vector{AbstractVector}
@@ -114,6 +146,12 @@ end
 
 # Row `i` is `missing` where `validity[i]` is false, else the `MapValue` of entries
 # `(offsets[i] + 1):offsets[i + 1]` of `keys` and `values`.
+"""
+    Parquet.MapVector{T} <: AbstractVector{T}
+
+A map column as a read returns it: row `i` is a [`Parquet.MapValue`](@ref), or `missing`
+when `T` allows it. The column is read-only; `copy(column)` gives a `Vector` of its rows.
+"""
 struct MapVector{T} <: AbstractVector{T}
     offsets::Vector{Int}
     validity::BitVector
@@ -150,6 +188,14 @@ _nesteddepth(column::StructVector, limit::Int) = limit <= 0 ? 1 :
 
 Base.IndexStyle(::Type{<:Union{ListValue,MapValue,StructValue}}) = IndexLinear()
 Base.IndexStyle(::Type{<:Union{ListVector,StructVector,MapVector}}) = IndexLinear()
+
+# `push!`, `append!`, and the like go through `resize!` and `setindex!`.
+const _ReadOnlyNested = Union{ListValue,MapValue,StructValue,ListVector,StructVector,
+    MapVector}
+_readonly(x) = throw(ArgumentError("a Parquet.$(nameof(typeof(x))) is read-only; " *
+    "copy(x) gives a Vector that can change"))
+Base.setindex!(x::_ReadOnlyNested, value, ::Int) = _readonly(x)
+Base.resize!(x::_ReadOnlyNested, ::Integer) = _readonly(x)
 
 Base.size(row::Union{ListValue,MapValue}) = (row.last - row.first + 1,)
 Base.size(row::StructValue) = (length(row.names),)

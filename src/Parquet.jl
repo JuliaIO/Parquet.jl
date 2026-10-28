@@ -71,7 +71,8 @@ export write_parquet
 
 if VERSION >= v"1.11"
     Core.eval(@__MODULE__, Expr(:public, :AbstractSource, :BSONValue, :Dataset, :Decimal, :File,
-        :FormatError, :JSONValue, :LimitError, :Limits, :LogicalColumn, :Table,
+        :FormatError, :JSONValue, :LimitError, :Limits, :ListValue, :ListVector,
+        :LogicalColumn, :MapValue, :MapVector, :StructValue, :StructVector, :Table,
         :UnsupportedFeatureError, :Writer, :col, :colcmp, :colin, :concurrentreads,
         :isnull, :metadata, :read, :readrange, :sourcelength, :write))
 end

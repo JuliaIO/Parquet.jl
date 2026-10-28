@@ -112,15 +112,18 @@ paths, byte vectors, and `IO`s do.
 
 ## Nested columns
 
-Lists, structs, and maps read as typed rows:
+Lists, structs, and maps read as typed rows, in [`Parquet.ListVector`](@ref),
+[`Parquet.StructVector`](@ref), and [`Parquet.MapVector`](@ref) columns:
 
-- A list row is a read-only `AbstractVector{T}` view of the column's elements;
-  `copy(row)` gives a `Vector{T}`.
+- A list row is a [`Parquet.ListValue{T}`](@ref Parquet.ListValue), a read-only
+  `AbstractVector{T}` view of the column's elements; `copy(row)` gives a `Vector{T}`.
 - A struct row is a `NamedTuple` of its fields, so `row.field` is type-stable. A struct
   whose field names repeat or number more than 64, or that holds more than 32 levels of
-  nested values, reads as `name => value` pairs instead; `row["name"]` looks one up.
-- A map row is the map's `key => value` pairs in file order, duplicate keys included;
-  `Dict(row)` builds a dictionary (the last duplicate wins).
+  nested values, reads as a [`Parquet.StructValue`](@ref) of `name => value` pairs
+  instead; `row["name"]` looks one up.
+- A map row is a [`Parquet.MapValue{K,V}`](@ref Parquet.MapValue): the map's
+  `key => value` pairs in file order, duplicate keys included; `Dict(row)` builds a
+  dictionary (the last duplicate wins).
 
 `T` includes `Missing` only when the schema allows null elements, and a null list,
 struct, or map reads as `missing`. Copies and subsets of a nested column (`copy`,
