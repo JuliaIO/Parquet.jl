@@ -184,17 +184,11 @@ function _writemap(::Type{T}) where {T<:AbstractString}
         converted=Metadata.ConvertedType.UTF8)
 end
 
-function _writemap(::Type{T}) where {T<:Union{Symbol,Char}}
+# An @enum value writes its name.
+function _writemap(::Type{T}) where {T<:Union{Symbol,Char,Enum}}
     return _WriteMap(String, Metadata.Type.BYTE_ARRAY, _AsString();
         logical=Metadata.LogicalType(STRING=Metadata.StringType()),
         converted=Metadata.ConvertedType.UTF8)
-end
-
-# An @enum value writes its name.
-function _writemap(::Type{T}) where {T<:Enum}
-    return _WriteMap(String, Metadata.Type.BYTE_ARRAY, _AsString();
-        logical=Metadata.LogicalType(ENUM=Metadata.EnumType()),
-        converted=Metadata.ConvertedType.ENUM)
 end
 
 function _writemap(::Type{T}) where {T<:AbstractVector{UInt8}}

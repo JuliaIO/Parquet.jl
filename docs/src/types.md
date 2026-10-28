@@ -64,7 +64,7 @@ unless the table says otherwise.
 | Julia element type | Parquet column | Reads back as |
 |:--|:--|:--|
 | `Bool`, `Int8`-`Int64`, `UInt8`-`UInt64`, `Float16`, `Float32`, `Float64` | BOOLEAN, INT32/INT64 (with an INT annotation below 32 bits and for unsigned types), FLOAT16, FLOAT, DOUBLE | the same type |
-| `AbstractString`, `Symbol`, `Char` | STRING | `DataStrings.DataString` |
+| `AbstractString`, `Symbol`, `Char`, `@enum` values (their names) | STRING | `DataStrings.DataString` |
 | `Vector{UInt8}`, `DataStrings.DataBytes` | BYTE_ARRAY | `DataStrings.DataBytes` |
 | `NTuple{N,UInt8}` | FIXED_LEN_BYTE_ARRAY(N) | `NTuple{N,UInt8}` |
 | `UUID` | UUID | `UUID` |

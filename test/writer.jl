@@ -474,7 +474,8 @@ end
         o=Union{Missing,WRColor}[missing, wrgreen])))
     @test wrcolumn(bytes, :c) == ["wrred", "wrblue"]
     @test isequal(wrcolumn(bytes, :o), [missing, "wrgreen"])
-    @test wrmetadata(bytes).schema[2].logicalType.ENUM !== nothing
+    # STRING, which pyarrow reads as strings (it reads ENUM as binary).
+    @test wrmetadata(bytes).schema[2].logicalType.STRING !== nothing
 end
 
 @testset "a column that is only missing takes its type from a later table" begin
