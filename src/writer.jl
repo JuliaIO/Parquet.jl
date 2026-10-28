@@ -59,7 +59,9 @@ function _writeoptions(; compress=:snappy, compresslevel::Union{Nothing,Integer}
         colmetadata=nothing, nullable::Union{Nothing,Bool}=nothing,
         limits::Limits=Limits(), codec=nothing,
         compressionlevel::Union{Nothing,Integer}=nothing, unknown...)
-    isempty(unknown) || _unknownwritekeywords(collect(keys(unknown)))
+    # Behind `_barrier`: building the message joins strings through code that loading
+    # CategoricalArrays invalidates.
+    isempty(unknown) || _barrier(_unknownwritekeywords, collect(keys(unknown)))
     if codec !== nothing
         Base.depwarn("the `codec` keyword is deprecated; use `compress`", :write)
         compress = codec
@@ -816,13 +818,11 @@ function _retypenullcolumns!(writer::Writer, columns)
         end
         element = schema.leaves[field.leaf].element
         logical = element.logicalType
-        if logical !== nothing && logical.UNKNOWN !== nothing && eltype(values) !== Missing
-            _flatwritable(values) || throw(ArgumentError("column $(repr(name)) was only " *
-                "missing in the first table, so it was written as a null column, which " *
-                "cannot become nested; give it its type in the first table, for example " *
-                "Union{Missing,Vector{Int}}[missing, ...]"))
-            element = _flatelement(name, values, true, options.limits)
-            push!(retyped, index)
+        if logical !== nothing && logical.UNKNOWN !== nothing
+            # The column's type is known at run time.
+            typed = _barrier(_nullcolumnelement, name, values,
+                options.limits)::Union{Nothing,Metadata.SchemaElement}
+            typed === nothing || (element = typed; push!(retyped, index))
         end
         push!(elements, element)
     end
@@ -834,14 +834,22 @@ function _retypenullcolumns!(writer::Writer, columns)
         type = leaves[index].element.type_
         meta = record.meta
         meta.type_ == type && continue
-        fields = fieldnames(Metadata.ColumnMetaData)
-        meta = Metadata.ColumnMetaData(; NamedTuple{fields}(map(name -> name === :type_ ?
-            type : getfield(meta, name), fields))...)
-        group.chunks[index] = _ChunkRecord(meta, record.columnindex, record.offsetindex,
-            record.bloom)
+        group.chunks[index] = _ChunkRecord(_withfields(meta; type_=type),
+            record.columnindex, record.offsetindex, record.bloom)
     end
     writer.schema = _WriteSchema(elements, tree, semantic, schema.fields, leaves, false)
     return retyped
+end
+
+# The element of a null column that a later table's `values` give a scalar type, or
+# `nothing` while they are only missing.
+function _nullcolumnelement(name::String, values::AbstractVector, limits::Limits)
+    eltype(values) === Missing && return nothing
+    _flatwritable(values) || throw(ArgumentError("column $(repr(name)) was only " *
+        "missing in the first table, so it was written as a null column, which " *
+        "cannot become nested; give it its type in the first table, for example " *
+        "Union{Missing,Vector{Int}}[missing, ...]"))
+    return _flatelement(name, values, true, limits)
 end
 
 # A job encodes a run of consecutive fields of one row group: a large field alone, small
