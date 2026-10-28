@@ -489,19 +489,17 @@ function _nestedwritedecimalcheck(element::Metadata.SchemaElement, value,
         BigInt(DataDecimals.unscaled(value)), DataDecimals.scale(value)))
     value isa Decimal || throw(ArgumentError(
         "DECIMAL field $(repr(element.name)) contains a non-Decimal value"))
-    precision, scale = something(_decimalparameters(element))
+    _, scale = something(_decimalparameters(element))
     value.scale == scale || throw(ArgumentError(
         "DECIMAL field $(repr(element.name)) requires scale $scale, got " *
         "$(value.scale)"))
-    _checkdecimalvalue(value.unscaled, precision, element.name)
+    unscaled = value.unscaled
     physical = element.type_
     if physical == Metadata.Type.INT32
-        typemin(Int32) <= value.unscaled <= typemax(Int32) || throw(ArgumentError(
-            "DECIMAL value does not fit in INT32"))
+        typemin(Int32) <= unscaled <= typemax(Int32) || _decimalfiterror(unscaled, "INT32")
         return
     elseif physical == Metadata.Type.INT64
-        typemin(Int64) <= value.unscaled <= typemax(Int64) || throw(ArgumentError(
-            "DECIMAL value does not fit in INT64"))
+        typemin(Int64) <= unscaled <= typemax(Int64) || _decimalfiterror(unscaled, "INT64")
         return
     end
     width = physical == Metadata.Type.FIXED_LEN_BYTE_ARRAY ?

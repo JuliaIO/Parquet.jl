@@ -826,12 +826,19 @@ end
             Parquet._encodefile((d=values,); pageversion, dictionary))
         table = Parquet.Table(wide)
         @test table.d == reinterpret.(Parquet.DataDecimals.Decimal{10,2,Int64}, values)
+        # A rewrite keeps such values (compaction), from the table and from its columns.
+        for rewritten in (table, Tables.columntable(table))
+            @test isequal(Parquet.Table(take!(Parquet.write(IOBuffer(), rewritten))).d,
+                table.d)
+        end
         close(table)
         values = Int64[1, -99_999, 100_000, typemin(Int32)]
         narrow = rewritelogicalschema(decimal(5, 2),
             Parquet._encodefile((d=values,); pageversion, dictionary))
         @test Parquet.Table(narrow).d ==
             reinterpret.(Parquet.DataDecimals.Decimal{5,2,Int32}, Int32.(values))
+        @test Parquet.Table(take!(Parquet.write(IOBuffer(), Parquet.Table(narrow)))).d ==
+            Parquet.Table(narrow).d
         toolarge = rewritelogicalschema(decimal(5, 2),
             Parquet._encodefile((d=Int64[1, typemax(Int32) + 1],); pageversion, dictionary))
         @test_throws Parquet.UnsupportedFeatureError Parquet.Table(toolarge)

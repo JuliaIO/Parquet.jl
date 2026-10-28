@@ -347,11 +347,16 @@ end
 
     wrongscale = Parquet.LogicalColumn(
         Parquet.Decimal[Parquet.Decimal(1, 3)], :decimal; precision=9, scale=2)
+    # More digits than the precision write as stored when INT32 holds them.
     excessdigits = Parquet.LogicalColumn(
         Parquet.Decimal[Parquet.Decimal(1_000_000_000, 2)], :decimal;
         precision=9, scale=2)
+    toolarge = Parquet.LogicalColumn(
+        Parquet.Decimal[Parquet.Decimal(big(2)^31, 2)], :decimal; precision=9, scale=2)
     @test_throws ArgumentError Parquet._encodefile((value=wrongscale,))
-    @test_throws ArgumentError Parquet._encodefile((value=excessdigits,))
+    @test Parquet.DataDecimals.unscaled(only(Parquet.Table(
+        Parquet._encodefile((value=excessdigits,))).value)) == 1_000_000_000
+    @test_throws ArgumentError Parquet._encodefile((value=toolarge,))
 
     invalid = String(UInt8[0xff])
     @test !isvalid(invalid)

@@ -100,11 +100,16 @@ function _decimaldigits(value::BigInt)
     return ndigits(abs(value); base=10)
 end
 
-function _checkdecimalvalue(value::BigInt, precision::Int32, name::String)
-    digits = _decimaldigits(value)
-    digits <= precision && return
-    throw(ArgumentError("DECIMAL column $(repr(name)) contains a $digits-digit value " *
-        "for precision $precision"))
+# Writes keep a coefficient with more digits than the precision, as pyarrow does, so a
+# file read and written again keeps such values; only one its storage cannot hold fails.
+@noinline _decimalfiterror(unscaled, storage) = throw(ArgumentError(
+    "DECIMAL value with coefficient $unscaled does not fit in $storage"))
+
+# Whether `value` fits `width` bytes of two's complement.
+function _fitsbytes(value::Integer, width::Int)
+    width >= sizeof(value) && return true
+    bound = one(value) << (8width - 1)
+    return -bound <= value < bound
 end
 
 function _contiguousdecimalbytes(bytes::AbstractVector{UInt8})
@@ -232,27 +237,23 @@ function _toparquetdecimal(element::Metadata.SchemaElement, value, limits::Limit
     value isa DataDecimals.AbstractDecimal && (value = Decimal(BigInt(DataDecimals.unscaled(value)), DataDecimals.scale(value)))
     value isa Decimal || throw(ArgumentError(
         "DECIMAL column $(repr(element.name)) contains a non-Decimal value"))
-    precision, scale = something(_decimalparameters(element))
+    _, scale = something(_decimalparameters(element))
     value.scale == scale || throw(ArgumentError(
         "DECIMAL column $(repr(element.name)) requires scale $scale, got $(value.scale)"))
+    unscaled = value.unscaled
     physical = element.type_
     if physical == Metadata.Type.INT32
-        _checkdecimalvalue(value.unscaled, precision, element.name)
-        typemin(Int32) <= value.unscaled <= typemax(Int32) || throw(ArgumentError(
-            "DECIMAL value does not fit in INT32"))
-        return Int32(value.unscaled)
+        typemin(Int32) <= unscaled <= typemax(Int32) || _decimalfiterror(unscaled, "INT32")
+        return Int32(unscaled)
     elseif physical == Metadata.Type.INT64
-        _checkdecimalvalue(value.unscaled, precision, element.name)
-        typemin(Int64) <= value.unscaled <= typemax(Int64) || throw(ArgumentError(
-            "DECIMAL value does not fit in INT64"))
-        return Int64(value.unscaled)
+        typemin(Int64) <= unscaled <= typemax(Int64) || _decimalfiterror(unscaled, "INT64")
+        return Int64(unscaled)
     end
     width = physical == Metadata.Type.FIXED_LEN_BYTE_ARRAY ?
-        Int(element.type_length) : _twoscomplementwidth(value.unscaled)
+        Int(element.type_length) : _twoscomplementwidth(unscaled)
     _checklimit(:decimal_bytes, width, limits.max_decimal_bytes)
     _checklimit(:string_bytes, width, limits.max_string_bytes)
-    _checkdecimalvalue(value.unscaled, precision, element.name)
-    return _totwoscomplement(value.unscaled, width)
+    return _totwoscomplement(unscaled, width)
 end
 
 function _decimallogicalvalue(kind::Symbol, element::Metadata.SchemaElement, value,
@@ -280,18 +281,16 @@ end
 # without a BigInt; other values take the general path above.
 function _toparquetdecimal(element::Metadata.SchemaElement,
         value::DataDecimals.Decimal{P,S,T}) where {P,S,T}
-    precision, scale = something(_decimalparameters(element))
+    _, scale = something(_decimalparameters(element))
     S == scale || return nothing
-    unscaled = DataDecimals.unscaled(value)
-    bound = precision >= P ? _decimalbound(T, Val(P)) : T(10)^precision
-    -bound < unscaled < bound || throw(ArgumentError("DECIMAL column " *
-        "$(repr(element.name)) contains a value with more than $(min(P, precision)) digits"))
     physical = element.type_
-    physical == Metadata.Type.INT32 && return Int32(unscaled)
-    physical == Metadata.Type.INT64 && return Int64(unscaled)
+    physical == Metadata.Type.INT32 && return _DecimalInt{Int32}()(value)
+    physical == Metadata.Type.INT64 && return _DecimalInt{Int64}()(value)
     physical == Metadata.Type.FIXED_LEN_BYTE_ARRAY || return nothing
     width = Int(element.type_length)
     width <= sizeof(T) || return nothing
+    unscaled = DataDecimals.unscaled(value)
+    _fitsbytes(unscaled, width) || _decimalfiterror(unscaled, "$width signed bytes")
     bytes = Vector{UInt8}(undef, width)
     for index in 1:width
         bytes[index] = (unscaled >> (8 * (width - index))) % UInt8

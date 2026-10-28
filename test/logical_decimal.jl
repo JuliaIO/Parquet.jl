@@ -163,8 +163,13 @@ end
         UInt8[0x00, 0x00, 0x00, 0x80]
     @test_throws ArgumentError Parquet._toparquetdecimal(
         int32, Parquet.Decimal(1, 3), Parquet.Limits())
+    # More digits than the precision write as stored when the physical type holds them.
+    @test Parquet._toparquetdecimal(int32, Parquet.Decimal(1_000_000_000, 2),
+        Parquet.Limits()) === Int32(1_000_000_000)
+    wide = reinterpret(Parquet.DataDecimals.Decimal{18,6,Int64}, typemax(Int64))
+    @test Parquet._toparquetdecimal(int64, wide, Parquet.Limits()) === typemax(Int64)
     @test_throws ArgumentError Parquet._toparquetdecimal(
-        int32, Parquet.Decimal(1_000_000_000, 2), Parquet.Limits())
+        int32, Parquet.Decimal(big(2)^31, 2), Parquet.Limits())
     @test_throws Parquet.FormatError Parquet._fromparquetdecimal(
         fixed, UInt8[0x01], Parquet.Limits())
     @test_throws Parquet.FormatError Parquet._fromparquetdecimal(

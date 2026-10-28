@@ -49,7 +49,9 @@ elements are `Union{Missing,T}`.
   as stored, as pyarrow and DuckDB read it, when the column's storage integer holds it: a
   DECIMAL(10, 2) column on INT64 holds any INT64. A value its storage integer cannot
   hold, such as 10^12 in a DECIMAL(9, 2) column on INT64 (stored in `Int32`), throws
-  `Parquet.UnsupportedFeatureError`; `drop` the column to read the rest.
+  `Parquet.UnsupportedFeatureError`; `drop` the column to read the rest. Writes keep such
+  values when the column's Parquet type holds them, as pyarrow does, so a file read and
+  written again keeps them; a value it cannot hold is an `ArgumentError` naming the column.
 - An INTERVAL value with more than 2^31 - 1 months or days throws
   `Parquet.UnsupportedFeatureError`, and so does a TIME of 24:00:00, which `Dates.Time`
   cannot hold; `drop` the column to read the rest.

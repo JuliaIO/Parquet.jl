@@ -159,6 +159,14 @@ const CASES = [
         num=repeat([1, 2, 1, missing, 3, 1], 200),
     ),
 ]
+# Decimals with more digits than their precision, as some writers store them; the tools
+# read them as stored.
+const WIDE_DECIMALS = (
+    d5=Union{Missing,Dec{5,2,Int32}}[decimal(Dec{5,2,Int32}, Int32(v))
+        for v in (typemax(Int32), -100_000, 1)],
+    d10=[decimal(Dec{10,2,Int64}, v) for v in (typemax(Int64), typemin(Int64), 0)],
+    d20=[decimal(Dec{20,0,Int128}, v) for v in (Int128(10)^20 + 5, -Int128(10)^20, 1)],
+)
 const PARTITIONED = (
     id=collect(ROWS),
     k=[i % 2 for i in ROWS],
@@ -184,10 +192,15 @@ function writeall(directory)
         metadata=["owner" => "interop"], colmetadata=Dict(:i8 => ["unit" => "count"]))
     save("metadata", merge(canontable(CASES[1][2]), Dict("metadata" => Dict("owner" =>
         "interop"), "colmetadata" => Dict("i8" => Dict("unit" => "count")))))
+    # Read and written again (compaction), such decimals stay as stored.
+    source = tempname()
+    Parquet.write(source, WIDE_DECIMALS)
+    Parquet.write(joinpath(directory, "decimal_rewrite.parquet"), Parquet.Table(source))
+    save("decimal_rewrite", canontable(WIDE_DECIMALS))
     Parquet.write(joinpath(directory, "partitioned"), PARTITIONED; partitionby=KEYS)
     names = [filter(!in(KEYS), collect(keys(PARTITIONED))); KEYS]
     save("partitioned", canontable(NamedTuple{Tuple(names)}(PARTITIONED)))
-    println("Parquet.jl wrote $(length(CASES) * 2 + 2) cases")
+    println("Parquet.jl wrote $(length(CASES) * 2 + 3) cases")
     return 0
 end
 

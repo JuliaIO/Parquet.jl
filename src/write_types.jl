@@ -99,31 +99,24 @@ function _intervaltuple(months::UInt32, days::UInt32, milliseconds::UInt32)
     return (m..., d..., s...)
 end
 
-# A decimal's unscaled storage, narrowed to the leaf's INT32 or INT64. `reinterpret`
-# can build a Decimal{P} whose coefficient has more than P digits, so each value is
-# checked against 10^P before it is stored.
-struct _DecimalInt{T,P} end
-function (::_DecimalInt{T,P})(x::DataDecimals.Decimal) where {T,P}
-    _checkdecimaldigits(x, Val(P))
-    return DataDecimals.unscaled(x) % T
+# A decimal's unscaled storage, narrowed to the leaf's INT32 or INT64. A coefficient with
+# more digits than the precision (files hold them, and `reinterpret` builds them) is kept
+# when the leaf holds it (`_decimalfiterror`).
+struct _DecimalInt{T} end
+function (::_DecimalInt{T})(x::DataDecimals.Decimal) where {T}
+    unscaled = DataDecimals.unscaled(x)
+    typemin(T) <= unscaled <= typemax(T) ||
+        _decimalfiterror(unscaled, T === Int32 ? "INT32" : "INT64")
+    return unscaled % T
 end
 
 # A decimal's unscaled storage as W big-endian two's complement bytes.
-struct _DecimalBytes{W,P} end
-function (::_DecimalBytes{W,P})(x::DataDecimals.Decimal) where {W,P}
-    _checkdecimaldigits(x, Val(P))
-    return _bigendianbytes(DataDecimals.unscaled(x), Val(W))
-end
-
-@inline function _checkdecimaldigits(x::DataDecimals.Decimal, ::Val{P}) where {P}
+struct _DecimalBytes{W} end
+function (::_DecimalBytes{W})(x::DataDecimals.Decimal) where {W}
     unscaled = DataDecimals.unscaled(x)
-    bound = _decimalbound(typeof(unscaled), Val(P))
-    -bound < unscaled < bound || throw(ArgumentError(
-        "DECIMAL($P) value with coefficient $unscaled has more than $P digits"))
-    return
+    _fitsbytes(unscaled, W) || _decimalfiterror(unscaled, "$W signed bytes")
+    return _bigendianbytes(unscaled, Val(W))
 end
-
-@generated _decimalbound(::Type{T}, ::Val{P}) where {T,P} = T(10)^P
 
 struct _TaggedBytes end
 (::_TaggedBytes)(x::Union{JSONValue,BSONValue}) = x.bytes
@@ -258,13 +251,13 @@ function _writemap(::Type{DataDecimals.Decimal{P,S,T}}) where {P,S,T}
         precision=Int32(P)))
     keywords = (; logical=logical, converted=Metadata.ConvertedType.DECIMAL,
         scale=Int32(S), precision=Int32(P))
-    P <= 9 && return _WriteMap(Int32, Metadata.Type.INT32, _DecimalInt{Int32,P}();
+    P <= 9 && return _WriteMap(Int32, Metadata.Type.INT32, _DecimalInt{Int32}();
         keywords...)
-    P <= 18 && return _WriteMap(Int64, Metadata.Type.INT64, _DecimalInt{Int64,P}();
+    P <= 18 && return _WriteMap(Int64, Metadata.Type.INT64, _DecimalInt{Int64}();
         keywords...)
     width = _decimalwritewidth(Int32(P), Limits())
     return _WriteMap(NTuple{Int(width),UInt8}, Metadata.Type.FIXED_LEN_BYTE_ARRAY,
-        _DecimalBytes{Int(width),P}(); type_length=width, keywords...)
+        _DecimalBytes{Int(width)}(); type_length=width, keywords...)
 end
 
 _writemap(::Type{JSONValue}) = _WriteMap(fieldtype(JSONValue, :bytes),

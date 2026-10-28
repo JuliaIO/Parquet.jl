@@ -210,10 +210,18 @@ end
     @test leaf.logicalType.DECIMAL.precision == 38 && leaf.logicalType.DECIMAL.scale == 4
     @test WTDec.unscaled.(wtvalues(bytes, :small)) == [1, -2, 99999]
     @test WTDec.unscaled.(wtvalues(bytes, :wide)) == Int128[1, -2, 10^20]
-    toolarge = reinterpret(WTDec.Decimal{3,0,Int32}, Int32[5000])
+    # A coefficient with more digits than the precision writes as stored when the Parquet
+    # type holds it; one it cannot hold names the column.
+    stored = reinterpret(WTDec.Decimal{3,0,Int32}, Int32[5000])
+    @test WTDec.unscaled.(wtvalues(wtwrite((amount=stored,)), :amount)) == [5000]
+    toolarge = reinterpret(WTDec.Decimal{3,0,Int64}, Int64[10^12])
     err = wterror(() -> wtwrite((amount=toolarge,)))
     @test err isa ArgumentError && occursin("\"amount\"", err.msg) &&
-        occursin("more than 3 digits", err.msg)
+        occursin("does not fit in INT32", err.msg)
+    toowide = reinterpret(WTDec.Decimal{20,0,Int128}, [Int128(2)^100])
+    err = wterror(() -> wtwrite((amount=toowide,)))
+    @test err isa ArgumentError && occursin("\"amount\"", err.msg) &&
+        occursin("does not fit in 9 signed bytes", err.msg)
 end
 
 @testset "write ecosystem types inside nested columns" begin
