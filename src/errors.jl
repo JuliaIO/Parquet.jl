@@ -150,27 +150,42 @@ function _schemanamecharge(name::String, maximum::Int64)
         :schema_name_bytes)
 end
 
-function _validatetablenames(names::AbstractVector{String})
-    seen = Set{String}()
+# `names` with each repeat of a name suffixed `_1`, `_2`, ... (skipping names already
+# taken), as CSV.jl and DuckDB name repeated columns.
+function _uniquenames(names::AbstractVector{String})
+    allunique(names) && return names
+    taken = Set{String}(names)
+    next = Dict{String,Int}()
+    unique = String[]
     for name in names
-        occursin('\0', name) && throw(UnsupportedFeatureError(
-            "Parquet.Table cannot represent a top-level field name containing NUL; " *
-            "use Parquet.File for low-level access"))
-        name in seen && throw(UnsupportedFeatureError(
-            "Parquet.Table requires unique top-level field names; " *
-            "use Parquet.File for low-level access"))
-        push!(seen, name)
+        if haskey(next, name)
+            k = next[name]
+            while "$(name)_$k" in taken
+                k += 1
+            end
+            next[name] = k + 1
+            renamed = "$(name)_$k"
+            push!(taken, renamed)
+            push!(unique, renamed)
+        else
+            next[name] = 1
+            push!(unique, name)
+        end
     end
-    return
+    return unique
 end
 
-# Interns validated names as Symbols. `max_schema_name_bytes` bounds the new name bytes
-# ONE operation may intern, not the process-global total: interned Symbols are immortal,
-# so charging every operation against a shared lifetime cap would let a single hostile
-# file exhaust it and deny every later file that carries any not-yet-interned name. The
-# registry still tracks the global total as an observability metric.
+# Interns top-level field names (unique, see `_uniquefields`) as Symbols.
+# `max_schema_name_bytes` bounds the new name bytes ONE operation may intern, not the
+# process-global total: interned Symbols are immortal, so charging every operation against
+# a shared lifetime cap would let a single hostile file exhaust it and deny every later
+# file that carries any not-yet-interned name. The registry still tracks the global total
+# as an observability metric.
 function _internschemanames(names::AbstractVector{String}, limits::Limits)
-    _validatetablenames(names)
+    for name in names
+        occursin('\0', name) && throw(UnsupportedFeatureError(
+            "Parquet.Table cannot represent a top-level field name containing NUL"))
+    end
     registry = _SCHEMA_NAME_REGISTRY
     lock(registry.lock)
     try

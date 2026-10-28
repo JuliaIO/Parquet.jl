@@ -325,18 +325,29 @@ function _selectfields(metadata::Metadata.FileMetaData, schema::Schema,
     selected = Metadata.SchemaElement[_withfields(first(elements);
         num_children=Int32(length(positions)))]
     leaves = Int[]
+    # The chunk paths of a renamed field start with its new name.
+    renamed = Dict{Int,String}()
     for (position, name) in zip(positions, names)
         range = elementranges[position]
-        push!(selected, _withfields(elements[first(range)]; name=name))
+        element = elements[first(range)]
+        push!(selected, _withfields(element; name=name))
         append!(selected, @view elements[(first(range) + 1):last(range)])
+        if element.name != name
+            for offset in eachindex(leafranges[position])
+                renamed[length(leaves) + offset] = name
+            end
+        end
         append!(leaves, leafranges[position])
     end
     groups = map(enumerate(metadata.row_groups)) do (rowindex, group)
         length(group.columns) == leafcount || throw(FormatError(
             "row group $rowindex has $(length(group.columns)) columns for " *
             "$leafcount schema leaves"))
-        return _withfields(group; columns=group.columns[leaves],
-            sorting_columns=nothing)
+        columns = group.columns[leaves]
+        for (index, name) in renamed
+            columns[index] = _renamedchunk(columns[index], name)
+        end
+        return _withfields(group; columns=columns, sorting_columns=nothing)
     end
     orders = metadata.column_orders
     if orders !== nothing
@@ -347,6 +358,24 @@ function _selectfields(metadata::Metadata.FileMetaData, schema::Schema,
     selectedmetadata = _withfields(metadata; schema=selected, row_groups=groups,
         column_orders=orders)
     return selectedmetadata, Schema(selected; limits=limits)
+end
+
+# `chunk` with the first component of its column path replaced by `name`.
+function _renamedchunk(chunk::Metadata.ColumnChunk, name::String)
+    md = chunk.meta_data
+    (md === nothing || isempty(md.path_in_schema)) && return chunk
+    path = copy(md.path_in_schema)
+    path[1] = name
+    return _withfields(chunk; meta_data=_withfields(md; path_in_schema=path))
+end
+
+# File metadata and schema whose top-level fields have unique names: a repeated name
+# gets a suffix (`_uniquenames`), and its column chunks' paths follow.
+function _uniquefields(metadata::Metadata.FileMetaData, schema::Schema, limits::Limits)
+    names = String[node.element.name for node in schema.root.children]
+    unique = _uniquenames(names)
+    unique === names && return metadata, schema
+    return _selectfields(metadata, schema, collect(eachindex(names)), unique, limits)
 end
 
 function _isflattableplan(plan::_NestedSchemaPlan)
@@ -507,6 +536,7 @@ function _openfile(input, cached::Union{Nothing,Tuple{Footer,Metadata.FileMetaDa
                 FormatError("the file changed after its footer was read"))
         end
         schema = Schema(metadata; limits=limits)
+        metadata, schema = _uniquefields(metadata, schema, limits)
         if cached === nothing
             _validatetablerowgroups(metadata, schema, limits)
             _validatetablechunkranges(metadata, schema, footer.offset)

@@ -240,10 +240,41 @@ end
     @test_throws Parquet.FormatError Parquet._logicalvalues(node, [UInt8[0xff]])
 end
 
+@testset "repeated column names read as name_1, name_2" begin
+    bytes = take!(Parquet.write(IOBuffer(), (a=[1, 2], b=["x", "y"], c=[[3.0], [4.0]])))
+    n = length(bytes)
+    start = n - 8 - Int(Parquet._readu32le(bytes, n - 7))
+    metadata = Parquet.Thrift.decode(view(bytes, (start + 1):(n - 8)),
+        Parquet.Metadata.FileMetaData)
+    # As pyarrow writes a table whose columns share a name: every chunk path says "a".
+    rename(element) = element.name in ("b", "c") ? Parquet._withfields(element; name="a") :
+        element
+    groups = map(metadata.row_groups) do group
+        Parquet._withfields(group; columns=map(group.columns) do chunk
+            path = copy(chunk.meta_data.path_in_schema)
+            path[1] = "a"
+            Parquet._withfields(chunk;
+                meta_data=Parquet._withfields(chunk.meta_data; path_in_schema=path))
+        end)
+    end
+    footer = Parquet.Thrift.encode(Parquet._withfields(metadata;
+        schema=map(rename, metadata.schema), row_groups=groups, key_value_metadata=nothing))
+    repeated = vcat(bytes[1:start], footer,
+        reinterpret(UInt8, [htol(UInt32(length(footer)))]), b"PAR1")
+    table = Parquet.Table(repeated)
+    @test Tables.columnnames(table) == (:a, :a_1, :a_2)
+    @test table.a == [1, 2] && table.a_1 == ["x", "y"] && table.a_2 == [[3.0], [4.0]]
+    @test Parquet.Table(repeated; select=[2]).a_1 == ["x", "y"]
+    @test Parquet.Table(repeated; select=[:a_1, :a],
+        filter=Parquet.colcmp(==, Parquet.col(:a_1), "y")).a == [2]
+    @test Tables.columnnames(Parquet.File(repeated)[1]) == (:a, :a_1, :a_2)
+    @test Tables.columnnames(Parquet.Table(take!(Parquet.write(IOBuffer(), table)))) ==
+        (:a, :a_1, :a_2)
+end
+
 @testset "table name validation rollback and precedence" begin
     required = Parquet.Metadata.FieldRepetitionType.REQUIRED
-    for (names, message) in ((("duplicate", "duplicate"), "unique"),
-            (("valid", "nul\0name"), "containing NUL"))
+    for (names, message) in ((("valid", "nul\0name"), "containing NUL"),)
         elements = Parquet.Metadata.SchemaElement[
             Parquet.Metadata.SchemaElement(name="root", num_children=Int32(2)),
             Parquet.Metadata.SchemaElement(name=names[1],

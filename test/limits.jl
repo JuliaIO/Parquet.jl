@@ -46,10 +46,16 @@ end
     @test Parquet._internedschemanamebytes() == before + charge + secondcharge
 
     @test_throws Parquet.UnsupportedFeatureError Parquet._internschemanames(
-        String["duplicate", "duplicate"], Parquet.Limits())
-    @test_throws Parquet.UnsupportedFeatureError Parquet._internschemanames(
         String["nul\0name"], Parquet.Limits())
     @test Parquet._internedschemanamebytes() == before + charge + secondcharge
+end
+
+@testset "repeated top-level names are made unique" begin
+    @test Parquet._uniquenames(["a", "b"]) == ["a", "b"]
+    @test Parquet._uniquenames(["a", "a", "b", "a"]) == ["a", "a_1", "b", "a_2"]
+    # A suffix never takes a name the file already has.
+    @test Parquet._uniquenames(["a", "a", "a_1"]) == ["a", "a_2", "a_1"]
+    @test Parquet._uniquenames(["a_1", "a", "a"]) == ["a_1", "a", "a_2"]
 end
 
 @testset "wide schemas read under default limits" begin
@@ -96,8 +102,7 @@ end
             err isa Parquet.LimitError || exit(12)
         end
         Parquet._internedschemanamebytes() == 0 || exit(13)
-        for invalid in (String["duplicate", "duplicate"],
-                String["valid", "nul\0name"])
+        for invalid in (String["valid", "nul\0name"],)
             try
                 Parquet._internschemanames(invalid,
                     Parquet.Limits(max_schema_name_bytes=0))
@@ -206,16 +211,10 @@ end
 @testset "schema-name validation preflight" begin
     before = Parquet._internedschemanamebytes()
     first = "__parquet_new_name_rejected_before_set_growth__"
-    names = fill(first, 100_000)
     limits = Parquet.Limits(max_schema_name_bytes=0)
     @test_throws Parquet.UnsupportedFeatureError Parquet._internschemanames(
-        names, limits)
+        String[first, "nul\0name"], limits)
     @test Parquet._internedschemanamebytes() == before
-    for invalid in (String[first, first], String["nul\0name"])
-        @test_throws Parquet.UnsupportedFeatureError Parquet._internschemanames(
-            invalid, limits)
-        @test Parquet._internedschemanamebytes() == before
-    end
 
     firstatomic = "__parquet_atomic_batch_first__"
     secondatomic = "__parquet_atomic_batch_second__"

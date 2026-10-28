@@ -28,7 +28,8 @@ df = Parquet.read(path, DataFrame)
 A path, a byte vector, an `IO`, a [`Parquet.AbstractSource`](@ref), or (with
 CloudStore.jl loaded) a `CloudStore.Object` is a source; a directory, a glob pattern, or
 a vector of sources reads a [dataset](@ref Datasets). Column types are listed under
-[Type mapping](@ref).
+[Type mapping](@ref). Columns that share a name read as `a`, `a_1`, `a_2`, and so on, as
+CSV.jl and DuckDB name them.
 
 ## Choose columns and rows
 
