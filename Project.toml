@@ -27,16 +27,18 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 [weakdeps]
 CloudStore = "3365d9ee-d53b-4a56-812d-5344d5b716d7"
 SentinelArrays = "91c51154-3ec4-41a3-a24f-3f23e20d615c"
+TimeZones = "f269a46b-ccf7-5d73-abea-4c690281aa53"
 
 [extensions]
 ParquetCloudStoreExt = "CloudStore"
 ParquetSentinelArraysExt = "SentinelArrays"
+ParquetTimeZonesExt = "TimeZones"
 
 [compat]
 Base64 = "1"
 DataDecimals = "1"
 DataStrings = "1"
-Durations = "1"
+Durations = "1.4"
 ChunkCodecCore = "1"
 ChunkCodecLibBrotli = "1"
 ChunkCodecLibLz4 = "1"
@@ -53,6 +55,7 @@ PooledArrays = "1"
 PrecompileTools = "1"
 SentinelArrays = "1"
 Tables = "1.14"
+TimeZones = "1"
 julia = "1.10"
 
 [extras]
@@ -66,6 +69,7 @@ SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 SentinelArrays = "91c51154-3ec4-41a3-a24f-3f23e20d615c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+TimeZones = "f269a46b-ccf7-5d73-abea-4c690281aa53"
 
 [targets]
-test = ["CSV", "CategoricalArrays", "CloudBaseTest", "CloudStore", "PooledArrays", "Random", "SHA", "SentinelArrays", "Test", "TOML"]
+test = ["CSV", "CategoricalArrays", "CloudBaseTest", "CloudStore", "PooledArrays", "Random", "SHA", "SentinelArrays", "Test", "TOML", "TimeZones"]

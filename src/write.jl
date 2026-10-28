@@ -305,10 +305,15 @@ end
 function _writeinputcolumn(name::String, values::AbstractVector)
     pooled = _pooledcolumn(values)
     pooled === nothing || return pooled
-    _writedeclared(eltype(values)) && return values
     # Compiled only for the columns that need it, not with every column type's write.
-    return _narrowwritecolumn(name, Base.inferencebarrier(values))
+    _writedeclared(eltype(values)) ||
+        (values = _narrowwritecolumn(name, Base.inferencebarrier(values)))
+    return _writeextensioncolumn(name, values)
 end
+
+# Extensions convert columns of their packages' types to types this package writes
+# (ParquetTimeZonesExt: ZonedDateTime to Durations.ZonedTimestamp).
+_writeextensioncolumn(name::String, values::AbstractVector) = values
 
 """
     _PooledColumn{T}

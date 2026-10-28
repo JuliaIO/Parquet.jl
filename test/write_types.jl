@@ -2,6 +2,7 @@ using Test
 using Dates
 import Tables
 using CSV, CategoricalArrays, PooledArrays, SentinelArrays
+import TimeZones
 
 const WTMD = Parquet.Metadata
 const WTD = Parquet.Durations
@@ -251,4 +252,28 @@ end
     finally
         rm(path; force=true)
     end
+end
+
+@testset "ZonedDateTime columns write as UTC timestamps with their zone" begin
+    zone = TimeZones.TimeZone("America/New_York")
+    times = [TimeZones.ZonedDateTime(2024, 1, 1, 9, zone),
+        TimeZones.ZonedDateTime(2024, 7, 1, 9, 30, zone)]
+    table = Parquet.Table(wtwrite((t=times, o=[missing; times[2:2]])))
+    try
+        Z = Symbol("America/New_York")
+        @test eltype(table.t) == WTD.ZonedTimestamp{Millisecond,Z}
+        @test eltype(table.o) == Union{Missing,WTD.ZonedTimestamp{Millisecond,Z}}
+        @test [value.utc for value in table.t] ==
+            [WTD.ZonedTimestamp{Millisecond,Z}(time).utc for time in times]
+        @test isequal(table.o[1], missing)
+        element = Parquet._tablemetadata(table).schema[2]
+        @test element.logicalType.TIMESTAMP.isAdjustedToUTC
+    finally
+        close(table)
+    end
+    mixed = [times[1], TimeZones.ZonedDateTime(2024, 1, 1, 9, TimeZones.tz"UTC")]
+    @test_throws "column \"t\" holds ZonedDateTime values in time zones" wtwrite((t=mixed,))
+    # A column of only missing stays a null column.
+    @test Tables.schema(Parquet.Table(wtwrite((n=[missing, missing],)))).types ==
+        (Missing,)
 end

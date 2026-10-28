@@ -161,6 +161,7 @@ end
 # Abstractly typed columns narrow once for the whole input, not per file.
 function _partitioncolumn(name::String, values)
     values isa AbstractVector || throw(ArgumentError("Parquet columns must be vectors"))
-    (DataAPI.refpool(values) !== nothing || _writedeclared(eltype(values))) && return values
-    return _narrowwritecolumn(name, Base.inferencebarrier(values))
+    DataAPI.refpool(values) === nothing && !_writedeclared(eltype(values)) &&
+        (values = _narrowwritecolumn(name, Base.inferencebarrier(values)))
+    return _writeextensioncolumn(name, values)
 end

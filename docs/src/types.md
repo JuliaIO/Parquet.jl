@@ -72,6 +72,7 @@ unless the table says otherwise.
 | `DateTime` | TIMESTAMP(MILLIS) | `Durations.Timestamp{Millisecond}` |
 | `Durations.Timestamp{P}` | TIMESTAMP in unit `P` (`Second` as milliseconds) | `Durations.Timestamp{P}` |
 | `Durations.ZonedTimestamp{P,Z}` | TIMESTAMP adjusted to UTC; the zone goes in the ARROW:schema | `Durations.ZonedTimestamp{P,Z}` |
+| `TimeZones.ZonedDateTime` (with TimeZones loaded), one zone per column | TIMESTAMP(MILLIS) adjusted to UTC; the zone goes in the ARROW:schema | `Durations.ZonedTimestamp{Millisecond,Z}` |
 | `Nanosecond`-`Second`; `Minute`-`Week` | INT64 count of the unit; of seconds | the same type; `Second` |
 | `Month`, `Year`, `Durations.Duration` | INTERVAL | `Durations.Duration` |
 | `DataDecimals.Decimal{P,S}` | DECIMAL(P,S) on INT32, INT64, or FIXED_LEN_BYTE_ARRAY | the same type |
