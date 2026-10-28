@@ -869,7 +869,7 @@ end
 
 function _writecodec(codec::Symbol)
     name = Symbol(lowercase(String(codec)))
-    name === :uncompressed && return Metadata.CompressionCodec.UNCOMPRESSED
+    name in (:uncompressed, :none) && return Metadata.CompressionCodec.UNCOMPRESSED
     name === :snappy && return Metadata.CompressionCodec.SNAPPY
     name === :gzip && return Metadata.CompressionCodec.GZIP
     name === :brotli && return Metadata.CompressionCodec.BROTLI
@@ -877,7 +877,8 @@ function _writecodec(codec::Symbol)
     name === :lz4_raw && return Metadata.CompressionCodec.LZ4_RAW
     name === :lz4 && return Metadata.CompressionCodec.LZ4_RAW
     name === :lzo && return _writecodec(Metadata.CompressionCodec.LZO)
-    throw(ArgumentError("unknown Parquet compression codec $(repr(codec))"))
+    throw(ArgumentError("unknown Parquet compression codec $(repr(codec)); use :snappy, " *
+        ":zstd, :gzip, :lz4, :brotli, or nothing"))
 end
 
 function _writecodec(codec::AbstractString)

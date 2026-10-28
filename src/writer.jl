@@ -34,13 +34,32 @@ function _writepagesize(value)
     return Int64(value)
 end
 
+# pyarrow's and Polars' names for write keywords, for the unknown-keyword error.
+const _WRITE_KEYWORD_ALIASES = Dict(:compression => :compress,
+    :compression_level => :compresslevel, :row_group_size => :rowgroupsize,
+    :use_dictionary => :dictionary, :data_page_size => :pagesize,
+    :data_page_version => :pageversion, :write_statistics => :statistics,
+    :write_page_index => :pageindex, :partition_cols => :partitionby,
+    :partition_by => :partitionby)
+
+@noinline function _unknownwritekeywords(names)
+    listed = join((haskey(_WRITE_KEYWORD_ALIASES, name) ?
+        "`$name` (use `$(_WRITE_KEYWORD_ALIASES[name])`)" : "`$name`" for name in names), ", ")
+    throw(ArgumentError("unknown write keyword$(length(names) == 1 ? "" : "s") $listed. " *
+        "The keywords are compress, compresslevel, dictionary, encoding, bloomfilter, " *
+        "rowgroupsize, pagesize, pageversion, statistics, pageindex, checksum, ntasks, " *
+        "metadata, colmetadata, and limits, plus partitionby and existing for " *
+        "Parquet.write and nullable for Parquet.Writer"))
+end
+
 function _writeoptions(; compress=:snappy, compresslevel::Union{Nothing,Integer}=nothing,
         dictionary::Bool=true, encoding=nothing, bloomfilter=false, rowgroupsize=1_048_576,
         pagesize=1024 * 1024, pageversion=:v1, statistics::Bool=true, pageindex::Bool=true,
         checksum::Bool=false, ntasks::Integer=Threads.nthreads(), metadata=nothing,
         colmetadata=nothing, nullable::Union{Nothing,Bool}=nothing,
         limits::Limits=Limits(), codec=nothing,
-        compressionlevel::Union{Nothing,Integer}=nothing)
+        compressionlevel::Union{Nothing,Integer}=nothing, unknown...)
+    isempty(unknown) || _unknownwritekeywords(collect(keys(unknown)))
     if codec !== nothing
         Base.depwarn("the `codec` keyword is deprecated; use `compress`", :write)
         compress = codec

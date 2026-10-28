@@ -190,6 +190,14 @@ end
         if entry.key != "ARROW:schema"] == [("owner", "me")]
 end
 
+@testset "unknown write keywords and pyarrow's spellings" begin
+    @test_throws "unknown write keyword `compression` (use `compress`). The keywords are" Parquet.write(
+        IOBuffer(), (a=[1],); compression=:zstd)
+    @test_throws "`row_group_size` (use `rowgroupsize`), `color`" Parquet.Writer(IOBuffer();
+        row_group_size=10, color=:red)
+    @test wrcolumn(take!(Parquet.write(IOBuffer(), (a=[1],); compress=:none)), :a) == [1]
+end
+
 @testset "write metadata keywords and DataAPI defaults" begin
     table = WRMetaTable((id=[1, 2], name=["a", "b"]),
         Dict("source" => "test", "ARROW:schema" => "stale"),
