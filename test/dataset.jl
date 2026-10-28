@@ -35,8 +35,10 @@ plainvalues(column) = [value isa Parquet.DataStrings.DataString ? String(value) 
         @test eltype(table.year) == Int64
         @test table.year == [2024, 2024, 2024, 2025, 2025, 2025, 2025]
         @test eltype(table.city) == Union{Missing,Parquet.DataStrings.DataString}
-        @test isequal(plainvalues(table.city), ["New York", "New York", missing, missing,
+        # `city=` is the empty string, as pyarrow, Polars, and DuckDB read it.
+        @test isequal(plainvalues(table.city), ["New York", "New York", missing, "",
             "Zürich", "Zürich", "Zürich"])
+        @test Parquet.Table(dir; filter=Parquet.colcmp(==, Parquet.col(:city), "")).id == [7]
         @test plainvalues(table.s)[7] == "a much longer string value"
 
         ds = Parquet.Dataset(dir)
@@ -60,6 +62,16 @@ plainvalues(column) = [value isa Parquet.DataStrings.DataString ? String(value) 
             @test eltype(t.b) == Bool && t.b == [true, false]
             @test eltype(t.n) == Int64 && t.n == [10, -3]
             @test plainvalues(t.m) == ["1", "a"]
+        end
+        # An empty value makes a key a string column, as in pyarrow and DuckDB.
+        mktempdir() do empty
+            dswrite(empty, "y=2024/e=/x.parquet", (id=[1],))
+            dswrite(empty, "y=/e=/x.parquet", (id=[2],))
+            dswrite(empty, "y=__HIVE_DEFAULT_PARTITION__/e=/x.parquet", (id=[3],))
+            t = Parquet.Table(empty)
+            @test eltype(t.y) == Union{Missing,Parquet.DataStrings.DataString}
+            @test t.id == [2, 1, 3] && isequal(plainvalues(t.y), ["", "2024", missing])
+            @test eltype(t.e) == Parquet.DataStrings.DataString && plainvalues(t.e) == fill("", 3)
         end
     end
 end

@@ -19,8 +19,9 @@ A directory named `key=value` below the dataset's root, as pyarrow's
 
 - The column is `Int64`, `Float64`, `Dates.Date`, or `Bool` (`true` and `false`), the
   first of these that every value of the key parses as, and otherwise a string
-  (`DataStrings.DataString`). Values are percent-decoded, and an empty value or
-  `__HIVE_DEFAULT_PARTITION__` reads as `missing`.
+  (`DataStrings.DataString`). Values are percent-decoded, `__HIVE_DEFAULT_PARTITION__`
+  reads as `missing`, and an empty value is the string `""` (so `year=` next to
+  `year=2024` makes `year` a string column), as in pyarrow and DuckDB.
 - Partition columns follow the files' columns. A file column of the same name is
   replaced by the partition values, as pyarrow, Polars, and DuckDB do.
 - A filter on a partition column skips the files whose values rule it out.

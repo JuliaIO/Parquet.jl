@@ -32,8 +32,9 @@ are skipped in directories and patterns. The keywords are those of
   typed `Int64`, `Float64`, `Dates.Date`, or `Bool`, the first that all of its values
   parse as, or else a string (`DataStrings.DataString`); it follows the files' columns
   unless the files have a column of that name, whose values it replaces (as pyarrow,
-  Polars, and DuckDB do). An empty value or `__HIVE_DEFAULT_PARTITION__` reads as
-  `missing`. `partitioning=nothing` reads the files' columns only.
+  Polars, and DuckDB do). `__HIVE_DEFAULT_PARTITION__` reads as `missing`, and an empty
+  value as the string `""`, as in pyarrow, Polars, and DuckDB.
+  `partitioning=nothing` reads the files' columns only.
 - Columns match by name across files. A column some files lack is `missing` in their
   rows; a column whose element type differs between files is an `ArgumentError`.
 - A filter skips the files whose partition values rule it out, and row groups and pages
@@ -265,7 +266,7 @@ function _hivepartitions(paths::Vector{Union{Nothing,String}}, base)
             key = segment[1:(equals - 1)]
             value = _unescapeuri(segment[(equals + 1):end])
             key in keys || push!(keys, key)
-            found[index][key] = isempty(value) || value == _HIVE_DEFAULT ? nothing : value
+            found[index][key] = value == _HIVE_DEFAULT ? nothing : value
         end
     end
     return keys, [Union{Nothing,String}[get(entries, key, nothing) for key in keys]

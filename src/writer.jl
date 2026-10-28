@@ -1051,12 +1051,13 @@ Keywords and defaults (pyarrow's):
 - `partitionby`: column names; `sink` is then a directory that gets a Hive-style dataset
   (`sink/year=2024/month=1/part-0.parquet`), with one file per distinct key holding that
   key's rows without the key columns. Keys are integers, floats, Bools, `Date`s, or
-  strings, percent-encoded as pyarrow does; `missing` is `__HIVE_DEFAULT_PARTITION__` (an
-  empty string, as in pyarrow, reads back as `missing`). A non-empty `sink` is an error
-  unless `existing=:delete_matching`, which first deletes the partitions the write
-  produces and keeps the others. Each input partition adds row groups to its keys' files;
-  at most 128 files are open at once, so a key may continue in `part-1.parquet` and so
-  on. Files appear complete or not at all, but a failed write can leave some written.
+  strings, percent-encoded as pyarrow does; `missing` is `__HIVE_DEFAULT_PARTITION__`,
+  and an empty string is an empty value (`key=`) that reads back as `""`. A non-empty
+  `sink` is an error unless `existing=:delete_matching`, which first deletes the
+  partitions the write produces and keeps the others. Each input partition adds row
+  groups to its keys' files; at most 128 files are open at once, so a key may continue
+  in `part-1.parquet` and so on. Files appear complete or not at all, but a failed write
+  can leave some written.
 
 Writing a `Parquet.Table` keeps its stored schema and file key-value metadata, except the
 entries that describe the source's schema (`ARROW:schema`, which is generated again,

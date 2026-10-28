@@ -46,8 +46,8 @@ wpsorted(table) = (order = sortperm(collect(table.id)); map(c -> collect(c)[orde
     @test file.id == [1, 8]
     back = wpsorted(Parquet.Table(dir))
     @test back.id == data.id && back.value == data.value && back.day == data.day
-    # An empty string reads back as missing, as pyarrow writes and reads it.
-    @test isequal(back.s, ["a/b c", "a/b c", "%=", "é", missing, missing, "~x_.y-", "a/b c"])
+    # An empty string round-trips, as in pyarrow, Polars, and DuckDB.
+    @test isequal(back.s, data.s)
     @test isequal(back.flag, data.flag)
 
     typed = joinpath(root, "typed")
