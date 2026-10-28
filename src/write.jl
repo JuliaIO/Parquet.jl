@@ -306,7 +306,8 @@ function _writeinputcolumn(name::String, values::AbstractVector)
     pooled = _pooledcolumn(values)
     pooled === nothing || return pooled
     _writedeclared(eltype(values)) && return values
-    return _narrowwritecolumn(name, values)
+    # Compiled only for the columns that need it, not with every column type's write.
+    return _narrowwritecolumn(name, Base.inferencebarrier(values))
 end
 
 """
@@ -355,21 +356,31 @@ function _writedeclared(T::Type)
     S !== Union{} && isconcretetype(S) || return false
     _writemap(S) === nothing || return true
     _writevaluescanned(S) && return true
-    # Containers are checked field by field when their schema is inferred.
-    return S <: Union{AbstractVector,NamedTuple,AbstractDict,ListValue,StructValue,MapValue}
+    # Containers are checked field by field when their schema is inferred; one that
+    # leaves element types open is narrowed from its values first.
+    return S <: Union{AbstractVector,NamedTuple,AbstractDict,ListValue,StructValue,
+        MapValue} && _writesettled(S)
 end
 
 function _narrowwritecolumn(name::String, values::AbstractVector)
     T = Union{}
     nulls = false
+    seen = Union{}  # a value type whose values are all of that type, already in T
     for value in values
         if ismissing(value)
             nulls = true
         else
-            T = _writepromote(T, typeof(DataAPI.unwrap(value)), name)
+            item = DataAPI.unwrap(value)
+            typeof(item) === seen && continue
+            V = _writevaluetype(item, name)
+            V === typeof(item) && (seen = V)
+            T = _writepromote(T, V, name)
         end
     end
     T === Union{} && return Vector{Missing}(missing, length(values))
+    _writesettled(T) || throw(ArgumentError("column $(repr(name)) holds only empty " *
+        "containers in some field, so their element type is unknown; declare it, for " *
+        "example Vector{Int}[] for empty lists of integers"))
     output = Vector{nulls ? Union{Missing,T} : T}(undef, length(values))
     for (index, value) in enumerate(values)
         output[index] = ismissing(value) ? missing :
@@ -378,18 +389,63 @@ function _narrowwritecolumn(name::String, values::AbstractVector)
     return output
 end
 
+# The type `value` writes as. A container whose type leaves its element types open (an
+# empty `[]` is a `Vector{Any}`) takes the type its elements share, Union{} if it has none.
+# Compiled and inferred once: values of every type pass through here.
+Base.@nospecializeinfer function _writevaluetype(@nospecialize(value), name::String)
+    T = typeof(value)
+    _writesettled(T) && return T
+    # A tuple writes as a list, so its elements take the one type they share.
+    value isa Tuple && !isempty(value) &&
+        return NTuple{length(value),_writeelementtype(value, name)}
+    value isa AbstractVector && return Vector{_writeelementtype(value, name)}
+    value isa AbstractDict && return Dict{_writeelementtype(keys(value), name),
+        _writeelementtype(values(value), name)}
+    value isa Pair && return Pair{_writevaluetype(value.first, name),
+        _writevaluetype(value.second, name)}
+    value isa NamedTuple && return NamedTuple{keys(value),
+        Tuple{(_writevaluetype(field, name) for field in value)...}}
+    value isa Tuple && return Tuple{(_writevaluetype(field, name) for field in value)...}
+    return T
+end
+
+function _writeelementtype(items, name::String)
+    T = Union{}
+    for item in items
+        T = _writepromote(T, _writevaluetype(item, name), name)
+    end
+    return T
+end
+
+# Whether type T fixes the write type of all of its values, element types included.
+# Inferred once, not for each column type it is asked about.
+Base.@nospecializeinfer function _writesettled(@nospecialize(T::Type))
+    T === Missing && return true
+    S = Base.nonmissingtype(T)
+    # A tuple type is abstract when a field may be missing. It writes as a list, so it is
+    # settled when its fields have one type.
+    S isa DataType && S <: Tuple && !any(Base.isvarargtype, S.parameters) &&
+        return allequal(S.parameters) && all(_writesettled, S.parameters)
+    isconcretetype(S) || return false
+    S <: StructValue && return true
+    S <: AbstractVector && return _writesettled(eltype(S))
+    S <: AbstractDict && return _writesettled(keytype(S)) && _writesettled(valtype(S))
+    S <: Union{NamedTuple,Pair} && return all(_writesettled, fieldtypes(S))
+    return true
+end
+
 # The one element type that holds values of types A and B exactly.
 function _writepromote(A::Type, B::Type, name::String)
     A === Union{} && return B
+    B === Union{} && return A
     A === B && return A
     Nothing in (A, B) && throw(ArgumentError("column $(repr(name)) contains " *
         "nothing; use missing for null values"))
     A === Missing && return Union{Missing,B}
     B === Missing && return Union{Missing,A}
-    if Missing <: A || Missing <: B
-        return Union{Missing,_writepromote(Base.nonmissingtype(A),
-            Base.nonmissingtype(B), name)}
-    end
+    # Removing Missing from an abstract type such as Any leaves it unchanged.
+    S, U = Base.nonmissingtype(A), Base.nonmissingtype(B)
+    (S, U) == (A, B) || return Union{Missing,_writepromote(S, U, name)}
     A <: AbstractString && B <: AbstractString && return String
     if A <: NamedTuple && B <: NamedTuple && fieldnames(A) == fieldnames(B)
         types = map((a, b) -> _writepromote(a, b, name), fieldtypes(A), fieldtypes(B))

@@ -1149,7 +1149,7 @@ end
     @test occursin("\"big\"", err.msg)
     @test !occursin("nested", err.msg)
     err = try
-        Parquet.write(IOBuffer(), (lists=[Any[1], Any[2]],))
+        Parquet.write(IOBuffer(), (lists=[Int128[1], Int128[2]],))
         nothing
     catch error
         error

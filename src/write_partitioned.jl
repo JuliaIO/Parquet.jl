@@ -162,5 +162,5 @@ end
 function _partitioncolumn(name::String, values)
     values isa AbstractVector || throw(ArgumentError("Parquet columns must be vectors"))
     (DataAPI.refpool(values) !== nothing || _writedeclared(eltype(values))) && return values
-    return _narrowwritecolumn(name, values)
+    return _narrowwritecolumn(name, Base.inferencebarrier(values))
 end

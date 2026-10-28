@@ -1230,6 +1230,19 @@ end
         @test isequal(wnplain.(values), wnplain.(column))
     end
 
+    # Containers that leave their element types open, such as an empty [] (a
+    # Vector{Any}), narrow by their elements.
+    for column in (Any[[1, 2], []], [[1, 2], []], Any[[(x=1, y="p")], [], missing],
+            Any[Any[1, 2], Any[missing]], Any[(x=1, v=[]), (x=2, v=[1.5])],
+            [Dict{String,Any}("a" => 1), Dict{String,Any}("b" => missing)],
+            Any[((x=1,), (x=missing,))])
+        values, _ = wnroundtrip(column)
+        @test isequal(wnplain.(values), wnplain.(column))
+    end
+    @test_throws "mixes values of types Int64 and String" Parquet._encodefile(
+        (value=Any[[1], Any["a"]],))
+    @test_throws "only empty containers" Parquet._encodefile((value=Any[[], []],))
+
     @test_throws "need one element type" Parquet._encodefile((value=[(1, "a")],))
     @test_throws "fixed, nonzero number" Parquet._encodefile((value=[()],))
     @test_throws "MAP key types cannot include Missing" Parquet._encodefile(

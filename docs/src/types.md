@@ -92,9 +92,11 @@ read by `Parquet.Table` writes back without copying its nested rows.
 A column whose element type is abstract or a `Union` of several types, such as a
 `Vector{Any}`, is written as the one type its values share: numbers are promoted when
 every value converts exactly, strings become STRING, and containers are promoted element
-by element. Other mixes, `nothing` values, and `Int128` or `BigInt` columns are errors that
-name the column. `Parquet.LogicalColumn` selects an annotation a Julia type cannot say,
-such as ENUM or a TIME unit.
+by element. So is a column of containers that leave their element types open, such as
+`[[1, 2], []]` (a `Vector{Vector{Any}}`) or `Dict{String,Any}` rows. Other mixes,
+`nothing` values, and `Int128` or `BigInt` columns are errors that name the column.
+`Parquet.LogicalColumn` selects an annotation a Julia type cannot say, such as ENUM or a
+TIME unit.
 
 A `Durations.Duration` is written as INTERVAL when its components are nonnegative, its
 time component is a whole number of milliseconds, and each component fits UInt32. INT96
