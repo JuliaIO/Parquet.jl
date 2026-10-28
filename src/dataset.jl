@@ -29,11 +29,11 @@ are skipped in directories and patterns. The keywords are those of
 [`Parquet.Table`](@ref).
 
 - A directory named `key=value` below the dataset's root gives its files a column `key`,
-  typed `Int64`, `Float64`, `Dates.Date`, or `Bool`, the first that all of its values
-  parse as, or else a string (`DataStrings.DataString`); it follows the files' columns
-  unless the files have a column of that name, whose values it replaces (as pyarrow,
-  Polars, and DuckDB do). `__HIVE_DEFAULT_PARTITION__` reads as `missing`, and an empty
-  value as the string `""`, as in pyarrow, Polars, and DuckDB.
+  typed `Int64`, `Float64`, `Dates.Date`, or `Bool`, the first whose printing gives back
+  every value's text exactly, or else a string (`DataStrings.DataString`); it follows the
+  files' columns unless the files have a column of that name, whose values it replaces
+  (as pyarrow, Polars, and DuckDB do). `__HIVE_DEFAULT_PARTITION__` reads as `missing`,
+  and an empty value as the string `""`, as in pyarrow, Polars, and DuckDB.
   `partitioning=nothing` reads the files' columns only.
 - Columns match by name across files. A column some files lack is `missing` in their
   rows. A column whose files hold narrower integers, a narrower float, or a coarser
@@ -313,8 +313,9 @@ function _unescapeuri(value::AbstractString)
 end
 
 # The typed value of every file per key, and each key's element type: `Int64`,
-# `Float64`, `Date`, `Bool`, or `stringtype` (read like a STRING column), whichever all of
-# its values parse as, with `Missing` when a file has none.
+# `Float64`, `Date`, `Bool`, or `stringtype` (read like a STRING column), the first whose
+# printing gives back every value's text exactly (so `+7`, `1.10`, and integers too large
+# for Int64 stay strings), with `Missing` when a file has none.
 function _hivevalues(keys::Vector{String}, values::Vector{Vector{Union{Nothing,String}}},
         stringtype::Type=DataStrings.DataString)
     typed = [Any[] for _ in values]
@@ -323,9 +324,9 @@ function _hivevalues(keys::Vector{String}, values::Vector{Vector{Union{Nothing,S
         raw = Union{Nothing,String}[entries[position] for entries in values]
         present = String[value for value in raw if value !== nothing]
         T = isempty(present) ? Missing :
-            all(_hiveint, present) ? Int64 :
-            all(_hivefloat, present) ? Float64 :
-            all(_hivedate, present) ? Dates.Date :
+            all(value -> _hivecanonical(Int64, value), present) ? Int64 :
+            all(value -> _hivecanonical(Float64, value), present) ? Float64 :
+            all(value -> _hivecanonical(Dates.Date, value), present) ? Dates.Date :
             all(value -> value in ("true", "false"), present) ? Bool : stringtype
         for (index, value) in enumerate(raw)
             push!(typed[index], value === nothing ? missing : _hiveparse(T, value))
@@ -335,11 +336,11 @@ function _hivevalues(keys::Vector{String}, values::Vector{Vector{Union{Nothing,S
     return typed, types
 end
 
-_hiveint(value::String) = occursin(r"^[+-]?[0-9]+$", value) && tryparse(Int64, value) !== nothing
-_hivefloat(value::String) = occursin(r"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$",
-    value) && tryparse(Float64, value) !== nothing
-_hivedate(value::String) = occursin(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$", value) &&
-    tryparse(Dates.Date, value) !== nothing
+# Whether `value` is the printing of a `T` (so the typed column writes back the same key).
+function _hivecanonical(::Type{T}, value::String) where {T}
+    parsed = tryparse(T, value)
+    return parsed !== nothing && string(parsed) == value
+end
 
 _hiveparse(::Type{T}, value::String) where {T<:Union{Int64,Float64,Dates.Date}} = parse(T, value)
 _hiveparse(::Type{Bool}, value::String) = value == "true"

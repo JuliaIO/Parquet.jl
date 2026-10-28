@@ -55,13 +55,32 @@ plainvalues(column) = [value isa Parquet.DataStrings.DataString ? String(value) 
         # Value types: Int64, Float64, Date, Bool, and strings when values disagree.
         mktempdir() do typed
             dswrite(typed, "r=0.5/d=2024-01-02/b=true/n=10/m=1/x.parquet", (id=[1],))
-            dswrite(typed, "r=2/d=2024-02-29/b=false/n=-3/m=a/x.parquet", (id=[2],))
+            dswrite(typed, "r=2.0/d=2024-02-29/b=false/n=-3/m=a/x.parquet", (id=[2],))
             t = Parquet.Table(typed)
             @test eltype(t.r) == Float64 && t.r == [0.5, 2.0]
             @test eltype(t.d) == Date && t.d == [Date(2024, 1, 2), Date(2024, 2, 29)]
             @test eltype(t.b) == Bool && t.b == [true, false]
             @test eltype(t.n) == Int64 && t.n == [10, -3]
             @test plainvalues(t.m) == ["1", "a"]
+        end
+        # A key is typed only when its values print back as written; otherwise it stays
+        # text, as pyarrow and DuckDB read it: an Int64 overflow, a sign or leading zero,
+        # or a float with a trailing zero.
+        mktempdir() do texts
+            for (index, (big, signed, zip, version)) in enumerate((
+                    ("12345678901234567890", "+7", "02139", "1.10"),
+                    ("12345678901234567891", "7", "10001", "1.1")))
+                dswrite(texts, "big=$big/signed=$signed/zip=$zip/version=$version/x.parquet",
+                    (id=[index],))
+            end
+            t = Parquet.Table(texts)
+            for name in (:big, :signed, :zip, :version)
+                @test eltype(Tables.getcolumn(t, name)) == Parquet.DataStrings.DataString
+            end
+            @test plainvalues(t.big) == ["12345678901234567890", "12345678901234567891"]
+            @test plainvalues(t.version) == ["1.10", "1.1"]
+            @test Parquet.Table(texts; filter=Parquet.colcmp(==, Parquet.col(:big),
+                "12345678901234567891")).id == [2]
         end
         # An empty value makes a key a string column, as in pyarrow and DuckDB.
         mktempdir() do empty
