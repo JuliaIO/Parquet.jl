@@ -1,5 +1,6 @@
 using Tables
 using Dates
+import DataAPI
 import Random
 
 function tablereplace(value; overrides...)
@@ -1026,4 +1027,41 @@ end
                 startswith(err.message, "row group 2, column $path: ")
         end
     end
+end
+
+@testset "128-bit integers" begin
+    # Polars 1.43.2 stores Int128/UInt128 as FIXED_LEN_BYTE_ARRAY(16) that its ARROW:schema
+    # calls Int(128): little-endian bytes.
+    fixture(name) = Parquet.Table(joinpath(@__DIR__, "fixtures", name))
+    @test isequal(fixture("polars_int128.parquet").i, Union{Missing,Int128}[1, -1,
+        Int128(2)^100, typemin(Int128), typemax(Int128), missing, 0])
+    @test isequal(fixture("polars_uint128.parquet").u,
+        Union{Missing,UInt128}[1, typemax(UInt128), missing])
+    # Parquet.jl writes them the same way, marked with Arrow.jl's JuliaLang.(U)Int128
+    # extension, and reads them back as written, flat and nested.
+    source = (i=Int128[1, -1, typemin(Int128), typemax(Int128), Int128(2)^100],
+        u=UInt128[0, 1, typemax(UInt128), 3, 5],
+        m=Union{Missing,Int128}[missing, 7, -7, missing, 0],
+        l=[Int128[1, 2], Int128[], Int128[-3], Int128[], Int128[4]],
+        s=[(a=Int128(k), b=k) for k in 1:5])
+    bytes = take!(Parquet.write(IOBuffer(), source; colmetadata=Dict(:i => ["unit" => "n"])))
+    table = Parquet.Table(bytes)
+    for name in keys(source)
+        @test isequal(collect(Tables.getcolumn(table, name)), getproperty(source, name))
+    end
+    @test eltype(table.l) == Parquet.ListValue{Int128} && eltype(table.m) == Union{Missing,Int128}
+    md = Parquet.metadata(Parquet.File(bytes))
+    @test md.schema[2].type_ == Parquet.Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
+        md.schema[2].type_length == 16 && md.schema[2].logicalType === nothing
+    arrow = Parquet._decodearrowschema(only(entry.value for entry in md.key_value_metadata
+        if entry.key == "ARROW:schema"), Parquet.Limits())
+    @test ("ARROW:extension:name" => "JuliaLang.UInt128") in arrow[2].metadata
+    # The extension is the column's type, not metadata.
+    @test DataAPI.colmetadata(table, :i) == Dict("unit" => "n")
+    # Statistics order the bytes, so they bound no integers and prune nothing.
+    @test Parquet.statistics(Parquet.File(bytes), :i) ==
+        [(rows=5, nulls=0, min=nothing, max=nothing)]
+    @test Parquet.Table(bytes; filter=Parquet.col(:i) > 1).i == [typemax(Int128), Int128(2)^100]
+    @test Parquet.Table(bytes; filter=Parquet.col(:u) < 4, select=[:u]).u == UInt128[0, 1, 3]
+    @test isequal(Parquet.Table(take!(Parquet.write(IOBuffer(), table))).m, source.m)
 end

@@ -12,6 +12,7 @@ elements are `Union{Missing,T}`.
 | STRING, ENUM | `DataStrings.DataString` (the column is a `DataStrings.StringVector`) |
 | BYTE_ARRAY | `DataStrings.DataBytes` (the column is a `DataStrings.BytesVector`) |
 | FIXED_LEN_BYTE_ARRAY(N) | `NTuple{N,UInt8}`; `DataStrings.DataBytes` when N > 256 |
+| FIXED_LEN_BYTE_ARRAY(16) that the ARROW:schema calls a 128-bit integer (Polars, Parquet.jl, Arrow.jl) | `Int128`, `UInt128` |
 | UUID | `UUIDs.UUID` |
 | DECIMAL(p, s), p <= 76 | `DataDecimals.Decimal{p,s,T}`, stored in `Int32`, `Int64`, `Int128`, or `DataDecimals.Int256` |
 | DECIMAL(p, s), p > 76 | [`Parquet.Decimal`](@ref) |
@@ -45,6 +46,12 @@ elements are `Union{Missing,T}`.
   cannot hold; `drop` the column to read the rest.
 - Parquet has no union type: Arrow writers refuse to store Arrow unions in Parquet, so a
   file never holds one.
+- Parquet has no 128-bit integers either. Their statistics order the stored bytes, so
+  they do not prune reads. pyarrow, Polars, and DuckDB read the columns as 16-byte binary
+  (Polars warns that it does not know the `JuliaLang.Int128` extension).
+- With Arrow.jl loaded, `Arrow.write` stores a `Parquet.JSONValue` column as Arrow's
+  canonical `arrow.json` extension, which Arrow.jl reads back as strings, and a
+  `Parquet.BSONValue` column as binary.
 
 ```@example types
 using Parquet, Tables, Dates, DataDecimals
@@ -67,6 +74,7 @@ unless the table says otherwise.
 | `AbstractString`, `Symbol`, `Char`, `@enum` values (their names) | STRING | `DataStrings.DataString` |
 | `Vector{UInt8}`, `DataStrings.DataBytes` | BYTE_ARRAY | `DataStrings.DataBytes` |
 | `NTuple{N,UInt8}` | FIXED_LEN_BYTE_ARRAY(N) | `NTuple{N,UInt8}` |
+| `Int128`, `UInt128` | FIXED_LEN_BYTE_ARRAY(16), little-endian; the ARROW:schema calls it `JuliaLang.Int128` or `JuliaLang.UInt128`, as Arrow.jl does | the same type |
 | `UUID` | UUID | `UUID` |
 | `Date`, `Time` | DATE, TIME(NANOS) | `Date`, `Time` |
 | `DateTime` | TIMESTAMP(MILLIS) | `Durations.Timestamp{Millisecond}` |
@@ -96,7 +104,7 @@ A column whose element type is abstract or a `Union` of several types, such as a
 every value converts exactly, strings become STRING, and containers are promoted element
 by element. So is a column of containers that leave their element types open, such as
 `[[1, 2], []]` (a `Vector{Vector{Any}}`) or `Dict{String,Any}` rows. Other mixes,
-`nothing` values, and `Int128` or `BigInt` columns are errors that name the column.
+`nothing` values, and `BigInt` columns are errors that name the column.
 `Parquet.LogicalColumn` selects an annotation a Julia type cannot say, such as ENUM or a
 TIME unit.
 

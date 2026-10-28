@@ -8,17 +8,21 @@ import Base64
 
 # An Arrow field: its name, nullability, type, children, and key-value metadata. `type`
 # is the Arrow Type union tag (`_ARROW_TIMESTAMP`, ...); `unit` is the TimeUnit of a
-# timestamp, time, or duration; `timezone` that of a timestamp.
+# timestamp, time, or duration; `timezone` that of a timestamp; `bitwidth` and `signed`
+# describe an integer.
 struct _ArrowField
     name::String
     nullable::Bool
     type::UInt8
     unit::Int16
     timezone::Union{Nothing,String}
+    bitwidth::Int32
+    signed::Bool
     children::Vector{_ArrowField}
     metadata::Vector{Pair{String,String}}
 end
 
+const _ARROW_INT = UInt8(2)
 const _ARROW_TIMESTAMP = UInt8(10)
 const _ARROW_DURATION = UInt8(18)
 const _ARROW_SCHEMA_HEADER = UInt8(1)
@@ -108,19 +112,40 @@ function _arrowfield(table::_FBTable, limits::Limits, depth::Int)
     depth <= limits.max_metadata_depth ||
         throw(LimitError(:metadata_depth, Int64(depth), limits.max_metadata_depth))
     type = _fbscalar(table, 2, UInt8, 0x00)
-    unit, timezone = Int16(0), nothing
+    unit, timezone, bitwidth, signed = Int16(0), nothing, Int32(0), false
     typetable = _fbsubtable(table, 3)
     if typetable !== nothing && type == _ARROW_TIMESTAMP
         unit = _fbscalar(typetable, 0, Int16, Int16(0))
         timezone = _fbstring(typetable, 1)
     elseif typetable !== nothing && type == _ARROW_DURATION
         unit = _fbscalar(typetable, 0, Int16, Int16(1))
+    elseif typetable !== nothing && type == _ARROW_INT
+        bitwidth = _fbscalar(typetable, 0, Int32, Int32(0))
+        signed = _fbscalar(typetable, 1, Bool, false)
     end
     children = _ArrowField[_arrowfield(child, limits, depth + 1)
         for child in _fbtables(table, 5, limits)]
     return _ArrowField(something(_fbstring(table, 0), ""), _fbscalar(table, 1, Bool, false),
-        type, unit, timezone, children, _arrowkeyvalues(table, 6, limits))
+        type, unit, timezone, bitwidth, signed, children, _arrowkeyvalues(table, 6, limits))
 end
+
+# The 128-bit integer type a FIXED_LEN_BYTE_ARRAY(16) leaf holds by its Arrow field:
+# Polars writes an Int of 128 bits, Arrow.jl the `JuliaLang.Int128` and
+# `JuliaLang.UInt128` extensions (both store little-endian bytes). `nothing` otherwise.
+function _int128type(field::_ArrowField)
+    field.type == _ARROW_INT && field.bitwidth == 128 &&
+        return field.signed ? Int128 : UInt128
+    for (key, value) in field.metadata
+        key == "ARROW:extension:name" || continue
+        value == "JuliaLang.Int128" && return Int128
+        value == "JuliaLang.UInt128" && return UInt128
+    end
+    return nothing
+end
+
+# The ARROW:schema field metadata that marks a leaf as `T` (`_int128type`).
+_int128metadata(::Type{T}) where {T<:Union{Int128,UInt128}} =
+    ["ARROW:extension:name" => "JuliaLang.$(nameof(T))", "ARROW:extension:metadata" => ""]
 
 # The fields of a base64 `ARROW:schema` value.
 _decodearrowschema(text::AbstractString, limits::Limits) = _ArrowField[_arrowfield(field,
@@ -330,37 +355,41 @@ function _arrowkeyvalueobjects(pairs)
     return _FBObject[_fbobject(String(first(pair)), String(last(pair))) for pair in pairs]
 end
 
-_arrowfieldobject(name, nullable, (tag, type), children) =
-    _fbobject(name, nullable, tag, type, nothing, children, nothing)
+_arrowfieldobject(name, nullable, (tag, type), children, metadata=()) =
+    _fbobject(name, nullable, tag, type, nothing, children, _arrowkeyvalueobjects(metadata))
 
-# The Arrow field for `node`. LIST and MAP groups take the standard three-level layout
-# (`list` / `element`, `key_value` / `key`, `value`); other groups become structs.
-function _arrowfieldobject(node::SchemaNode, hints)
+# The Arrow field for `node`, with key-value `metadata`. LIST and MAP groups take the
+# standard three-level layout (`list` / `element`, `key_value` / `key`, `value`); other
+# groups become structs.
+function _arrowfieldobject(node::SchemaNode, hints, metadata=())
     element = node.element
     nullable = element.repetition_type != Metadata.FieldRepetitionType.REQUIRED
-    element.type_ === nothing ||
-        return _arrowfieldobject(element.name, nullable,
-            _arrowleaftype(element, get(hints, node.path, nothing)), _FBObject[])
+    if element.type_ !== nothing
+        hint = get(hints, node.path, nothing)
+        hint isa Type && (metadata = vcat(_int128metadata(hint), collect(metadata)))
+        return _arrowfieldobject(element.name, nullable, _arrowleaftype(element, hint),
+            _FBObject[], metadata)
+    end
     logical, converted = element.logicalType, element.converted_type
     repeated = length(node.children) == 1 ? only(node.children) : nothing
     if repeated !== nothing && (logical !== nothing && logical.LIST !== nothing ||
             converted == Metadata.ConvertedType.LIST)
         item = length(repeated.children) == 1 ? only(repeated.children) : repeated
         return _arrowfieldobject(element.name, nullable, (0x0c, _fbobject()),
-            _FBObject[_arrowfieldobject(item, hints)])
+            _FBObject[_arrowfieldobject(item, hints)], metadata)
     elseif repeated !== nothing && (logical !== nothing && logical.MAP !== nothing ||
             converted in (Metadata.ConvertedType.MAP, Metadata.ConvertedType.MAP_KEY_VALUE))
         # A map without values is a list of its keys to pyarrow; an Arrow map needs both.
         length(repeated.children) == 1 && return _arrowfieldobject(element.name,
             nullable, (0x0c, _fbobject()),
-            _FBObject[_arrowfieldobject(only(repeated.children), hints)])
+            _FBObject[_arrowfieldobject(only(repeated.children), hints)], metadata)
         entries = _arrowfieldobject(repeated.element.name, false, (0x0d, _fbobject()),
             _FBObject[_arrowfieldobject(child, hints) for child in repeated.children])
         return _arrowfieldobject(element.name, nullable, (0x11, _fbobject(false)),
-            _FBObject[entries])
+            _FBObject[entries], metadata)
     end
     return _arrowfieldobject(element.name, nullable, (0x0d, _fbobject()),
-        _FBObject[_arrowfieldobject(child, hints) for child in node.children])
+        _FBObject[_arrowfieldobject(child, hints) for child in node.children], metadata)
 end
 
 """
@@ -369,18 +398,17 @@ end
 The base64 `ARROW:schema` value for a file with Parquet `schema`, as pyarrow would
 infer each column from its Parquet type, so pyarrow, Polars, and DuckDB read the file
 the same with or without it. `hints` maps a leaf's path to what the Parquet type cannot
-say: the time zone (`String`) of a UTC-adjusted timestamp, or the Arrow TimeUnit
-(`Int16`: 0 seconds to 3 nanoseconds) of a duration stored as INT64. `metadata` is the
+say: the time zone (`String`) of a UTC-adjusted timestamp, the Arrow TimeUnit (`Int16`: 0
+seconds to 3 nanoseconds) of a duration stored as INT64, or `Int128`/`UInt128` for 128-bit
+integers stored as FIXED_LEN_BYTE_ARRAY(16) (`_int128metadata`). `metadata` is the
 schema-level Arrow key-value metadata and `fieldmetadata` maps a top-level column name to
 its field's, as `key => value` pairs; pyarrow takes a file's schema and field metadata
 from them.
 """
 function _arrowschema(schema::Schema; hints=Dict{Vector{String},Any}(), metadata=(),
         fieldmetadata=Dict{String,Any}())
-    fields = _FBObject[_arrowfieldobject(child, hints) for child in schema.root.children]
-    for (field, child) in zip(fields, schema.root.children)
-        field.fields[7] = _arrowkeyvalueobjects(get(fieldmetadata, child.element.name, ()))
-    end
+    fields = _FBObject[_arrowfieldobject(child, hints,
+        get(fieldmetadata, child.element.name, ())) for child in schema.root.children]
     message = _fbobject(Int16(4), _ARROW_SCHEMA_HEADER,
         _fbobject(Int16(0), fields, _arrowkeyvalueobjects(metadata), nothing), nothing,
         nothing)
@@ -393,8 +421,9 @@ function _arrowschema(schema::Schema; hints=Dict{Vector{String},Any}(), metadata
 end
 
 # What the file's ARROW:schema says about leaves the Parquet schema cannot describe, by
-# leaf path: the time zone (`String`) of a UTC-adjusted TIMESTAMP, and the TimeUnit
-# (`Int16`) of a duration stored as an unannotated INT64. Fields are matched to the
+# leaf path: the time zone (`String`) of a UTC-adjusted TIMESTAMP, the TimeUnit (`Int16`)
+# of a duration stored as an unannotated INT64, and `Int128`/`UInt128` for an
+# unannotated FIXED_LEN_BYTE_ARRAY(16) of 128-bit integers. Fields are matched to the
 # Parquet schema by position and name; a missing, malformed, or mismatched ARROW:schema
 # leaves the Parquet types as they are.
 function _arrowhints(metadata::Metadata.FileMetaData, schema::Schema, limits::Limits)
@@ -443,6 +472,10 @@ function _arrowhints!(hints, node::SchemaNode, field::_ArrowField)
         elseif field.type == _ARROW_DURATION && kind === nothing &&
                 element.type_ == Metadata.Type.INT64 && 0 <= field.unit <= 3
             hints[node.path] = field.unit
+        elseif kind === nothing && element.type_ == Metadata.Type.FIXED_LEN_BYTE_ARRAY &&
+                element.type_length == 16
+            T = _int128type(field)
+            T === nothing || (hints[node.path] = T)
         end
         return
     end

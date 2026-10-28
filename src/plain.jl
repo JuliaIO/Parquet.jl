@@ -164,7 +164,8 @@ function _plainbytes!(dest::Vector{L}, offset::Int, count::Int, convert::C,
     total = Base.checked_mul(count, width)
     _requirebytes(bytes, position, total)
     _growto!(dest, offset + count)
-    if convert isa _FixedBytesValue && sizeof(L) == width
+    # Julia's platforms are little-endian, so 128-bit integers copy as stored.
+    if convert isa Union{_FixedBytesValue,_Int128Value} && sizeof(L) == width
         GC.@preserve bytes dest unsafe_copyto!(Ptr{UInt8}(pointer(dest, offset + 1)),
             pointer(bytes, position), total)
         return position + total

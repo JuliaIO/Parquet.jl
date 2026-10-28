@@ -202,6 +202,14 @@ function _writemap(::Type{NTuple{N,UInt8}}) where {N}
         type_length=Int32(N))
 end
 
+# 128-bit integers: FIXED_LEN_BYTE_ARRAY(16) holding the little-endian bytes, which the
+# ARROW:schema marks as Arrow.jl's `JuliaLang.(U)Int128` (Parquet has no 128-bit integer
+# annotation pyarrow accepts).
+for T in (Int128, UInt128)
+    @eval _writemap(::Type{$T}) = _WriteMap(NTuple{16,UInt8},
+        Metadata.Type.FIXED_LEN_BYTE_ARRAY, _Bits{NTuple{16,UInt8}}(); type_length=Int32(16))
+end
+
 _writemap(::Type{UUIDs.UUID}) = _WriteMap(NTuple{16,UInt8},
     Metadata.Type.FIXED_LEN_BYTE_ARRAY, _UUIDBytes(); type_length=Int32(16),
     logical=Metadata.LogicalType(UUID=Metadata.UUIDType()))
@@ -278,10 +286,7 @@ An `ArgumentError` for a field of a type Parquet cannot store, with advice where
 lossless alternative exists.
 """
 function _writeunsupported(T::Type, path::AbstractString)
-    advice = if T <: Union{Int128,UInt128}
-        "; Parquet has no 128-bit integers, so convert it to a DataDecimals.Decimal " *
-        "(Decimal{$(T === Int128 ? 38 : 39),0} holds every $T)"
-    elseif T <: BigInt
+    advice = if T <: BigInt
         "; convert it to a DataDecimals.Decimal{P,0} with enough digits"
     elseif T <: Durations.Timestamp || T <: Durations.ZonedTimestamp
         "; Parquet timestamps have second, millisecond, microsecond, or nanosecond " *

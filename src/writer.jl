@@ -321,8 +321,8 @@ function _bindflat(schema::_WriteSchema, field::_FlatField, values::AbstractVect
 end
 
 # What a leaf's Parquet type cannot say about values of type `T`, for the ARROW:schema:
-# a zoned timestamp's time zone, or the TimeUnit of a period stored as an INT64 count
-# (seconds for Minute through Week).
+# a zoned timestamp's time zone, the TimeUnit of a period stored as an INT64 count
+# (seconds for Minute through Week), or the 128-bit integer type of FLBA(16) bytes.
 _arrowhint(::Type) = nothing
 _arrowhint(::Type{Durations.ZonedTimestamp{P,Z}}) where {P,Z} = String(Z)
 _arrowhint(::Type{Dates.Nanosecond}) = Int16(3)
@@ -330,6 +330,8 @@ _arrowhint(::Type{Dates.Microsecond}) = Int16(2)
 _arrowhint(::Type{Dates.Millisecond}) = Int16(1)
 _arrowhint(::Type{<:Union{Dates.Second,Dates.Minute,Dates.Hour,Dates.Day,Dates.Week}}) =
     Int16(0)
+_arrowhint(::Type{Int128}) = Int128
+_arrowhint(::Type{UInt128}) = UInt128
 
 function _writearrowhint!(hints::Dict{Vector{String},Any}, path::Vector{String}, T::Type)
     hint = _arrowhint(Base.nonmissingtype(T))

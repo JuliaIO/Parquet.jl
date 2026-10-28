@@ -569,6 +569,8 @@ function _nestedwritephysical(kind, element::Metadata.SchemaElement, value,
             _checklimit(:string_bytes, length(value), limits.max_string_bytes)
             return UInt8[byte for byte in value]
         elseif physical == Metadata.Type.FIXED_LEN_BYTE_ARRAY
+            value isa Union{Int128,UInt128} && element.type_length == 16 &&
+                return collect(reinterpret(NTuple{16,UInt8}, value))
             value isa Union{Tuple,AbstractVector} || throw(ArgumentError(
                 "fixed byte-array field $(repr(element.name)) contains $(typeof(value))"))
             _nestedwritefixedpayload(element, value, limits)
@@ -1092,12 +1094,13 @@ function _nestedwritebind(shape::_NestedWriteShape, plan::_NestedPlan)
 end
 
 # The values a stored leaf takes back: what it reads as, including the time zone of a
-# UTC-adjusted timestamp and the duration unit of an INT64 column that an ARROW:schema
-# gives on read.
+# UTC-adjusted timestamp, the duration unit of an INT64 column, and the 128-bit integers
+# of a FIXED_LEN_BYTE_ARRAY(16) that an ARROW:schema gives on read.
 _provenancevaluetype(::Type{Durations.ZonedTimestamp{P,Z}}) where {P,Z} =
     Durations.ZonedTimestamp{P}
 _provenancevaluetype(::Type{Int64}) = Union{Int64,Dates.Second,Dates.Millisecond,
     Dates.Microsecond,Dates.Nanosecond}
+_provenancevaluetype(::Type{NTuple{16,UInt8}}) = Union{NTuple{16,UInt8},Int128,UInt128}
 _provenancevaluetype(T::Type) = T
 
 function _provenancenode(plan::_NestedPlan)

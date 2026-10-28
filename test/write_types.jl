@@ -157,12 +157,10 @@ end
 end
 
 @testset "write errors for types Parquet cannot store" begin
-    err = wterror(() -> wtwrite((id=Int32[1], big=Int128[1])))
+    err = wterror(() -> wtwrite((id=Int32[1], big=BigInt[1])))
     @test err isa ArgumentError
-    @test occursin("\"big\"", err.msg) && occursin("Decimal{38,0}", err.msg)
-    err = wterror(() -> wtwrite((big=UInt128[1],)))
-    @test occursin("Decimal{39,0}", err.msg)
-    err = wterror(() -> wtwrite((nested=[[Int128(1)]],)))
+    @test occursin("\"big\"", err.msg) && occursin("Decimal{P,0}", err.msg)
+    err = wterror(() -> wtwrite((nested=[[BigInt(1)]],)))
     @test occursin("\"nested.element\"", err.msg)
 end
 

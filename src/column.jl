@@ -230,6 +230,15 @@ end
 # bytes PLAIN pages hold back to back.
 struct _FixedBytesValue{N} end
 
+# A 128-bit integer stored as FIXED_LEN_BYTE_ARRAY(16), little-endian (`_int128type`).
+struct _Int128Value{T} end
+
+function (::_Int128Value{T})(bytes::Union{_ByteView,Vector{UInt8}}) where {T}
+    length(bytes) == 16 || throw(FormatError(
+        "128-bit integer value has $(length(bytes)) bytes, expected 16"))
+    return ltoh(GC.@preserve bytes unsafe_load(Ptr{T}(pointer(bytes))))
+end
+
 function (::_FixedBytesValue{N})(bytes::Union{_ByteView,Vector{UInt8}}) where {N}
     length(bytes) == N || throw(FormatError(
         "fixed byte-array value has $(length(bytes)) bytes, expected $N"))
@@ -294,8 +303,8 @@ struct _PeriodValue{P} end
 (::_PeriodValue{P})(value::Int64) where {P} = P(value)
 _bitcopy(::_PeriodValue) = true
 
-# The converter and element type of leaf `node`: its Parquet type, or the time zone or
-# duration unit the file's ARROW:schema records for it.
+# The converter and element type of leaf `node`: its Parquet type, or the time zone,
+# duration unit, or 128-bit integer type the file's ARROW:schema records for it.
 function _valueconverter(node::SchemaNode, limits::Limits, options::_ReadOptions)
     hint = get(options.arrow, node.path, nothing)
     if hint isa String
@@ -305,6 +314,8 @@ function _valueconverter(node::SchemaNode, limits::Limits, options::_ReadOptions
     elseif hint isa Int16
         P = _ARROW_TIME_UNITS[hint + 1]
         return _PeriodValue{P}(), P
+    elseif hint === Int128 || hint === UInt128
+        return _Int128Value{hint}(), hint
     end
     return _valueconverter(node.element, limits, options)
 end

@@ -392,6 +392,8 @@ end
 
 function _decodebound(field::_PruneField, raw::Vector{UInt8})
     convert = field.convert
+    # FIXED_LEN_BYTE_ARRAY statistics order bytes, not the integers they hold.
+    convert isa _Int128Value && return nothing
     physical = field.node.element.type_
     physical == Metadata.Type.BOOLEAN && return raw[1] != 0x00
     physical == Metadata.Type.INT32 &&

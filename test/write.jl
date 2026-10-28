@@ -551,7 +551,7 @@ end
     # A table without columns writes a file without columns.
     @test isempty(Parquet.Tables.columnnames(Parquet.Table(Parquet._encodefile(NamedTuple()))))
     @test_throws ArgumentError Parquet._encodefile((a=Int32[1], b=Int32[1, 2]))
-    @test_throws ArgumentError Parquet._encodefile((a=Int128[1, 2],))
+    @test_throws ArgumentError Parquet._encodefile((a=BigInt[1, 2],))
     @test_throws Parquet.LimitError Parquet._encodefile((a=Int32[1, 2],); limits=Parquet.Limits(max_container_elements=1))
     splitbytes = Parquet._encodefile((a=fill("large", 10),); pagesize=10)
     splitpages, _ = writtenpages(splitbytes, 1)
@@ -1141,7 +1141,7 @@ end
 
 @testset "unsupported column types name the column" begin
     err = try
-        Parquet.write(IOBuffer(), (id=Int32[1], big=Int128[1]))
+        Parquet.write(IOBuffer(), (id=Int32[1], big=BigInt[1]))
         nothing
     catch error
         error
@@ -1150,7 +1150,7 @@ end
     @test occursin("\"big\"", err.msg)
     @test !occursin("nested", err.msg)
     err = try
-        Parquet.write(IOBuffer(), (lists=[Int128[1], Int128[2]],))
+        Parquet.write(IOBuffer(), (lists=[BigInt[1], BigInt[2]],))
         nothing
     catch error
         error

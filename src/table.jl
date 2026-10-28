@@ -440,7 +440,12 @@ function _filecolmetadata(metadata::Metadata.FileMetaData, schema::Schema, limit
         end
         if arrow !== nothing && length(arrow) == length(fields)
             for (position, (node, field)) in enumerate(zip(fields, arrow))
-                node.element.name == field.name && append!(result[position], field.metadata)
+                node.element.name == field.name || continue
+                # The extension that makes a column 128-bit integers is its type, not
+                # metadata.
+                typed = _int128type(field) !== nothing
+                append!(result[position], (entry for entry in field.metadata
+                    if !(typed && startswith(first(entry), "ARROW:extension:"))))
             end
         end
     end
