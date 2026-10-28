@@ -40,7 +40,11 @@ function _levelbitwidth(maxlevel::Integer)
 end
 
 function _chunkmetadata(chunk::Metadata.ColumnChunk, node::SchemaNode)
-    chunk.file_path === nothing || throw(FormatError("column chunks stored in another file are not supported"))
+    # A chunk in another file is valid Parquet (summary files such as `_metadata` hold
+    # them); this reader reads only chunks of the file it opened.
+    chunk.file_path === nothing || throw(UnsupportedFeatureError("column chunk " *
+        "$(join(node.path, '.')) is stored in another file, $(repr(chunk.file_path)); " *
+        "read that file instead"))
     chunk.crypto_metadata === nothing && chunk.encrypted_column_metadata === nothing ||
         throw(UnsupportedFeatureError("encrypted column chunks are not supported"))
     md = chunk.meta_data

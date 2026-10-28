@@ -85,6 +85,8 @@ Complete coverage of the format is not a goal. Reading these throws
 `Parquet.UnsupportedFeatureError` rather than reporting an invalid file:
 
 - Encrypted files (Parquet modular encryption).
+- Column chunks stored in another file than the one read (a footer whose chunks name a
+  `file_path`); read the file the chunk names.
 - LZO compression, in either direction: every implementation is GPL-2 and this package
   is MIT.
 - TIME values of 24:00:00, INTERVAL values past 2^31 - 1 months or days, and INT96

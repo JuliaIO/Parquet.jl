@@ -1153,7 +1153,13 @@ end
 @testset "column chunk metadata validation" begin
     int32 = columnleaf(MD.Type.INT32)
     page = datapage(Int32[1])
-    @test_throws Parquet.FormatError readsynthetic([page], int32; num_values=1, file_path="other.parquet")
+    # Valid but unsupported: the error names the file to read.
+    err = try
+        readsynthetic([page], int32; num_values=1, file_path="other.parquet")
+    catch e
+        e
+    end
+    @test err isa Parquet.UnsupportedFeatureError && occursin("other.parquet", err.message)
     @test_throws Parquet.UnsupportedFeatureError readsynthetic([page], int32; num_values=1, crypto=MD.ColumnCryptoMetaData(ENCRYPTION_WITH_FOOTER_KEY=MD.EncryptionWithFooterKey()))
     @test_throws Parquet.UnsupportedFeatureError readsynthetic([page], int32; num_values=1, encryptedmeta=UInt8[0x01])
     @test_throws Parquet.FormatError readsynthetic([page], int32; num_values=1, type=MD.Type.INT64)
