@@ -749,17 +749,21 @@ function _pageranges(ctx::_PruneContext, field::_PruneField, chunk::Metadata.Col
     (nullcounts === nothing || length(nullcounts) == count) &&
         (nancounts === nothing || length(nancounts) == count) || return nothing
     optional = field.node.max_definition_level > 0
-    return map(1:count) do page
+    ranges = Vector{_ValueRange}(undef, count)
+    for page in 1:count
         pagerows = (page == count ? rows : pages.starts[page + 1]) - pages.starts[page]
-        optional && index.null_pages[page] &&
-            return _ValueRange(nothing, nothing, true, false, false)
+        if optional && index.null_pages[page]
+            ranges[page] = _ValueRange(nothing, nothing, true, false, false)
+            continue
+        end
         statistics = Metadata.Statistics(min_value=index.min_values[page],
             max_value=index.max_values[page],
             null_count=nullcounts === nothing || !optional ? nothing : nullcounts[page],
             nan_count=nancounts === nothing ? nothing : nancounts[page])
         pagemd = _withfields(md; num_values=Int64(pagerows), statistics=statistics)
-        return _statisticsrange(ctx, field, pagemd)
+        ranges[page] = _statisticsrange(ctx, field, pagemd)
     end
+    return ranges
 end
 
 # Rows of a row group of `rows` rows whose filter result can be `true`: `cans` is what
@@ -1560,7 +1564,7 @@ function _readselectedflat(file::File, plan::_ReadPlan, parts::Vector{_GroupRows
         _windowrows!(selected, offset, limit)
     end
     counts = Int[_rowcount(rows) for rows in selected]
-    starts = cumsum(vcat(0, counts))[1:(end - 1)]
+    starts = cumsum(counts) .- counts
     total = sum(counts; init=0)
     _checklimit(:container_elements, total, limits.max_container_elements)
     columns = AbstractVector[]

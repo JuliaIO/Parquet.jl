@@ -144,7 +144,8 @@ function _readnestedcolumns(file::File, metadata::Metadata.FileMetaData, schema:
     end
     pieces = Vector{_LeafPiece}(undef, length(work))
     pieces[order] = results
-    starts = cumsum([0; [length(field.paths) * length(ranges) for field in assemblies]])
+    starts = pushfirst!(cumsum(Int[length(field.paths) * length(ranges)
+        for field in assemblies]), 0)
     fieldorder = sortperm(eachindex(assemblies); by=field -> starts[field + 1] - starts[field],
         rev=true)
     built = _readmap(fieldorder, _readtasks(file, ntasks, length(assemblies))) do field, _

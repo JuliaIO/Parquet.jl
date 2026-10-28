@@ -451,8 +451,10 @@ Base.@nospecializeinfer function _writesettled(@nospecialize(T::Type))
         return allequal(S.parameters) && all(_writesettled, S.parameters)
     isconcretetype(S) || return false
     S <: StructValue && return true
-    S <: AbstractVector && return _writesettled(eltype(S))
-    S <: AbstractDict && return _writesettled(keytype(S)) && _writesettled(valtype(S))
+    # Packages define these for their own types, so they are looked up at run time.
+    S <: AbstractVector && return _writesettled(_barrier(eltype, S))
+    S <: AbstractDict &&
+        return _writesettled(_barrier(keytype, S)) && _writesettled(_barrier(valtype, S))
     S <: Union{NamedTuple,Pair} && return all(_writesettled, fieldtypes(S))
     return true
 end

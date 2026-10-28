@@ -269,7 +269,8 @@ function _tupleunify(A::Type, B::Type)
         !isempty(A.parameters) && !Base.isvarargtype(A.parameters[end]) &&
         !isempty(B.parameters) && !Base.isvarargtype(B.parameters[end]) &&
         fieldcount(A) == fieldcount(B) || return nothing
-    fields = map(_tupleunify, fieldtypes(A), fieldtypes(B))
+    left, right = fieldtypes(A), fieldtypes(B)
+    fields = Any[_tupleunify(left[index], right[index]) for index in eachindex(left)]
     any(isnothing, fields) && return nothing
     return Tuple{fields...}
 end

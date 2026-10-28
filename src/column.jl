@@ -353,24 +353,26 @@ end
 
 # Scratch space one task reuses for every page it decodes. `dense` and `dictionary` hold
 # one vector per value type: an optional page's present values and a chunk's dictionary.
-# `bits` and `offsets` hold the nested-path arrays a leaf checks but does not keep.
+# (Their values are `Any`, not `Vector`: storing into a `Vector`-valued IdDict converts
+# through a `convert` signature that PooledArrays extends.) `bits` and `offsets` hold
+# the nested-path arrays a leaf checks but does not keep.
 mutable struct _PageBuffers
     page::Vector{UInt8}
     repetition::Vector{UInt16}
     definition::Vector{UInt16}
     indices::Vector{UInt32}
-    dense::IdDict{Type,Vector}
-    dictionary::IdDict{Type,Vector}
+    dense::IdDict{Type,Any}
+    dictionary::IdDict{Type,Any}
     bits::Vector{BitVector}
     offsets::Vector{Vector{Int}}
 end
 
 function _PageBuffers()
-    return _PageBuffers(UInt8[], UInt16[], UInt16[], UInt32[], IdDict{Type,Vector}(),
-        IdDict{Type,Vector}(), BitVector[], Vector{Int}[])
+    return _PageBuffers(UInt8[], UInt16[], UInt16[], UInt32[], IdDict{Type,Any}(),
+        IdDict{Type,Any}(), BitVector[], Vector{Int}[])
 end
 
-function _scratch(vectors::IdDict{Type,Vector}, ::Type{L}, key::Type=L) where {L}
+function _scratch(vectors::IdDict{Type,Any}, ::Type{L}, key::Type=L) where {L}
     vector = get(vectors, key, nothing)
     vector === nothing && (vectors[key] = vector = L[])
     return vector::Vector{L}

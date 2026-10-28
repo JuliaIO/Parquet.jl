@@ -847,10 +847,12 @@ Base.@nospecializeinfer function _scanresidual(columns::NamedTuple, rows::Int,
         # Reordered or renamed columns keep their vectors; a column selected twice is
         # copied so the table never holds one vector under two names.
         seen = falses(length(readnames))
-        output = NamedTuple{Tuple(names)}(Tuple(begin
+        picked = Any[]
+        for position in positions
             column = columns[position]
-            seen[position] ? copy(column) : (seen[position] = true; column)
-        end for position in positions))
+            push!(picked, seen[position] ? copy(column) : (seen[position] = true; column))
+        end
+        output = NamedTuple{Tuple(names)}(Tuple(picked))
         metadata, schema = _selectfields(metadata, schema, positions,
             String[String(name) for name in names], limits)
         return output, rows, metadata, schema

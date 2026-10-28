@@ -727,7 +727,8 @@ Base.@nospecializeinfer function _writetable!(writer::Writer, table, source, off
     length(columns) == length(writer.schema.fields) ||
         _barrier(_bindmismatch, writer.schema, columns)
     retyped = isfirst || writer.schema.stored ? Int[] : _retypenullcolumns!(writer, columns)
-    schema = writer.schema
+    # Read after retyping, which replaces it.
+    schema = writer.schema::_WriteSchema
     # Each column binds and encodes behind `_barrier`, compiled for its own type.
     bindings = _FieldBinding[]
     for (index, (name, values)) in enumerate(columns)
