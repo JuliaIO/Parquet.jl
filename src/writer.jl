@@ -898,7 +898,7 @@ end
 end
 
 # Bloom filters follow their row group's column chunks (parquet-format BloomFilter.md
-# allows them between row groups), so the writer holds one row group's filters at most.
+# allows them between row groups), rather than remaining until the footer is written.
 function _writeblooms!(writer::Writer, records::Vector{_ChunkRecord})
     for (index, record) in enumerate(records)
         isempty(record.bloom) && continue
@@ -1162,16 +1162,19 @@ end
     Parquet.write(sink, table; kwargs...) -> sink
     Parquet.write(sink; kwargs...) -> table -> Parquet.write(sink, table; kwargs...)
 
-Write a Tables.jl source to `sink`, a path or `IO`, and return `sink`. Row groups are
-encoded and written one at a time, so memory stays near the size of one row group. Each
-partition of a `Tables.partitions` source is written as one or more row groups, with
-every column nullable and later partitions converted to the first partition's types; a
-single table keeps the nullability of its element types. The one-argument form returns a
-function, so a table can be piped: `CSV.File(path) |> Parquet.write("out.parquet")`.
-A path sink is written to a temporary file beside the file it replaces and renamed over it
-at the end, so a failed write leaves an existing file intact. An existing file keeps its
-permissions, a symlink is written through, a read-only file is refused, and a directory is
-an error (pass `partitionby` to write a dataset into it).
+Write a Tables.jl source to `sink`, a path or `IO`, and return `sink`. Column chunks are
+encoded on up to `ntasks` tasks and written in file order. Parallel encoding can hold
+chunks from several row groups; page indexes and row-group metadata stay in memory
+until close. Each partition of a `Tables.partitions` source is written as one or more
+row groups, with every column nullable and later partitions converted to the first
+partition's types; a single table keeps the nullability of its element types. The
+one-argument form returns a function, so a table can be piped:
+`CSV.File(path) |> Parquet.write("out.parquet")`.
+A regular-file path sink is written to a temporary file beside the file it replaces and
+renamed over it at the end, so a failed write leaves an existing file intact. An existing
+file keeps its permissions, a symlink is written through, a read-only file is refused,
+and a directory is an error (pass `partitionby` to write a dataset into it). Device and
+pipe paths are written in place.
 
 Keywords and defaults (pyarrow's):
 

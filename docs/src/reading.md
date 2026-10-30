@@ -49,8 +49,8 @@ Parquet.Table(path; stringtype=String).zone
 `select` and `drop` choose columns (names, indices, a regex, a vector of them, or a
 function `(i, name) -> Bool` as in CSV.jl), `filter` keeps the rows where a predicate is
 `true`, and `limit` caps the row count. Only the columns a read selects or filters on are
-decoded; the other column chunks are never read, so a column this package cannot decode
-can be dropped to read the rest.
+decoded, so a column this package cannot decode can be dropped to read the rest.
+Ranged sources may fetch nearby unselected bytes together with selected chunks.
 
 ```@example reading
 subset = Parquet.Table(path; select=[:id, :fare], filter=Parquet.col(:fare) > 10, limit=2)
@@ -133,11 +133,10 @@ Lists, structs, and maps read as typed rows, in [`Parquet.ListVector`](@ref),
 Inside containers and DataFrame cells, list and map rows print as the plain values they
 hold, `[1, missing]` and `Dict("a"=>1)`, without their element types.
 
-Each level of a typed row nests one more type, and Julia compiles deep ones slowly: the
-first read of structs 17 levels deep took 11 s with typed rows, and 32 levels over 15
-minutes. A column nested more than 8 levels deep therefore reads with untyped rows at
-every level, as Arrow.jl's do: structs as `StructValue`, lists as `ListValue{Any}`, and
-maps as `MapValue{Any,Any}` (a first read of any depth then takes well under a second).
+Each level of a typed row nests one more type, which can make compilation expensive.
+A column nested more than 8 levels deep therefore reads with untyped rows at every
+level: structs as `StructValue`, lists as `ListValue{Any}`, and maps as
+`MapValue{Any,Any}`.
 
 `T` includes `Missing` only when the schema allows null elements, and a null list,
 struct, or map reads as `missing`. Copies and subsets of a nested column (`copy`,

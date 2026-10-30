@@ -2,9 +2,10 @@
 
 ## Errors
 
-Reads and writes throw one of three package errors, or an `ArgumentError` for arguments
-that cannot work (an unknown column in `select`, a directory passed to `Parquet.File`,
-conflicting column types across a dataset's files):
+File-format and resource failures use three package errors. Arguments that cannot work
+throw `ArgumentError` (an unknown column in `select`, a directory passed to
+`Parquet.File`, conflicting column types across a dataset's files). Filesystem errors
+and errors from a caller's source or sink propagate to the caller.
 
 - [`Parquet.FormatError`](@ref): the input is not a valid Parquet file, such as corrupt
   or inconsistent metadata, a page that does not decode, or (with `checksum=true`) a

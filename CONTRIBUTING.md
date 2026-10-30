@@ -23,8 +23,8 @@ definition are documented in [`thrift/README.md`](thrift/README.md).
 
 - A table owns its decoded columns. Closing a file or returning from a read must not
   invalidate strings, nested rows, or columns already returned to the caller.
-- Specialize kernels on column types, not whole file schemas. New column names and
-  wide tables must not trigger compilation throughout every Tables.jl consumer.
+- Specialize kernels on column types, not whole file schemas. Keep names and column
+  types out of the public table's type parameters to reduce schema-specific compilation.
 - A filter must give the same rows as filtering the complete decoded table. Statistics,
   dictionaries, bloom filters, and indexes can exclude a range only when they prove it
   cannot match. Preserve missing-value semantics and distrust known producer bugs.
@@ -33,8 +33,8 @@ definition are documented in [`thrift/README.md`](thrift/README.md).
   tasks and dataset files. The default unlimited budget must remain cheap.
 - Preserve exact values and units. A conversion that loses precision or exceeds the
   destination type must fail with a useful error.
-- Path writes publish completed files. A failed single-file write must leave the
-  previous destination intact and remove temporary output. Partitioned writes have
+- Regular-file path writes publish completed files. A failed single-file write must
+  leave the previous destination intact and remove temporary output. Partitioned writes have
   file-level atomicity; they are not dataset transactions.
 - Public APIs are namespaced. Tables.jl and DataAPI provide common table and metadata
   interfaces; add optional extensions only for behavior those interfaces cannot cover.

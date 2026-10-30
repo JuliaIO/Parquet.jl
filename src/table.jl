@@ -3,7 +3,7 @@ import DataAPI, Dates, Tables
 # `Table <: Tables.AbstractColumns`, so `table.x` is column `x`; the package reads the
 # fields below through `getfield` (the `_table*` accessors). A table owns its columns and
 # holds no file: reading copies every value out of the source, which is then released.
-# Names and column types live in values so a new file schema does not recompile sinks.
+# Names and column types live in values, so Table does not specialize on the file schema.
 # `colmetadata` holds each column's key-value metadata, in column order.
 struct Table <: Tables.AbstractColumns
     metadata::Metadata.FileMetaData

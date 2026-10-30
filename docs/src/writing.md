@@ -13,8 +13,9 @@ CSV.File("trips.csv") |> Parquet.write("trips.parquet")
 Parquet.write("trips.parquet", table; compress=:zstd, rowgroupsize=500_000)
 ```
 
-A path is written to a temporary file in the same directory and moved over the path at
-the end, so a failed write leaves an existing file intact. An `IO` is left open.
+A regular-file path is written to a temporary file in the same directory and moved
+over the path at the end, so a failed write leaves an existing file intact. Device and
+pipe paths are written in place. An `IO` is left open.
 With FilePathsBase.jl loaded, local `SystemPath` objects work with `Parquet.write` and
 `Parquet.Writer`, including partitioned output, and keep the same atomic replacement.
 
@@ -96,8 +97,8 @@ The first table fixes the column names, order, and types. Every column is nullab
 `nullable=false`. Later tables convert to the first table's types exactly: an `Int32`
 column fits an `Int64` one, but a value that would round, such as 2^53 + 1 into a
 `Float64` column or 0.1 into a `Float32` one, is an error. `Parquet.write` streams a
-`Tables.partitions` source the same way, one partition at a time, so memory holds one
-partition (one `CSV.Chunks` chunk, for example) rather than the whole table.
+`Tables.partitions` source the same way, consuming one partition (one `CSV.Chunks`
+chunk, for example) at a time.
 
 ## Partitioned datasets
 
@@ -146,10 +147,14 @@ schema.
 
 ## Memory and threads
 
-Row groups are encoded and written one at a time, so a write needs the input table plus
-about one row group's encoded size. The column chunks of a row group are encoded on
-`ntasks` tasks (default `Threads.nthreads()`, `ntasks=1` encodes on the calling task); the
-bytes written do not depend on `ntasks`. The writer reads each value once and does not
-copy the input's columns, except to narrow an abstractly typed column. Chunked columns
+The writer encodes column chunks on up to `ntasks` tasks and writes them in file order.
+Parallel encoding can keep chunks from several row groups in memory; `ntasks=1`
+encodes and writes each job on the calling task. Smaller `rowgroupsize` and `ntasks`
+reduce encoding memory. Page indexes and row-group metadata remain in memory until
+the footer is written. The bytes written do not depend on `ntasks`.
+
+The writer normally reads column vectors directly. Row-only sources are collected
+into columns; abstractly typed columns may be narrowed, and extensions may convert
+them. Schema inference and encoding may visit values more than once. Chunked columns
 (SentinelArrays' `ChainedVector`, as Arrow.jl returns for multi-batch tables) are read
 chunk by chunk.
