@@ -83,6 +83,20 @@ handlebytes(table; kw...) = Parquet._encodefile(table; kw...)
     @test isopen(io)
 end
 
+@testset "column metadata follows projection and renaming" begin
+    bytes = take!(Parquet.write(IOBuffer(), (a=collect(1:5), b=collect(6:10));
+        colmetadata=Dict(:a => Dict("unit" => "A"), :b => Dict("unit" => "B"))))
+    for options in ((; select=[:b, :a]),
+            (; select=[:b], filter=Parquet.col(:a) > 2),
+            (; scan=Tables.Scan(select=[:b => :bee, :a => :aye], limit=2)))
+        table = Parquet.Table(bytes; options...)
+        for name in Tables.columnnames(table)
+            @test DataAPI.colmetadata(table, name, "unit") ==
+                (startswith(String(name), "b") ? "B" : "A")
+        end
+    end
+end
+
 @testset "read keywords" begin
     days = Date(2025, 1, 1) .+ Day.(0:9)
     bytes = handlebytes((a=collect(1:10), b=[string(i) for i in 1:10],

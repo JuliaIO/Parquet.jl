@@ -863,8 +863,8 @@ function _datasetgroupsknown(ds::Dataset)
     return groups
 end
 
-function _readdatasetgroup(ds::Dataset, (index, group, offset, limit))
-    budget = _ByteBudget(ds.limits)
+function _readdatasetgroup(ds::Dataset, (index, group, offset, limit),
+        budget::_ByteBudget=_ByteBudget(ds.limits))
     file = ds.files[index]
     filter = _filefilter(ds, file)
     table = _withpart(ds, file, _filescan(ds, file,
@@ -913,14 +913,16 @@ function Base.iterate(ds::Dataset, (index, groups, position, skip, keep)::Tuple{
             index, groups = index + 1, nothing
             continue
         end
-        table = _readdatasetgroup(ds, (index, groups[position], 0, nothing))
+        budget = _ByteBudget(ds.limits)
+        table = _readdatasetgroup(ds, (index, groups[position], 0, nothing), budget)
         position += 1
         rows = _tablerows(table)
         drop = min(skip, rows)
         take = keep === nothing ? rows - drop : min(keep, rows - drop)
         skip -= drop
         keep === nothing || (keep -= take)
-        take > 0 && return _slicetable(table, drop, take), (index, groups, position, skip, keep)
+        take > 0 && return _slicetable(table, drop, take, budget),
+            (index, groups, position, skip, keep)
     end
     return nothing
 end

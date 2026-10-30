@@ -214,6 +214,27 @@ end
     end
 end
 
+@testset "filtered iterator windows share the decoding budget" begin
+    rows = 1000
+    bytes = take!(Parquet.write(IOBuffer(), (x=collect(1:rows),)))
+    filter = Parquet.col(:x) > 0
+    for dataset in (false, true)
+        required = map((nothing, rows - 1)) do limit
+            minimummaterializedlimit() do limits
+                source = dataset ? Parquet.Dataset([bytes]; filter, limit, limits) :
+                    Parquet.File(bytes; filter, limit, limits)
+                try
+                    return only(source)
+                finally
+                    dataset || close(source)
+                end
+            end
+        end
+        # Filtering reads the same row group; the window then copies its retained rows.
+        @test required[2] > required[1]
+    end
+end
+
 @testset "footer metadata structural preflight" begin
     MD = Parquet.Metadata
     count = 2000

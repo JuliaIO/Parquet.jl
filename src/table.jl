@@ -1030,17 +1030,18 @@ function Base.iterate(file::File, (index, skip, keep)::Tuple{Int,Int,Any})
         index += 1
     end
     index > length(groups) && return nothing
-    table = _readtable(file, index:index, _ByteBudget(file.plan.limits);
+    budget = _ByteBudget(file.plan.limits)
+    table = _readtable(file, index:index, budget;
         window=(0, nothing))
     rows = _tablerows(table)
     drop = min(skip, rows)
     take = keep === nothing ? rows - drop : min(keep, rows - drop)
-    return _slicetable(table, drop, take),
+    return _slicetable(table, drop, take, budget),
         (index + 1, skip - drop, keep === nothing ? nothing : keep - take)
 end
 
 # The `take` rows of `table` after its first `drop`.
-function _slicetable(table::Table, drop::Int, take::Int, budget::_ByteBudget=_UNCAPPED)
+function _slicetable(table::Table, drop::Int, take::Int, budget::_ByteBudget)
     rows = _tablerows(table)
     (drop == 0 && take == rows) && return table
     range = (drop + 1):(drop + take)
