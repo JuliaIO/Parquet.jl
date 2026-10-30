@@ -811,12 +811,12 @@ function Table(input; select=nothing, drop=nothing, filter=nothing, limit=nothin
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
         stringtype::Type=DataStrings.DataString, int96::Type=Dates.Nanosecond,
         checksum::Bool=false, partitioning=:hive, limits::Limits=Limits())
+    budget = _ByteBudget(limits)
     # A dataset's files are read with types known only at run time.
     _isdataset(input) && return _barrier(_readdataset, _barrier(Dataset, input;
         partitioning=partitioning, select=select, drop=drop, filter=filter, limit=limit,
         scan=scan, ntasks=ntasks, stringtype=stringtype, int96=int96, checksum=checksum,
-        limits=limits))::Table
-    budget = _ByteBudget(limits)
+        limits=limits, budget=budget), budget)::Table
     file = File(input; select=select, drop=drop, filter=filter, limit=limit, scan=scan,
         ntasks=ntasks, stringtype=stringtype, int96=int96, checksum=checksum,
         limits=limits, budget=budget)
@@ -977,11 +977,16 @@ function Base.iterate(file::File, (index, skip, keep)::Tuple{Int,Int,Any})
 end
 
 # The `take` rows of `table` after its first `drop`.
-function _slicetable(table::Table, drop::Int, take::Int)
+function _slicetable(table::Table, drop::Int, take::Int, budget::_ByteBudget=_UNCAPPED)
     rows = _tablerows(table)
     (drop == 0 && take == rows) && return table
     range = (drop + 1):(drop + take)
-    named = map(column -> _slicecolumn(column, range), _tablecolumns(table))
+    named = map(_tablecolumns(table)) do column
+        T = column isa Union{DataStrings.StringVector,DataStrings.BytesVector} ?
+            DataStrings.StringPayload : eltype(column)
+        _chargearray!(budget, T, take)
+        return _slicecolumn(column, range)
+    end
     return Table(_tablemetadata(table), _tableschema(table), named, take,
         _tablecolmetadata(table))
 end

@@ -26,7 +26,10 @@ A directory named `key=value` below the dataset's root, as pyarrow's
   column), as in pyarrow and DuckDB.
 - Partition columns follow the files' columns. A file column of the same name is
   replaced by the partition values, as pyarrow, Polars, and DuckDB do.
-- A filter on a partition column skips the files whose values rule it out.
+- A filter on a partition column skips data in files whose values rule it out. The
+  constructor still reads every footer to unify the schema, including columns present
+  only in excluded files. For a large object store, narrow the source prefix or file
+  list to avoid those metadata requests when the full schema is not needed.
 - `partitioning=nothing` reads the files' columns only.
 
 ```@example datasets
@@ -78,6 +81,6 @@ dataset, with partition directories below `prefix` (end it with `/`):
 ```julia
 using CloudStore, Parquet
 
-trips = Parquet.Table(Parquet.Dataset(bucket, "lake/trips/"; credentials);
-    filter=Parquet.colcmp(==, Parquet.col(:year), 2025))
+trips = Parquet.Table(Parquet.Dataset(bucket, "lake/trips/"; credentials,
+    filter=Parquet.colcmp(==, Parquet.col(:year), 2025)))
 ```

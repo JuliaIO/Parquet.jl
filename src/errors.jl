@@ -68,8 +68,10 @@ throws a `LimitError`.
 - `max_schema_name_bytes` (64 MiB): new column names one operation may intern, each
   counted as 256 bytes plus twice its length (about 240,000 short names).
 - `max_metadata_depth` (128): schema and nested-value depth.
-- `max_materialized_bytes` (unlimited): optional cap on the bytes one read allocates.
-  Writes are not capped.
+- `max_materialized_bytes` (unlimited): optional cap on materialized data and metadata
+  for one read. A whole-dataset read shares the cap across files; iterating a file or
+  dataset gives each returned row group a new budget. Writes are not capped. This is
+  not a bound on total process memory, Julia compilation, or allocator overhead.
 - `max_container_elements` (unlimited): optional cap on row and element counts.
 
 Counts a file declares (values, rows, list and map lengths) are checked against the

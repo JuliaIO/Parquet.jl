@@ -39,8 +39,9 @@ are skipped in directories and patterns. The keywords are those of
   rows. A column whose files hold narrower integers, a narrower float, or a coarser
   timestamp unit reads as the wider type; other differences in element type are an
   `ArgumentError`.
-- A filter skips the files whose partition values rule it out, and row groups and pages
-  within files as `Parquet.Table` does.
+- A filter skips data in files whose partition values rule it out, and row groups and
+  pages within files as `Parquet.Table` does. All footers are read to unify the schema,
+  including columns present only in files the filter excludes.
 - Iterating the dataset yields one `Parquet.Table` per row group of each file, so it is
   its own `Tables.partitions`; `length(ds)`, `ds[i]`, `Tables.schema(ds)`,
   `DataAPI.nrow(ds)`, and `DataAPI.metadata(ds)` (the first file's key-value metadata)
@@ -49,7 +50,8 @@ are skipped in directories and patterns. The keywords are those of
   directly.
 
 The footers are read when the dataset is created, on up to `ntasks` tasks; reads spread
-over files and their column chunks on up to `ntasks` tasks.
+over files and their column chunks on up to `ntasks` tasks. Stream inputs are buffered
+once, so the dataset can be read repeatedly without seeking or closing the streams.
 
     Parquet.Dataset(store, prefix; credentials=nothing, keywords...)
 
@@ -83,7 +85,7 @@ function _dataset(inputs::Vector{Any}, paths::Vector{Union{Nothing,String}}, bas
         partitioning=:hive, select=nothing, drop=nothing, filter=nothing, limit=nothing,
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
         stringtype::Type=DataStrings.DataString, int96::Type=Dates.Nanosecond,
-        checksum::Bool=false, limits::Limits=Limits())
+        checksum::Bool=false, limits::Limits=Limits(), budget::_ByteBudget=_ByteBudget(limits))
     ntasks >= 1 || throw(ArgumentError("ntasks must be at least 1, got $ntasks"))
     partitioning in (:hive, nothing) || throw(ArgumentError(
         "partitioning must be :hive or nothing, got $(repr(partitioning))"))
@@ -95,7 +97,7 @@ function _dataset(inputs::Vector{Any}, paths::Vector{Union{Nothing,String}}, bas
     files = collect(_DatasetFile, _readmap(eachindex(inputs),
             min(Int(ntasks), length(inputs))) do index, _
         return _barrier(_datasetfile, inputs[index], paths[index], partitions[index],
-            stringtype, int96, limits)::_DatasetFile
+            stringtype, int96, limits, budget)::_DatasetFile
     end)
     names, types, elements = _unifycolumns(files, Symbol.(keys))
     colmetadata = map(names) do name
@@ -371,9 +373,13 @@ end
 ## Reading footers and unifying columns
 
 function _datasetfile(input, path, partitions::Vector{Any}, stringtype::Type, int96::Type,
-        limits::Limits)
+        limits::Limits, budget::_ByteBudget)
     file = try
-        File(input; ntasks=1, stringtype=stringtype, int96=int96, limits=limits)
+        # Streams cannot be reopened after their footer is read. Keep their bytes for
+        # later row-group reads, without closing or seeking the caller's stream.
+        input isa IO && (input = _readsourcebytes(input, budget))
+        File(input; ntasks=1, stringtype=stringtype, int96=int96, limits=limits,
+            budget=budget)
     catch err
         _rethrowfor(err, path)
     end
@@ -552,11 +558,12 @@ function _filescan(ds::Dataset, file::_DatasetFile, filter, offset::Int, limit)
     return Tables.Scan(; select=needed, filter=filter, limit=limit, offset=offset)
 end
 
-function _openpart(ds::Dataset, file::_DatasetFile, scan::Tables.Scan, ntasks::Int)
+function _openpart(ds::Dataset, file::_DatasetFile, scan::Tables.Scan, ntasks::Int,
+        budget::_ByteBudget)
     try
         return _barrier(_openfile, file.input, (file.footer, file.metadata); scan=scan,
             ntasks=ntasks, stringtype=ds.stringtype, int96=ds.int96, checksum=ds.checksum,
-            limits=ds.limits)::File
+            limits=ds.limits, budget=budget)::File
     catch err
         _rethrowfor(err, file.path)
     end
@@ -565,8 +572,9 @@ end
 # `f(handle)` for `file` opened for `scan`, which is closed after. The source type of
 # a dataset's file (a path, bytes, or a source) is known only at run time, so `f` runs
 # behind `_barrier`.
-function _withpart(f, ds::Dataset, file::_DatasetFile, scan::Tables.Scan, ntasks::Int)
-    handle = _openpart(ds, file, scan, ntasks)
+function _withpart(f, ds::Dataset, file::_DatasetFile, scan::Tables.Scan, ntasks::Int,
+        budget::_ByteBudget=_ByteBudget(ds.limits))
+    handle = _openpart(ds, file, scan, ntasks, budget)
     try
         return _barrier(f, handle)
     finally
@@ -577,7 +585,8 @@ end
 # A file's table as a table of the dataset: its columns converted to the dataset's
 # element types, with its partition values and `missing` for the columns it lacks, and
 # a stored schema that covers them.
-function _datasettable(ds::Dataset, file::_DatasetFile, table::Table)
+function _datasettable(ds::Dataset, file::_DatasetFile, table::Table,
+        budget::_ByteBudget)
     rows = _tablerows(table)
     outputs = _datasetoutputs(ds)
     names = Symbol[]
@@ -586,12 +595,12 @@ function _datasettable(ds::Dataset, file::_DatasetFile, table::Table)
     for (index, name) in outputs
         T = ds.types[index]
         column = if ds.partition[index] > 0
-            _constantcolumn(T, file.partitions[ds.partition[index]], rows)
+            _constantcolumn(T, file.partitions[ds.partition[index]], rows, budget)
         elseif ds.names[index] in file.columns
             _datasetcolumn(T, Tables.getcolumn(table, ds.names[index]), ds.names[index],
-                file)
+                file, budget)
         else
-            _constantcolumn(T, missing, rows)
+            _constantcolumn(T, missing, rows, budget)
         end
         push!(names, name)
         push!(columns, column)
@@ -612,9 +621,11 @@ function _datasettable(ds::Dataset, file::_DatasetFile, table::Table)
 end
 
 # A column of `rows` copies of `value`, of element type `T`.
-function _constantcolumn(T::Type, value, rows::Int)
+function _constantcolumn(T::Type, value, rows::Int, budget::_ByteBudget)
     S = Base.nonmissingtype(T)
     if S === DataStrings.DataString || S === DataStrings.DataBytes
+        _chargearray!(budget, DataStrings.StringPayload, rows)
+        ismissing(value) || _charge!(budget, ncodeunits(String(value)))
         payload, buffers = if ismissing(value)
             DataStrings.PAYLOAD_MISSING, Vector{UInt8}[]
         else
@@ -627,14 +638,20 @@ function _constantcolumn(T::Type, value, rows::Int)
             DataStrings.BytesVector{T}
         return V(fill(payload, rows), buffers, Val(:trusted))
     end
+    _chargearray!(budget, T, rows)
     T === Missing && return fill(missing, rows)
     return fill!(Vector{T}(undef, rows), ismissing(value) ? missing : convert(S, value))
 end
 
 # A file's column as the dataset's type `T`, which can be wider than the file's: a value
 # the wider type cannot hold (a far timestamp at a finer unit) names the column and file.
-function _datasetcolumn(T::Type, column::AbstractVector, name::Symbol, file::_DatasetFile)
+function _datasetcolumn(T::Type, column::AbstractVector, name::Symbol, file::_DatasetFile,
+        budget::_ByteBudget)
     try
+        if eltype(column) !== T &&
+                !(column isa Union{DataStrings.StringVector,DataStrings.BytesVector})
+            _chargearray!(budget, T, length(column))
+        end
         return _convertcolumn(T, column)
     catch err
         err isa Union{InexactError,OverflowError} || rethrow()
@@ -655,21 +672,22 @@ function _convertcolumn(T::Type, column::AbstractVector)
 end
 
 # A file's rows for the part `(offset, limit)` of its folded filter's matches.
-function _readpart(ds::Dataset, file::_DatasetFile, filter, offset::Int, limit, ntasks::Int)
+function _readpart(ds::Dataset, file::_DatasetFile, filter, offset::Int, limit, ntasks::Int,
+        budget::_ByteBudget)
     scan = _filescan(ds, file, filter, offset, limit)
-    table = _withpart(ds, file, scan, ntasks) do handle
+    table = _withpart(ds, file, scan, ntasks, budget) do handle
         try
             return _readtable(handle, eachindex(handle.plan.metadata.row_groups),
-                _ByteBudget(ds.limits))
+                budget)
         catch err
             _rethrowfor(err, file.path)
         end
     end
-    return _datasettable(ds, file, table::Table)
+    return _datasettable(ds, file, table::Table, budget)
 end
 
 # The whole dataset as one table.
-function _readdataset(ds::Dataset)
+function _readdataset(ds::Dataset, budget::_ByteBudget=_ByteBudget(ds.limits))
     bound = ds.bound
     offset, limit = bound === nothing ? (0, nothing) : (bound.offset, bound.limit)
     filters = [_filefilter(ds, file) for file in ds.files]
@@ -698,42 +716,42 @@ function _readdataset(ds::Dataset)
             keep == 0 && break
             filters[index] === false && continue
             table = _readpart(ds, file, filters[index], 0,
-                keep === nothing ? nothing : Base.checked_add(skip, keep), ds.ntasks)
+                keep === nothing ? nothing : Base.checked_add(skip, keep), ds.ntasks, budget)
             rows = _tablerows(table)
             drop = min(skip, rows)
             take = keep === nothing ? rows - drop : min(keep, rows - drop)
             skip -= drop
             keep === nothing || (keep -= take)
-            push!(tables, _slicetable(table, drop, take))
+            push!(tables, _slicetable(table, drop, take, budget))
         end
     end
     if !isempty(jobs)
         outer = min(ds.ntasks, length(jobs))
         inner = max(1, ds.ntasks ÷ outer)
         append!(tables, _readmap(jobs, outer) do (index, drop, take), _
-            return _readpart(ds, ds.files[index], filters[index], drop, take, inner)
+            return _readpart(ds, ds.files[index], filters[index], drop, take, inner, budget)
         end)
     end
-    isempty(tables) && return _emptydatasettable(ds)
-    return _vcattables(ds, tables)
+    isempty(tables) && return _emptydatasettable(ds, budget)
+    return _vcattables(ds, tables, budget)
 end
 
 # A table of the dataset's columns with no rows.
-function _emptydatasettable(ds::Dataset)
+function _emptydatasettable(ds::Dataset, budget::_ByteBudget)
     file = first(ds.files)
     table = _withpart(ds, file, _filescan(ds, file, Tables.AlwaysFalse(), 0, nothing),
-        1) do handle
-        return _readtable(handle, 1:0, _ByteBudget(ds.limits))
+        1, budget) do handle
+        return _readtable(handle, 1:0, budget)
     end
-    return _datasettable(ds, file, table::Table)
+    return _datasettable(ds, file, table::Table, budget)
 end
 
 # One table of the rows of `tables` (one per file, in order, with the same columns).
-function _vcattables(ds::Dataset, tables::Vector{Table})
+function _vcattables(ds::Dataset, tables::Vector{Table}, budget::_ByteBudget)
     length(tables) == 1 && return only(tables)
     columns = _tablecolumns(first(tables))
     merged = NamedTuple{keys(columns)}(Tuple(_vcatcolumns(AbstractVector[
-        _tablecolumns(table)[position] for table in tables])
+        _tablecolumns(table)[position] for table in tables], budget)
         for position in eachindex(keys(columns))))
     rows = sum(_tablerows, tables)
     metadata = _withfields(_tablemetadata(first(tables)); num_rows=Int64(rows))
@@ -741,9 +759,10 @@ function _vcattables(ds::Dataset, tables::Vector{Table})
         _tablecolmetadata(first(tables)))
 end
 
-function _vcatcolumns(pieces::Vector{AbstractVector})
+function _vcatcolumns(pieces::Vector{AbstractVector}, budget::_ByteBudget)
     if all(piece -> piece isa DataStrings.StringVector, pieces) ||
             all(piece -> piece isa DataStrings.BytesVector, pieces)
+        _chargearray!(budget, DataStrings.StringPayload, sum(length, pieces))
         payloads = DataStrings.StringPayload[]
         buffers = Vector{UInt8}[]
         starts = Int[]
@@ -759,6 +778,7 @@ function _vcatcolumns(pieces::Vector{AbstractVector})
             DataStrings.BytesVector{T}
         return V(payloads, column, Val(:trusted))
     end
+    _chargearray!(budget, eltype(first(pieces)), sum(length, pieces))
     return reduce(vcat, pieces)
 end
 
@@ -834,19 +854,20 @@ function _datasetgroupsknown(ds::Dataset)
 end
 
 function _readdatasetgroup(ds::Dataset, (index, group, offset, limit))
+    budget = _ByteBudget(ds.limits)
     file = ds.files[index]
     filter = _filefilter(ds, file)
     table = _withpart(ds, file, _filescan(ds, file,
             filter === false ? Tables.AlwaysFalse() : filter, 0, nothing),
-            ds.ntasks) do handle
+            ds.ntasks, budget) do handle
         try
-            return _readtable(handle, group:group, _ByteBudget(ds.limits);
+            return _readtable(handle, group:group, budget;
                 window=(offset, limit))
         catch err
             _rethrowfor(err, file.path)
         end
     end
-    return _datasettable(ds, file, table::Table)
+    return _datasettable(ds, file, table::Table, budget)
 end
 
 Base.length(ds::Dataset) = length(_datasetgroupsknown(ds))

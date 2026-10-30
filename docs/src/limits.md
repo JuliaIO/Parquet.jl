@@ -43,7 +43,7 @@ Pass a [`Parquet.Limits`](@ref) to `Parquet.Table`, `Parquet.File`, `Parquet.Dat
 | `max_decimal_bytes` | 1 MiB | one DECIMAL value |
 | `max_schema_name_bytes` | 64 MiB | the new column names one operation may intern |
 | `max_metadata_depth` | 128 | schema and nested-value depth |
-| `max_materialized_bytes` | unlimited | the bytes one read allocates |
+| `max_materialized_bytes` | unlimited | materialized data and metadata for one read |
 | `max_container_elements` | unlimited | row and element counts |
 
 Counts a file declares (values, rows, list and map lengths) are checked against the bytes
@@ -52,8 +52,12 @@ that back them before memory is reserved for them, and declared page sizes are b
 allocation. Highly repetitive data, such as long runs of nulls or of one dictionary
 value, still decodes to its full size; for untrusted files, set `max_container_elements`
 or `max_materialized_bytes`. `max_materialized_bytes` counts what this package
-allocates: the copy of an `IO` source, decompressed pages, and decoded values, but not a
-byte vector or mapped path it reads in place, nor memory a custom source allocates.
+materializes: the copy of an `IO` source, decompressed pages, decoded values, generated
+partition columns, and concatenated dataset columns. A whole-dataset read shares the
+cap across files, including parallel reads. Iterating a file or dataset gives each
+returned row group a new budget. This is not a bound on total process memory: Julia
+compilation, allocator overhead, a byte vector or mapped path read in place, and memory
+a custom source allocates are outside the cap.
 
 ```@example limits
 try

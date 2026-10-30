@@ -14,6 +14,45 @@ dsrows(table) = Tables.rowcount(table)
 plainvalues(column) = [value isa Parquet.DataStrings.DataString ? String(value) : value
     for value in column]
 
+@testset "datasets retain stream inputs for later reads" begin
+    bytes = take!(Parquet.write(IOBuffer(), (id=collect(1:4),); rowgroupsize=2))
+    streams = [IOBuffer(bytes), IOBuffer(bytes)]
+    ds = Parquet.Dataset(streams)
+    @test all(isopen, streams)
+    @test all(eof, streams)
+    @test Parquet.Table(ds).id == vcat(1:4, 1:4)
+    @test Parquet.Table(ds).id == vcat(1:4, 1:4)
+    @test [part.id for part in ds] == [[1, 2], [3, 4], [1, 2], [3, 4]]
+    @test Parquet.Table([IOBuffer(bytes), IOBuffer(bytes)]).id == vcat(1:4, 1:4)
+end
+
+@testset "datasets share a read allocation budget across files" begin
+    bytes = take!(Parquet.write(IOBuffer(), (id=collect(1:1000),);
+        compress=:none, dictionary=false))
+    maximum = minimummaterializedlimit(limits -> Parquet.Table(bytes; limits=limits))
+    limits = Parquet.Limits(max_materialized_bytes=maximum)
+    @test Parquet.Table(bytes; limits=limits).id == 1:1000
+    for ntasks in (1, 4)
+        @test_throws Parquet.LimitError Parquet.Table([bytes, bytes]; limits=limits,
+            ntasks=ntasks)
+        ds = Parquet.Dataset([bytes, bytes]; limits=limits, ntasks=ntasks)
+        @test_throws Parquet.LimitError Parquet.Table(ds)
+        @test first(ds).id == 1:1000
+    end
+    # Footer-only opens also share one cap, before any row-group read starts.
+    metadataonly = minimummaterializedlimit(limits -> close(Parquet.File(bytes; limits=limits)))
+    @test_throws Parquet.LimitError Parquet.Dataset([bytes, bytes];
+        limits=Parquet.Limits(max_materialized_bytes=metadataonly))
+    mktempdir() do dir
+        dswrite(dir, "key=1/a.parquet", (id=collect(1:1000),))
+        # Reading only a partition key still allocates its output column.
+        rowsonly = minimummaterializedlimit(limits ->
+            Parquet.Table(dir; select=Symbol[], limits=limits))
+        @test_throws Parquet.LimitError Parquet.Table(dir; select=[:key],
+            limits=Parquet.Limits(max_materialized_bytes=rowsonly))
+    end
+end
+
 @testset "datasets: hive partitions, hidden files, and column types" begin
     mktempdir() do dir
         dswrite(dir, "year=2024/city=New%20York/part-0.parquet",
