@@ -137,8 +137,8 @@ function _flatelement(name::String, values::AbstractVector, optional::Bool,
     throw(_writeunsupported(T, name))
 end
 
-function _leafspecs(schema::Schema, semantic::_NestedSchemaPlan, options::_WriteOptions)
-    plans = _writeleafplans(semantic)
+function _leafspecs(schema::Schema, options::_WriteOptions)
+    plans = schema.leaves
     choices = _writeencodingchoices(plans, options.encoding, options.dictionary)
     blooms = _bloomleaves(plans, options.bloomfilter)
     leaves = _LeafSpec[]
@@ -190,7 +190,7 @@ function _inferschema(columns::Vector{Pair{String,AbstractVector}}, options::_Wr
             _NestedField(name, Int(first(range)):Int(last(range)), fragments[index]))
     end
     return _WriteSchema(elements, schema, semantic, fields,
-        _leafspecs(schema, semantic, options), false), shapes
+        _leafspecs(schema, options), false), shapes
 end
 
 # The schema fragment of one input column, and its nested shape (`nothing` when the
@@ -228,7 +228,7 @@ function _storedschema(table::Table, options::_WriteOptions)
             _NestedField(name, Int(first(range)):Int(last(range)), fragments[index]))
     end
     return _WriteSchema(elements, schema, semantic, fields,
-        _leafspecs(schema, semantic, options), true)
+        _leafspecs(schema, options), true)
 end
 
 # The schema a rewrite of `table` writes: its stored schema, except that a leaf loses an
@@ -842,7 +842,7 @@ function _retypenullcolumns!(writer::Writer, columns)
     isempty(retyped) && return retyped
     tree = Schema(elements; limits=options.limits)
     semantic = _nestedplan(tree; limits=options.limits)
-    leaves = _leafspecs(tree, semantic, options)
+    leaves = _leafspecs(tree, options)
     for group in writer.groups, (index, record) in enumerate(group.chunks)
         type = leaves[index].element.type_
         meta = record.meta

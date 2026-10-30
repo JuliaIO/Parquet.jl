@@ -3,10 +3,8 @@ using Test
 
 function selectorleaf(ordinal::Integer, path::Vector{String}, values::AbstractVector)
     element = Parquet._writeelement(Parquet._writemap(eltype(values)), last(path), false)
-    column = Parquet.WriteColumn(last(path), values, element.type_, element.type_length,
-        false, element.logicalType, element.converted_type, copy(path), nothing, nothing,
-        Int16(0), Int16(0), length(values), Parquet.Metadata.SchemaElement[])
-    return Parquet.WriteLeafPlan(Int32(ordinal), copy(path), column)
+    return Parquet.SchemaNode(element, copy(path), Int16(0), Int16(0), Int32(ordinal),
+        Parquet.SchemaNode[])
 end
 
 function assertencoding(choice::Parquet.WriteEncodingChoice, encoding;
@@ -18,7 +16,7 @@ end
 
 @testset "nested writer leaf encoding selectors" begin
     MD = Parquet.Metadata
-    leaves = Parquet.WriteLeafPlan[
+    leaves = Parquet.SchemaNode[
         selectorleaf(1, ["id"], Int32[1]),
         selectorleaf(2, ["orders", "list", "element", "price"], Int64[2]),
         selectorleaf(3, ["single", "value"], ["three"]),
@@ -98,13 +96,13 @@ end
     @test_throws ArgumentError Parquet._writeencodingchoices(
         leaves, (:single, :value) => :delta_binary_packed, false)
 
-    multidotted = Parquet.WriteLeafPlan[
+    multidotted = Parquet.SchemaNode[
         selectorleaf(1, ["a", "b"], Int32[1]),
     ]
     @test_throws ArgumentError Parquet._writeencodingchoices(
         multidotted, "a.b" => :plain, false)
 
-    multigroup = Parquet.WriteLeafPlan[
+    multigroup = Parquet.SchemaNode[
         selectorleaf(1, ["pair", "left"], Int32[1]),
         selectorleaf(2, ["pair", "right"], Int32[2]),
     ]
@@ -115,7 +113,7 @@ end
     assertencoding(pairchoices[1], MD.Encoding.DELTA_BINARY_PACKED)
     assertencoding(pairchoices[2], nothing; dictionary=true)
 
-    duplicatepaths = Parquet.WriteLeafPlan[
+    duplicatepaths = Parquet.SchemaNode[
         selectorleaf(6, ["duplicate", "value"], Int32[1]),
         selectorleaf(7, ["duplicate", "value"], Int32[2]),
     ]

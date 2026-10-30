@@ -1,66 +1,8 @@
 import Tables
 
-struct WriteColumn{V}
-    name::String
-    values::V
-    physical::Metadata.Type.T
-    type_length::Union{Nothing,Int32}
-    optional::Bool
-    logical::Union{Nothing, Metadata.LogicalType}
-    converted::Union{Nothing, Metadata.ConvertedType.T}
-    path::Vector{String}
-    repetitions::Union{Nothing,AbstractVector{<:Unsigned}}
-    definitions::Union{Nothing,AbstractVector{<:Unsigned}}
-    max_repetition_level::Int16
-    max_definition_level::Int16
-    rows::Int
-    schema::Vector{Metadata.SchemaElement}
-end
-
-struct WriteLeafPlan
-    ordinal::Int32
-    path::Vector{String}
-    column::WriteColumn
-    entry_offsets::Vector{Int64}
-    dense_offsets::Vector{Int64}
-    payload_offsets::Vector{Int64}
-end
-
-function WriteLeafPlan(ordinal::Int32, path::Vector{String}, column::WriteColumn)
-    return WriteLeafPlan(ordinal, path, column, Int64[], Int64[], Int64[])
-end
-
 struct WriteEncodingChoice
     encoding::Union{Nothing,Metadata.Encoding.T}
     dictionary::Bool
-end
-
-function _writeleafschema(name::String, physical::Metadata.Type.T,
-    type_length::Union{Nothing,Int32}, optional::Bool,
-    logical::Union{Nothing,Metadata.LogicalType},
-    converted::Union{Nothing,Metadata.ConvertedType.T})
-    repetition = optional ? Metadata.FieldRepetitionType.OPTIONAL :
-        Metadata.FieldRepetitionType.REQUIRED
-    return Metadata.SchemaElement(
-        type_=physical,
-        type_length=type_length,
-        repetition_type=repetition,
-        name=name,
-        converted_type=converted,
-        logicalType=logical,
-    )
-end
-
-function WriteColumn(name::String, values, physical::Metadata.Type.T,
-    type_length::Union{Nothing,Int32}, optional::Bool,
-    logical::Union{Nothing,Metadata.LogicalType},
-    converted::Union{Nothing,Metadata.ConvertedType.T})
-    definition = Int16(optional ? 1 : 0)
-    schema = Metadata.SchemaElement[
-        _writeleafschema(name, physical, type_length, optional, logical, converted),
-    ]
-    return WriteColumn(name, values, physical, type_length, optional, logical, converted,
-        String[name], nothing, nothing, Int16(0), definition, length(values), schema)
 end
 
 function _writevalueerror(path::AbstractString, err)
@@ -527,25 +469,6 @@ end
     "$value does not convert to $T exactly, the one type its values promote to, so its " *
     "values have no common type; convert the column to one element type first"))
 
-function _writeleafplans(semantic::_NestedSchemaPlan)
-    emptyschema = Metadata.SchemaElement[]
-    leaves = WriteLeafPlan[]
-    sizehint!(leaves, length(semantic.leaves))
-    for leaf in semantic.leaves
-        node = leaf.source
-        element = node.element
-        optional = element.repetition_type ==
-            Metadata.FieldRepetitionType.OPTIONAL
-        column = WriteColumn(element.name, nothing, element.type_,
-            element.type_length, optional, element.logicalType,
-            element.converted_type, node.path, nothing, nothing,
-            node.max_repetition_level, node.max_definition_level, 0,
-            emptyschema)
-        push!(leaves, WriteLeafPlan(node.column_index, node.path, column))
-    end
-    return leaves
-end
-
 """
     _bloomleaves(leaves, bloomfilter) -> Vector{Bool}
 
@@ -553,28 +476,28 @@ Which leaves get bloom filters: all but BOOLEAN leaves for `true`, none for `fal
 the leaves a selector or collection of selectors names (column names, leaf path tuples,
 or leaf ordinals, as in encoding overrides).
 """
-function _bloomleaves(leaves::Vector{WriteLeafPlan}, bloomfilter::Bool)
-    return Bool[bloomfilter && leaf.column.physical != Metadata.Type.BOOLEAN
+function _bloomleaves(leaves::Vector{SchemaNode}, bloomfilter::Bool)
+    return Bool[bloomfilter && leaf.element.type_ != Metadata.Type.BOOLEAN
         for leaf in leaves]
 end
 
-_bloomleaves(leaves::Vector{WriteLeafPlan}, selector::Union{Symbol,AbstractString,Integer}) =
+_bloomleaves(leaves::Vector{SchemaNode}, selector::Union{Symbol,AbstractString,Integer}) =
     _bloomleaves(leaves, (selector,))
 
-function _bloomleaves(leaves::Vector{WriteLeafPlan},
+function _bloomleaves(leaves::Vector{SchemaNode},
         selectors::Union{AbstractVector,AbstractSet,Tuple})
     flags = fill(false, length(leaves))
     for selector in selectors
         index = _writeencodingleafindex(leaves, _writeencodingselector(selector);
             policy="bloomfilter")
-        leaves[index].column.physical == Metadata.Type.BOOLEAN && throw(ArgumentError(
+        leaves[index].element.type_ == Metadata.Type.BOOLEAN && throw(ArgumentError(
             "bloom filters are not written for BOOLEAN columns; $(repr(selector)) is one"))
         flags[index] = true
     end
     return flags
 end
 
-_bloomleaves(::Vector{WriteLeafPlan}, bloomfilter) = throw(ArgumentError(
+_bloomleaves(::Vector{SchemaNode}, bloomfilter) = throw(ArgumentError(
     "bloomfilter must be a Bool, a column selector, or a collection of selectors, got " *
     "$(typeof(bloomfilter))"))
 
@@ -660,83 +583,10 @@ function _writeencodingchoice(encoding)
         "a Parquet encoding must be a Symbol, string, or Encoding value, got $(typeof(encoding))"))
 end
 
-function _writeencodingcolumn(name::Symbol)
-    return String(name)
-end
-
-function _writeencodingcolumn(name::AbstractString)
-    return String(name)
-end
-
-function _writeencodingcolumn(name)
-    throw(ArgumentError(
-        "Parquet encoding policy keys must be Symbols or strings, got $(typeof(name))"))
-end
-
-function _writeencodingoverrides(entries)
-    overrides = Dict{String,WriteEncodingChoice}()
-    for (rawname, encoding) in entries
-        name = _writeencodingcolumn(rawname)
-        haskey(overrides, name) &&
-            throw(ArgumentError("duplicate Parquet encoding policy for column $(repr(name))"))
-        overrides[name] = _writeencodingchoice(encoding)
-    end
-    return overrides
-end
-
-function _validatewriteencodingchoice(column::WriteColumn, choice::WriteEncodingChoice)
+function _validatewriteencodingchoice(column::Metadata.SchemaElement, choice::WriteEncodingChoice)
     encoding = choice.encoding
     encoding === nothing || _validatewriteencoding(column, encoding)
     return
-end
-
-function _mappedwriteencodingchoices(columns::Vector{WriteColumn}, entries, dictionary::Bool)
-    overrides = _writeencodingoverrides(entries)
-    names = Set(column.name for column in columns)
-    unknown = sort!(String[name for name in keys(overrides) if !(name in names)])
-    isempty(unknown) || throw(ArgumentError(
-        "unknown Parquet writer column" * (length(unknown) == 1 ? " " : "s ") *
-        join(repr.(unknown), ", ") * " in encoding policy"))
-    default = WriteEncodingChoice(nothing, dictionary)
-    choices = WriteEncodingChoice[]
-    sizehint!(choices, length(columns))
-    for column in columns
-        choice = get(overrides, column.name, default)
-        _validatewriteencodingchoice(column, choice)
-        push!(choices, choice)
-    end
-    return choices
-end
-
-function _writeencodingchoices(columns::Vector{WriteColumn}, ::Nothing, dictionary::Bool)
-    return fill(WriteEncodingChoice(nothing, dictionary), length(columns))
-end
-
-function _writeencodingchoices(columns::Vector{WriteColumn}, encoding::Union{
-        Symbol,AbstractString,Metadata.Encoding.T}, dictionary::Bool)
-    # An explicit encoding takes precedence over the dictionary default.
-    choice = _writeencodingchoice(encoding)
-    foreach(column -> _validatewriteencodingchoice(column, choice), columns)
-    return fill(choice, length(columns))
-end
-
-function _writeencodingchoices(columns::Vector{WriteColumn}, encoding::Pair, dictionary::Bool)
-    return _mappedwriteencodingchoices(columns, (encoding,), dictionary)
-end
-
-function _writeencodingchoices(columns::Vector{WriteColumn}, encoding::NamedTuple,
-    dictionary::Bool)
-    return _mappedwriteencodingchoices(columns, pairs(encoding), dictionary)
-end
-
-function _writeencodingchoices(columns::Vector{WriteColumn}, encoding::AbstractDict,
-    dictionary::Bool)
-    return _mappedwriteencodingchoices(columns, pairs(encoding), dictionary)
-end
-
-function _writeencodingchoices(::Vector{WriteColumn}, encoding, ::Bool)
-    throw(ArgumentError(
-        "Parquet encoding must be nothing, a Symbol, string, Pair, NamedTuple, or AbstractDict, got $(typeof(encoding))"))
 end
 
 function _writeencodingselector(selector::Integer)
@@ -790,18 +640,18 @@ function _singlewriteencodingmatch(matches::Vector{Int}, selector; kind::String,
     return only(matches)
 end
 
-function _writeencodingleafindex(leaves::Vector{WriteLeafPlan},
+function _writeencodingleafindex(leaves::Vector{SchemaNode},
     selector::Tuple{Symbol,<:Integer}; policy::String="encoding policy")
     ordinal = selector[2]
     matches = Int[]
     for (index, leaf) in enumerate(leaves)
-        leaf.ordinal == ordinal && push!(matches, index)
+        leaf.column_index == ordinal && push!(matches, index)
     end
     return _singlewriteencodingmatch(matches, ordinal;
         kind="physical leaf ordinal", policy)
 end
 
-function _writeencodingleafindex(leaves::Vector{WriteLeafPlan},
+function _writeencodingleafindex(leaves::Vector{SchemaNode},
     selector::Tuple{Symbol,<:Tuple}; policy::String="encoding policy")
     path = selector[2]
     matches = Int[]
@@ -812,7 +662,7 @@ function _writeencodingleafindex(leaves::Vector{WriteLeafPlan},
         kind="physical leaf path", policy)
 end
 
-function _writeencodingleafindex(leaves::Vector{WriteLeafPlan},
+function _writeencodingleafindex(leaves::Vector{SchemaNode},
     selector::Tuple{Symbol,String}; policy::String="encoding policy")
     name = selector[2]
     flat = Int[]
@@ -829,7 +679,7 @@ function _writeencodingleafindex(leaves::Vector{WriteLeafPlan},
         kind="top-level field", policy)
 end
 
-function _mappedwriteencodingchoices(leaves::Vector{WriteLeafPlan}, entries,
+function _mappedwriteencodingchoices(leaves::Vector{SchemaNode}, entries,
     dictionary::Bool)
     selectors = Set{Any}()
     assigned = Set{Int}()
@@ -841,9 +691,9 @@ function _mappedwriteencodingchoices(leaves::Vector{WriteLeafPlan}, entries,
         push!(selectors, selector)
         index = _writeencodingleafindex(leaves, selector)
         index in assigned && throw(ArgumentError(
-            "multiple Parquet encoding policy selectors assign physical leaf ordinal $(leaves[index].ordinal)"))
+            "multiple Parquet encoding policy selectors assign physical leaf ordinal $(leaves[index].column_index)"))
         choice = _writeencodingchoice(encoding)
-        _validatewriteencodingchoice(leaves[index].column, choice)
+        _validatewriteencodingchoice(leaves[index].element, choice)
         push!(assigned, index)
         overrides[index] = choice
     end
@@ -856,41 +706,41 @@ function _mappedwriteencodingchoices(leaves::Vector{WriteLeafPlan}, entries,
     return choices
 end
 
-function _writeencodingchoices(leaves::Vector{WriteLeafPlan}, ::Nothing,
+function _writeencodingchoices(leaves::Vector{SchemaNode}, ::Nothing,
     dictionary::Bool)
     return fill(WriteEncodingChoice(nothing, dictionary), length(leaves))
 end
 
-function _writeencodingchoices(leaves::Vector{WriteLeafPlan}, encoding::Union{
+function _writeencodingchoices(leaves::Vector{SchemaNode}, encoding::Union{
         Symbol,AbstractString,Metadata.Encoding.T}, dictionary::Bool)
     # An explicit encoding takes precedence over the dictionary default.
     choice = _writeencodingchoice(encoding)
-    foreach(leaf -> _validatewriteencodingchoice(leaf.column, choice), leaves)
+    foreach(leaf -> _validatewriteencodingchoice(leaf.element, choice), leaves)
     return fill(choice, length(leaves))
 end
 
-function _writeencodingchoices(leaves::Vector{WriteLeafPlan}, encoding::Pair,
+function _writeencodingchoices(leaves::Vector{SchemaNode}, encoding::Pair,
     dictionary::Bool)
     return _mappedwriteencodingchoices(leaves, (encoding,), dictionary)
 end
 
-function _writeencodingchoices(leaves::Vector{WriteLeafPlan}, encoding::NamedTuple,
+function _writeencodingchoices(leaves::Vector{SchemaNode}, encoding::NamedTuple,
     dictionary::Bool)
     return _mappedwriteencodingchoices(leaves, pairs(encoding), dictionary)
 end
 
-function _writeencodingchoices(leaves::Vector{WriteLeafPlan}, encoding::AbstractDict,
+function _writeencodingchoices(leaves::Vector{SchemaNode}, encoding::AbstractDict,
     dictionary::Bool)
     return _mappedwriteencodingchoices(leaves, pairs(encoding), dictionary)
 end
 
-function _writeencodingchoices(::Vector{WriteLeafPlan}, encoding, ::Bool)
+function _writeencodingchoices(::Vector{SchemaNode}, encoding, ::Bool)
     throw(ArgumentError(
         "Parquet encoding must be nothing, a Symbol, string, Pair, NamedTuple, or AbstractDict, got $(typeof(encoding))"))
 end
 
-function _validatewriteencoding(column::WriteColumn, encoding::Metadata.Encoding.T)
-    physical = column.physical
+function _validatewriteencoding(column::Metadata.SchemaElement, encoding::Metadata.Encoding.T)
+    physical = column.type_
     encoding == Metadata.Encoding.PLAIN && return
     encoding == Metadata.Encoding.DELTA_BINARY_PACKED &&
         physical in (Metadata.Type.INT32, Metadata.Type.INT64) && return
