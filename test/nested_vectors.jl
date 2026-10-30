@@ -175,7 +175,7 @@ end
             Dict{String,Int32}()],
     )
     table = Parquet.Table(Parquet._encodefile(source))
-    columns = Parquet.Tables.columns(table)
+    columns = Parquet.Tables.columntable(table)
     for selection in ([3, 1], Bool[true, false, true, true], Int[], :)
         subset = map(column -> column[selection], columns)
         for name in keys(columns)

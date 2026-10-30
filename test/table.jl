@@ -128,6 +128,50 @@ end
     close(table)
 end
 
+@testset "runtime column storage and wide tables" begin
+    matrix = reshape(Int32.(1:1024), 4, 256)
+    columnnames = [Symbol("field_", index) for index in axes(matrix, 2)]
+    source = Tables.table(matrix; header=columnnames)
+    bytes = take!(Parquet.write(IOBuffer(), source))
+    table = Parquet.Table(bytes)
+    @test Tables.columns(table) === table
+    @test collect(Tables.columnnames(table)) == columnnames
+    @test all(table[index] == matrix[:, index] for index in axes(matrix, 2))
+    @test all(table[name] === table[index] for (index, name) in enumerate(columnnames))
+    copied = copy(table)
+    copied[1][1] = -1
+    @test table[1][1] == 1
+    rewritten = Parquet.Table(take!(Parquet.write(IOBuffer(), table)))
+    @test all(rewritten[index] == table[index] for index in eachindex(columnnames))
+    # Column names may coincide with every field of the table container.
+    collision = NamedTuple{fieldnames(Parquet.Table)}(ntuple(_ -> [1, 2],
+        fieldcount(Parquet.Table)))
+    collisiontable = Parquet.Table(take!(Parquet.write(IOBuffer(), collision)))
+    @test Tables.columntable(collisiontable) == collision
+    @test_throws KeyError table.does_not_exist
+end
+
+@testset "residual column copies respect the materialized-byte limit" begin
+    bytes = take!(Parquet.write(IOBuffer(), (x=collect(Int64, 1:100),)))
+    limits = Parquet.Limits(max_materialized_bytes=typemax(Int64) - 1)
+    budget = Parquet._ByteBudget(limits)
+    file = Parquet.File(bytes; limits=limits, budget=budget)
+    try
+        Parquet._readtable(file, eachindex(file.plan.metadata.row_groups), budget)
+    finally
+        close(file)
+    end
+    # Reading one physical column fits; selecting a second copy of it must reserve
+    # additional output space even though no additional page is decoded.
+    cap = Parquet.Limits(max_materialized_bytes=budget.used)
+    @test Parquet.Table(bytes; limits=cap).x == 1:100
+    scan = Tables.Scan(select=[:x, :x => :again])
+    @test_throws Parquet.LimitError Parquet.Table(bytes; scan=scan, limits=cap)
+    copied = Parquet.Table(bytes; scan=scan)
+    @test copied.x == copied.again == 1:100
+    @test copied.x !== copied.again
+end
+
 @testset "encrypted files are refused as unsupported" begin
     datadir = joinpath(get(ENV, "PARQUET_TESTING_DIR",
         joinpath(@__DIR__, "parquet-testing")), "data")

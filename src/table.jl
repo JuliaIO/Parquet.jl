@@ -3,20 +3,27 @@ import DataAPI, Dates, Tables
 # `Table <: Tables.AbstractColumns`, so `table.x` is column `x`; the package reads the
 # fields below through `getfield` (the `_table*` accessors). A table owns its columns and
 # holds no file: reading copies every value out of the source, which is then released.
+# Names and column types live in values so a new file schema does not recompile sinks.
 # `colmetadata` holds each column's key-value metadata, in column order.
-struct Table{C<:NamedTuple} <: Tables.AbstractColumns
+struct Table <: Tables.AbstractColumns
     metadata::Metadata.FileMetaData
     schema::Schema
-    columns::C
+    names::Vector{Symbol}
+    columns::Vector{AbstractVector}
+    lookup::Dict{Symbol,Int}
     rows::Int
     colmetadata::Vector{Vector{Pair{String,String}}}
 end
 
-function Table(metadata::Metadata.FileMetaData, schema::Schema, columns::NamedTuple,
-        rows::Int)
-    return Table(metadata, schema, columns, rows,
-        [Pair{String,String}[] for _ in 1:length(columns)])
+function Table(metadata::Metadata.FileMetaData, schema::Schema, names::Vector{Symbol},
+        columns::AbstractVector, rows::Int,
+        colmetadata::Vector{Vector{Pair{String,String}}}=
+            [Pair{String,String}[] for _ in names])
+    return Table(metadata, schema, names, columns,
+        Dict(name => index for (index, name) in enumerate(names)), rows, colmetadata)
 end
+
+_tablenames(table::Table) = getfield(table, :names)
 
 _tablecolmetadata(table::Table) = getfield(table, :colmetadata)
 
@@ -720,13 +727,12 @@ function _readtable(file::File, groups::AbstractVector{Int}, budget::_ByteBudget
     _validatetablerowgroups(metadata, schema, limits)
     columns, rows = _readselectedflat(file, plan, parts, filter !== nothing, offset, limit,
         budget)
-    named = NamedTuple{Tuple(_tablenames(schema, limits))}(Tuple(columns))
-    bound === nothing && return Table(metadata, schema, named, rows, _outputcolmetadata(plan))
+    table = Table(metadata, schema, _tablenames(schema, limits), columns, rows,
+        _outputcolmetadata(plan))
+    bound === nothing && return table
     projection = Tables.BoundScan(bound.columns, nothing, bound.filtercols, nothing, 0,
         bound.validate)
-    named, rows, metadata, schema = _scanresidual(named, rows, projection, metadata, schema,
-        limits, 0, nothing)
-    return Table(metadata, schema, named, rows, _outputcolmetadata(plan))
+    return _scanresidual(table, projection, limits, budget, 0, nothing)
 end
 
 # File metadata restricted to the row groups `groups`.
@@ -758,13 +764,9 @@ function _readgroups(file::File, groups::AbstractVector{Int}, budget::_ByteBudge
     end
     length(columns) == length(names) || throw(AssertionError(
         "table column count does not match its names"))
-    named = NamedTuple{Tuple(names)}(Tuple(columns))
+    table = Table(metadata, schema, names, columns, rows, _outputcolmetadata(plan))
     bound = plan.bound
-    if bound !== nothing
-        named, rows, metadata, schema = _scanresidual(named, rows, bound, metadata, schema,
-            limits, offset, limit)
-    end
-    return Table(metadata, schema, named, rows, _outputcolmetadata(plan))
+    return bound === nothing ? table : _scanresidual(table, bound, limits, budget, offset, limit)
 end
 
 # `file` reading through a `_CoalescedSource` over the column chunks of `metadata`, when
@@ -853,53 +855,82 @@ _isdataset(input) = false
 
 # Applies the filter, row bounds, order, and renames of a resolved scan to the columns
 # read for it, and restricts the schema to the output columns.
-Base.@nospecializeinfer function _scanresidual(columns::NamedTuple, rows::Int,
-        bound::Tables.BoundScan, metadata::Metadata.FileMetaData, schema::Schema,
-        limits::Limits,
+function _scanresidual(table::Table, bound::Tables.BoundScan, limits::Limits,
+        budget::_ByteBudget,
         offset::Int=bound.offset, limit=bound.limit)
-    # Compiled once, not for each set of column types: only the residual scan needs them.
-    @nospecialize columns
     readpositions = sort!(unique!(vcat(Int[column.index for column in bound.columns],
         bound.filtercols)))
     positions = Int[searchsortedfirst(readpositions, column.index)
         for column in bound.columns]
     names = Symbol[column.name for column in bound.columns]
-    readnames = keys(columns)
+    readnames = _tablenames(table)
+    columns = _tablecolumns(table)
+    rows = _tablerows(table)
     if bound.filter === nothing && limit === nothing && iszero(offset)
-        positions == eachindex(readnames) && Tuple(names) == readnames &&
-            return columns, rows, metadata, schema
+        positions == eachindex(readnames) && names == readnames && return table
         # Reordered or renamed columns keep their vectors; a column selected twice is
         # copied so the table never holds one vector under two names.
         seen = falses(length(readnames))
-        picked = Any[]
+        output = AbstractVector[]
         for position in positions
             column = columns[position]
-            push!(picked, seen[position] ? copy(column) : (seen[position] = true; column))
+            seen[position] && _chargecolumncopy!(budget, column, rows)
+            push!(output, seen[position] ? copy(column) : (seen[position] = true; column))
         end
-        output = NamedTuple{Tuple(names)}(Tuple(picked))
-        metadata, schema = _selectfields(metadata, schema, positions,
-            String[String(name) for name in names], limits)
-        return output, rows, metadata, schema
+    else
+        # Keep Tables' predicate semantics, but retain runtime column storage instead
+        # of specializing a NamedTuple for every output schema.
+        indices = if bound.filter === nothing
+            1:rows
+        else
+            _chargefiltermask!(budget, bound.filter, rows)
+            mask = Tables.filtermask(bound, table)
+            budget.maximum == typemax(Int64) || _chargearray!(budget, Int, count(mask))
+            findall(mask)
+        end
+        skipped = min(offset, length(indices))
+        rows = limit === nothing ? length(indices) - skipped :
+            min(limit, length(indices) - skipped)
+        indices = view(indices, (skipped + 1):(skipped + rows))
+        output = AbstractVector[]
+        for position in positions
+            column = columns[position]
+            _chargecolumncopy!(budget, column, rows)
+            push!(output, _slicecolumn(column, indices))
+        end
     end
-    residual = Tables.Scan(; select=Pair{Symbol,Symbol}[readnames[position] => name
-        for (position, name) in zip(positions, names)], filter=bound.filter,
-        limit=limit, offset=offset, validate=bound.validate)
-    # With no column read, a stand-in column carries the row count to the executor,
-    # which compiles for the columns' types.
-    output, outrows = _barrier(_scanexecute,
-        isempty(readnames) ? (rows=Base.OneTo(rows),) : columns, residual,
-        names)::Tuple{NamedTuple,Int}
-    metadata, schema = _selectfields(metadata, schema, positions,
+    metadata, schema = _selectfields(_tablemetadata(table), _tableschema(table), positions,
         String[String(name) for name in names], limits)
-    return output, outrows, metadata, schema
+    return Table(metadata, schema, names, output, rows, _tablecolmetadata(table))
 end
 
-# The columns `names` of the residual scan of `columns`, and their row count.
-function _scanexecute(columns::NamedTuple, residual::Tables.Scan, names::Vector{Symbol})
-    result = Tables.scan(columns, residual)
-    output = NamedTuple{Tuple(names)}(Tuple(Tables.getcolumn(result, name)
-        for name in names))
-    return output, Tables.rowcount(result)
+# Slicing a string column copies payload descriptors while keeping its byte buffers.
+function _chargecolumncopy!(budget::_ByteBudget, column::AbstractVector, rows::Int)
+    budget.maximum == typemax(Int64) && return
+    T = column isa Union{DataStrings.StringVector,DataStrings.BytesVector} ?
+        DataStrings.StringPayload : eltype(column)
+    _chargearray!(budget, T, rows)
+    return
+end
+
+# Tables.filtermask materializes predicate arrays and a final Bool mask. Reserve two
+# bytes per intermediate value for Bool/Union{Missing,Bool}, including union tags.
+function _chargefiltermask!(budget::_ByteBudget, filter::Tables.ScanExpr, rows::Int)
+    budget.maximum == typemax(Int64) && return
+    _chargearray!(budget, Bool, rows)
+    pending = Tables.ScanExpr[filter]
+    while !isempty(pending)
+        node = pop!(pending)
+        arrays = 1
+        if node isa Union{Tables.AndExpr,Tables.OrExpr}
+            arrays = max(1, length(node.args) - 1)
+            append!(pending, node.args)
+        elseif node isa Tables.NotExpr
+            push!(pending, node.arg)
+        end
+        _charge!(budget, Int128(2) * rows * arrays)
+    end
+    return
 end
 
 # A table holds no file; `close` has nothing to release.
@@ -915,7 +946,8 @@ A table with the same schema and metadata whose columns are new, mutable vectors
 `copy(row)` makes a row's own vector.
 """
 Base.copy(table::Table) = Table(_tablemetadata(table), _tableschema(table),
-    map(copy, _tablecolumns(table)), _tablerows(table), _tablecolmetadata(table))
+    copy(_tablenames(table)), map(copy, _tablecolumns(table)), _tablerows(table),
+    _tablecolmetadata(table))
 
 # The row groups a file yields and each one's (offset, limit) row window, or `nothing`
 # when a filter combined with a limit or offset leaves them unknown before reading.
@@ -999,22 +1031,22 @@ function _slicetable(table::Table, drop::Int, take::Int, budget::_ByteBudget=_UN
     rows = _tablerows(table)
     (drop == 0 && take == rows) && return table
     range = (drop + 1):(drop + take)
-    named = map(_tablecolumns(table)) do column
+    columns = map(_tablecolumns(table)) do column
         T = column isa Union{DataStrings.StringVector,DataStrings.BytesVector} ?
             DataStrings.StringPayload : eltype(column)
         _chargearray!(budget, T, take)
         return _slicecolumn(column, range)
     end
-    return Table(_tablemetadata(table), _tableschema(table), named, take,
+    return Table(_tablemetadata(table), _tableschema(table), _tablenames(table), columns, take,
         _tablecolmetadata(table))
 end
 
 # Rows `range` of a column; string and byte columns keep their kind and share buffers.
-_slicecolumn(column::AbstractVector, range::UnitRange{Int}) = column[range]
+_slicecolumn(column::AbstractVector, indices::AbstractVector{Int}) = column[indices]
 
 function _slicecolumn(column::Union{DataStrings.StringVector,DataStrings.BytesVector},
-        range::UnitRange{Int})
-    return typeof(column)(column.payloads[range], column.buffers, Val(:trusted))
+        indices::AbstractVector{Int})
+    return typeof(column)(column.payloads[indices], column.buffers, Val(:trusted))
 end
 
 Tables.partitions(file::File) = file
@@ -1157,7 +1189,7 @@ end
 # Column metadata through DataAPI (style `:default`): each column's names and entries.
 DataAPI.colmetadatasupport(::Type{<:Union{File,Table}}) = (read=true, write=false)
 
-_colmetadataentries(table::Table) = collect(keys(_tablecolumns(table))),
+_colmetadataentries(table::Table) = _tablenames(table),
     _tablecolmetadata(table)
 
 function _colmetadataentries(file::File)
@@ -1179,8 +1211,8 @@ metadata, as `DataFrame(Parquet.Table(path))` does.
 function read(source, sink; kw...)
     table = Table(source; kw...)
     columns = map(_rowcolumn, _tablecolumns(table))
-    copied = Table(_tablemetadata(table), _tableschema(table), columns, _tablerows(table),
-        _tablecolmetadata(table))
+    copied = Table(_tablemetadata(table), _tableschema(table), _tablenames(table), columns,
+        _tablerows(table), _tablecolmetadata(table))
     result = sink(Tables.CopiedColumns(copied))
     # The CopiedColumns wrapper, which lets the sink keep the columns, hides the
     # table's metadata from it.
@@ -1245,24 +1277,22 @@ A filter that keeps rows whose value is missing, the same as `Tables.isnull`.
 """
 const isnull = Tables.isnull
 
-function Tables.columns(table::Table)
-    return _tablecolumns(table)
-end
+Tables.columns(table::Table) = table
 
 function Tables.columnnames(table::Table)
-    return keys(_tablecolumns(table))
+    return Tuple(_tablenames(table))
 end
 
 function Tables.getcolumn(table::Table, name::Symbol)
-    return getfield(_tablecolumns(table), name)
+    return _tablecolumns(table)[getfield(table, :lookup)[name]]
 end
 
 function Tables.getcolumn(table::Table, index::Int)
-    return getfield(_tablecolumns(table), index)
+    return _tablecolumns(table)[index]
 end
 
 function Tables.getcolumn(table::Table, ::Type{T}, index::Int, name::Symbol) where {T}
-    return getfield(_tablecolumns(table), index)
+    return _tablecolumns(table)[index]
 end
 
 # As for a DataFrame: `table["name"]` is a column, and `names(table)` their names.
@@ -1271,7 +1301,7 @@ Base.names(x::Union{File,Table}) = String[String(name) for name in Tables.column
 
 function Tables.schema(table::Table)
     columns = _tablecolumns(table)
-    return Tables.Schema(keys(columns), map(eltype, values(columns)))
+    return Tables.Schema(_tablenames(table), map(eltype, columns))
 end
 
 function Tables.rowcount(table::Table)

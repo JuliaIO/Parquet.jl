@@ -866,7 +866,7 @@ end
     table = Parquet.Table(withcolumns; limits=Parquet.Limits(
         max_page_index_bytes=total))
     try
-        @test Parquet.Tables.columns(table) == input
+        @test Parquet.Tables.columntable(table) == input
     finally
         close(table)
     end

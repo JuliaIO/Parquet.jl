@@ -363,7 +363,7 @@ end
         table = Parquet.Table(fixture)
         columns = Parquet.Tables.columns(table)
         # The table itself (its stored schema) and plain vectors of its rows (a copy).
-        for source in (table, map(collect, columns))
+        for source in (table, map(collect, Tables.columntable(table)))
             io = IOBuffer()
             Parquet.write(io, source)
             again = Parquet.Tables.columns(Parquet.Table(take!(io)))

@@ -625,7 +625,7 @@ function _datasettable(ds::Dataset, file::_DatasetFile, table::Table,
     metadata = _withfields(metadata; schema=vcat([root], elements),
         row_groups=Metadata.RowGroup[], num_rows=Int64(rows), column_orders=nothing)
     return Table(metadata, Schema(metadata; limits=ds.limits),
-        NamedTuple{Tuple(names)}(Tuple(columns)), rows,
+        names, columns, rows,
         [ds.colmetadata[index] for (index, _) in outputs])
 end
 
@@ -761,11 +761,11 @@ function _vcattables(ds::Dataset, tables::Vector{Table}, budget::_ByteBudget)
     _checklimit(:container_elements, rows, min(ds.limits.max_container_elements, typemax(Int)))
     length(tables) == 1 && return only(tables)
     columns = _tablecolumns(first(tables))
-    merged = NamedTuple{keys(columns)}(Tuple(_vcatcolumns(AbstractVector[
+    merged = AbstractVector[_vcatcolumns(AbstractVector[
         _tablecolumns(table)[position] for table in tables], budget)
-        for position in eachindex(keys(columns))))
+        for position in eachindex(columns)]
     metadata = _withfields(_tablemetadata(first(tables)); num_rows=Int64(rows))
-    return Table(metadata, _tableschema(first(tables)), merged, Int(rows),
+    return Table(metadata, _tableschema(first(tables)), _tablenames(first(tables)), merged, Int(rows),
         _tablecolmetadata(first(tables)))
 end
 

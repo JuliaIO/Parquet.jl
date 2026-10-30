@@ -696,7 +696,7 @@ end
 # The columns of a Parquet.Table to rewrite, and its row count.
 function _storedcolumns(table::Table)
     names = String[String(name) for name in Tables.columnnames(table)]
-    vectors = AbstractVector[column for column in values(_tablecolumns(table))]
+    vectors = _tablecolumns(table)
     rows = _tablerows(table)
     for (name, vector) in zip(names, vectors)
         length(vector) == rows || throw(ArgumentError("Parquet.Table column " *

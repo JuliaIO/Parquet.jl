@@ -106,7 +106,7 @@ function wpsemanticcolumns(table::Parquet.Table)
     columns = map(values(Parquet.Tables.columns(table))) do column
         return Any[wpsemantic(value) for value in column]
     end
-    return NamedTuple{names}(columns)
+    return NamedTuple{names}(Tuple(columns))
 end
 
 function wpexactrewrite(table::Parquet.Table; kwargs...)
@@ -154,7 +154,7 @@ function wpdeepstructtable(depth::Int, rows::Int)
     metadata = wpreplace(metadata; schema=elements, num_rows=Int64(rows),
         row_groups=WPMD.RowGroup[])
     close(file)
-    table = Parquet.Table(metadata, schema, (; deep=column), rows)
+    table = Parquet.Table(metadata, schema, [:deep], AbstractVector[column], rows)
     return table, limits
 end
 
@@ -192,7 +192,7 @@ function wpdeepstructkeytable(depth::Int)
     metadata = WPMD.FileMetaData(version=Int32(1), schema=elements,
         num_rows=Int64(1), row_groups=WPMD.RowGroup[])
     close(file)
-    table = Parquet.Table(metadata, schema, (; m=column), 1)
+    table = Parquet.Table(metadata, schema, [:m], AbstractVector[column], 1)
     return table, limits
 end
 

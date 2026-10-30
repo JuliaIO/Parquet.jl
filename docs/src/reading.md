@@ -5,7 +5,8 @@
 `Parquet.Table(source)` reads a Parquet file into columns. A table is a
 `Tables.AbstractColumns`: `table.price`, `table[:price]`, `table["price"]`, and
 `Tables.getcolumn(table, :price)` return a column, `names(table)` lists them, and any
-Tables.jl sink accepts it.
+Tables.jl sink accepts it. `Tables.columns(table)` returns the table itself; use
+`Tables.columntable(table)` when you need a `NamedTuple` of its columns.
 The table owns its columns: nothing it returns refers to the file, the byte vector, or
 the source it was read from. `Parquet.read(source, sink)` reads the same way and hands
 the columns to a sink such as `DataFrame` without copying them.
