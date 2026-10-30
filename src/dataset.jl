@@ -99,7 +99,7 @@ function _dataset(inputs::Vector{Any}, paths::Vector{Union{Nothing,String}}, bas
         return _barrier(_datasetfile, inputs[index], paths[index], partitions[index],
             stringtype, int96, limits, budget)::_DatasetFile
     end)
-    names, types, elements = _unifycolumns(files, Symbol.(keys))
+    names, types, elements = _unifycolumns(files, _internschemanames(keys, limits))
     colmetadata = map(names) do name
         for file in files
             position = findfirst(==(name), file.columns)
@@ -169,15 +169,24 @@ function _directoryfiles(root::String)
     return collect(Any, files), collect(Union{Nothing,String}, files), root
 end
 
-function _walkfiles!(files::Vector{String}, directory::String)
-    for name in readdir(directory)
-        _hiddenname(name) && continue
-        path = joinpath(directory, name)
-        if isdir(path)
-            _walkfiles!(files, path)
-        elseif isfile(path)
-            push!(files, path)
+function _walkfiles!(files::Vector{String}, directory::String,
+        ancestors::Set{String}=Set{String}())
+    resolved = realpath(directory)
+    resolved in ancestors && throw(ArgumentError(
+        "symbolic-link cycle in dataset directory $(repr(directory))"))
+    push!(ancestors, resolved)
+    try
+        for name in readdir(directory)
+            _hiddenname(name) && continue
+            path = joinpath(directory, name)
+            if isdir(path)
+                _walkfiles!(files, path, ancestors)
+            elseif isfile(path)
+                push!(files, path)
+            end
         end
+    finally
+        delete!(ancestors, resolved)
     end
     return files
 end
@@ -748,14 +757,15 @@ end
 
 # One table of the rows of `tables` (one per file, in order, with the same columns).
 function _vcattables(ds::Dataset, tables::Vector{Table}, budget::_ByteBudget)
+    rows = sum(table -> Int128(_tablerows(table)), tables)
+    _checklimit(:container_elements, rows, min(ds.limits.max_container_elements, typemax(Int)))
     length(tables) == 1 && return only(tables)
     columns = _tablecolumns(first(tables))
     merged = NamedTuple{keys(columns)}(Tuple(_vcatcolumns(AbstractVector[
         _tablecolumns(table)[position] for table in tables], budget)
         for position in eachindex(keys(columns))))
-    rows = sum(_tablerows, tables)
     metadata = _withfields(_tablemetadata(first(tables)); num_rows=Int64(rows))
-    return Table(metadata, _tableschema(first(tables)), merged, rows,
+    return Table(metadata, _tableschema(first(tables)), merged, Int(rows),
         _tablecolmetadata(first(tables)))
 end
 

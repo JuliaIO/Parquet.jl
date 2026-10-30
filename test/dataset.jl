@@ -26,12 +26,37 @@ plainvalues(column) = [value isa Parquet.DataStrings.DataString ? String(value) 
     @test Parquet.Table([IOBuffer(bytes), IOBuffer(bytes)]).id == vcat(1:4, 1:4)
 end
 
+@testset "dataset discovery rejects cycles and bounds partition names" begin
+    mktempdir() do dir
+        key = "parquet_partition_name_limit_20261030"
+        dswrite(dir, "$key=a/part.parquet", (id=[1],))
+        @test_throws Parquet.LimitError Parquet.Dataset(dir;
+            limits=Parquet.Limits(max_schema_name_bytes=0))
+    end
+    if !Sys.iswindows()
+        mktempdir() do dir
+            dswrite(dir, "part.parquet", (id=[1],))
+            symlink(dir, joinpath(dir, "loop"))
+            @test_throws r"symbolic-link cycle" Parquet.Dataset(dir)
+            @test_throws r"symbolic-link cycle" Parquet.Dataset(joinpath(dir, "**", "*.parquet"))
+        end
+        mktempdir() do dir
+            source = joinpath(dir, "source")
+            dswrite(source, "part.parquet", (id=[1],))
+            symlink(source, joinpath(dir, "alias"))
+            @test Parquet.Table(dir).id == [1, 1]
+        end
+    end
+end
+
 @testset "datasets share a read allocation budget across files" begin
     bytes = take!(Parquet.write(IOBuffer(), (id=collect(1:1000),);
         compress=:none, dictionary=false))
     maximum = minimummaterializedlimit(limits -> Parquet.Table(bytes; limits=limits))
     limits = Parquet.Limits(max_materialized_bytes=maximum)
     @test Parquet.Table(bytes; limits=limits).id == 1:1000
+    @test_throws Parquet.LimitError Parquet.Table([bytes, bytes];
+        limits=Parquet.Limits(max_container_elements=1500))
     for ntasks in (1, 4)
         @test_throws Parquet.LimitError Parquet.Table([bytes, bytes]; limits=limits,
             ntasks=ntasks)
