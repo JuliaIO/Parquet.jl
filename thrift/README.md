@@ -18,7 +18,7 @@ julia thrift/generate.jl --check  # fail when the checked-in file is stale
 Generated code conventions:
 
 - Every struct keeps unrecognized fields (including extension field 32767) in
-  `unknown_fields::Tuple{Vararg{Thrift.RawField}}` with their verbatim header and payload
+  `unknown_fields::Vector{Thrift.RawField}` with their verbatim header and payload
   bytes, and re-emits them in encounter order.
 - Enums are modules with an `Int32` wrapper type `T`; unknown values round-trip unchanged.
 - Unions are structs whose members are all optional; decoding and construction reject more
