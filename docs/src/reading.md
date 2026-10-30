@@ -33,6 +33,9 @@ a vector of sources reads a [dataset](@ref Datasets). Column types are listed un
 [Type mapping](@ref). Columns that share a name read as `a`, `a_1`, `a_2`, and so on, as
 CSV.jl and DuckDB name them.
 
+With FilePathsBase.jl loaded, its local `SystemPath` objects work wherever a string path
+does, including directories, patterns, and vectors of file paths.
+
 Strings read as `DataStrings.DataString`s, which refer to the column's decoded bytes;
 `stringtype=String` reads them as `String`s, nested values included, at the cost of one
 allocation per value. `copy(table)` gives a table with new, mutable columns.

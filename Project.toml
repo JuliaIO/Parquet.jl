@@ -27,12 +27,14 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 [weakdeps]
 ArrowTypes = "31f734f8-188a-4ce0-8406-c8a06bd891cd"
 CloudStore = "3365d9ee-d53b-4a56-812d-5344d5b716d7"
+FilePathsBase = "48062228-2e41-5def-b9a4-89aafe57970f"
 SentinelArrays = "91c51154-3ec4-41a3-a24f-3f23e20d615c"
 TimeZones = "f269a46b-ccf7-5d73-abea-4c690281aa53"
 
 [extensions]
 ParquetArrowTypesExt = "ArrowTypes"
 ParquetCloudStoreExt = "CloudStore"
+ParquetFilePathsBaseExt = "FilePathsBase"
 ParquetSentinelArraysExt = "SentinelArrays"
 ParquetTimeZonesExt = "TimeZones"
 
@@ -54,6 +56,7 @@ CategoricalArrays = "0.10, 1"
 CloudBaseTest = "1"
 CloudStore = "1.11"
 DataAPI = "1.13"
+FilePathsBase = "0.9"
 PooledArrays = "1"
 PrecompileTools = "1"
 SentinelArrays = "1"
@@ -67,6 +70,7 @@ CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 CategoricalArrays = "324d7699-5711-5eae-9e2f-1d82baa6b597"
 CloudBaseTest = "40fa5d0e-b06b-47c4-9127-3a501b82bf72"
 CloudStore = "3365d9ee-d53b-4a56-812d-5344d5b716d7"
+FilePathsBase = "48062228-2e41-5def-b9a4-89aafe57970f"
 PooledArrays = "2dfb63ee-cc39-5dd5-95bd-886bf059d720"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
@@ -76,4 +80,4 @@ TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 TimeZones = "f269a46b-ccf7-5d73-abea-4c690281aa53"
 
 [targets]
-test = ["ArrowTypes", "CSV", "CategoricalArrays", "CloudBaseTest", "CloudStore", "PooledArrays", "Random", "SHA", "SentinelArrays", "Test", "TOML", "TimeZones"]
+test = ["ArrowTypes", "CSV", "CategoricalArrays", "CloudBaseTest", "CloudStore", "FilePathsBase", "PooledArrays", "Random", "SHA", "SentinelArrays", "Test", "TOML", "TimeZones"]

@@ -15,6 +15,8 @@ Parquet.write("trips.parquet", table; compress=:zstd, rowgroupsize=500_000)
 
 A path is written to a temporary file in the same directory and moved over the path at
 the end, so a failed write leaves an existing file intact. An `IO` is left open.
+With FilePathsBase.jl loaded, local `SystemPath` objects work with `Parquet.write` and
+`Parquet.Writer`, including partitioned output, and keep the same atomic replacement.
 
 The keywords and their defaults, which match pyarrow's:
 
