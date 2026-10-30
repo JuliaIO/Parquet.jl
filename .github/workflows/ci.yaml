@@ -21,10 +21,17 @@ jobs:
           - 'nightly'
         os:
           - ubuntu-latest
-          - macos-latest
+          - macos-15-intel
           - windows-latest
         arch:
           - x64
+        include:
+          - version: '1'
+            os: macos-latest
+            arch: aarch64
+          - version: 'pre'
+            os: ubuntu-latest
+            arch: x64
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5

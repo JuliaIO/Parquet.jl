@@ -21,7 +21,9 @@ Parquet.Table(lake)                                    # every file below a dire
 
 - Reads the files pyarrow, Polars, DuckDB, Spark, and parquet-java write: nested lists,
   structs, and maps with nulls at any level, decimals, timestamps with time zones,
-  INT96, Data Page V1 and V2, and every encoding and codec but LZO.
+  INT96, Data Page V1 and V2, and the common dictionary, delta, and byte-stream-split
+  encodings. [Format support and limits](https://JuliaIO.github.io/Parquet.jl/dev/limits/)
+  lists unsupported features.
 - Reads only what a read needs: the selected columns, and the row groups and pages that
   statistics, page indexes, bloom filters, and dictionaries do not rule out, on several
   threads.
@@ -29,7 +31,7 @@ Parquet.Table(lake)                                    # every file below a dire
   brotli, or lz4 compression, and Hive-partitioned datasets with `partitionby`.
 - Reads paths, byte vectors, `IO`s, and (with CloudStore.jl) objects in cloud storage
   through ranged requests.
-- Bounds the memory a corrupt file can make a read allocate (`Parquet.Limits`).
+- Provides configurable bounds on materialized data and metadata (`Parquet.Limits`).
 
 The [documentation](https://JuliaIO.github.io/Parquet.jl/stable) covers reading,
 datasets, writing, the type mapping, limits and errors, and migrating from 0.8.
