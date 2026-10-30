@@ -573,7 +573,7 @@ The function form passes the writer to `f` and closes it when `f` returns; when 
 the output is abandoned (an existing path sink is kept). Keyword arguments are those of
 [`Parquet.write`](@ref), except `partitionby` and `existing`, plus `nullable`.
 
-A path sink is written as [`Parquet.write`](@ref) writes one: to a temporary file that
+A regular-file path sink is written as [`Parquet.write`](@ref) writes one: to a temporary file that
 replaces the file when the writer closes, so an existing file stays intact until then.
 """
 mutable struct Writer{S<:IO}
