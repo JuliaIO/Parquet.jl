@@ -570,7 +570,7 @@ nullable unless `nullable=false`, so later tables may hold `missing`. A column t
 one.
 
 The function form passes the writer to `f` and closes it when `f` returns; when `f` throws,
-the output is abandoned (a path sink is removed). Keyword arguments are those of
+the output is abandoned (an existing path sink is kept). Keyword arguments are those of
 [`Parquet.write`](@ref), except `partitionby` and `existing`, plus `nullable`.
 
 A path sink is written as [`Parquet.write`](@ref) writes one: to a temporary file that
@@ -598,9 +598,11 @@ end
 # The leading magic is written with the first column chunk (or by `close`), so a table
 # rejected before any chunk is encoded leaves an IO sink untouched.
 function _newwriter(io::IO, path, target, temporary, options::_WriteOptions)
-    return Writer(io, path, target, temporary, options, nothing, _GroupRecord[], Int64(0),
+    writer = Writer(io, path, target, temporary, options, nothing, _GroupRecord[], Int64(0),
         Int64(0), nothing, Dict{String,Vector{Metadata.KeyValue}}(),
         Dict{Vector{String},Any}(), false)
+    path === nothing || finalizer(_abandon!, writer)
+    return writer
 end
 
 function Writer(io::IO; nullable::Bool=true, kwargs...)
@@ -627,8 +629,7 @@ function _openwriter(path::AbstractString, options::_WriteOptions)
     existing && close(open(path, "r+"))
     target = existing ? realpath(path) : islink(path) ?
         normpath(joinpath(dirname(abspath(path)), readlink(path))) : abspath(path)
-    temporary = joinpath(dirname(target),
-        "." * basename(target) * "." * string(rand(UInt64); base=36) * ".partial")
+    temporary = joinpath(dirname(target), ".parquet-" * string(UUIDs.uuid4()) * ".partial")
     io = try
         open(temporary, "w")
     catch err
@@ -662,8 +663,11 @@ function _abandon!(writer::Writer)
     writer.closed && return
     writer.closed = true
     writer.path === nothing && return
-    close(writer.io)
-    writer.temporary === nothing || rm(writer.temporary; force=true)
+    try
+        close(writer.io)
+    finally
+        writer.temporary === nothing || rm(writer.temporary; force=true)
+    end
     return
 end
 
@@ -773,13 +777,15 @@ Base.@nospecializeinfer function _writetable!(writer::Writer, table, source, off
         range = first:min(rows, group * size)
         return map(fields) do fieldindex
             field = schema.fields[fieldindex]
-            try
-                return _barrier(_encodefield, schema, field, bindings[fieldindex], range,
+            ok, result = try
+                true, _barrier(_encodefield, schema, field, bindings[fieldindex], range,
                     options)::Vector{_EncodedChunk}
             catch err
                 # Error paths stay out of the encoding's inference.
-                throw(_barrier(_encodefielderror, field, err, range, offset, indices))
+                false, _barrier(_encodefielderror, field, err, range, offset, indices)
             end
+            ok || throw(result)
+            return result::Vector{_EncodedChunk}
         end
     end
     consume = function (job, results::Vector{Vector{_EncodedChunk}})
@@ -957,25 +963,27 @@ function Base.close(writer::Writer)
     writer.closed && return
     try
         _finishfile!(writer)
+        if writer.path === nothing
+            flush(writer.io)
+        else
+            close(writer.io)
+            if writer.temporary !== nothing
+                # A rename replaces the file in one step, and refuses a directory.
+                err = ccall(:jl_fs_rename, Int32, (Cstring, Cstring),
+                    writer.temporary, writer.target)
+                if err < 0
+                    hint = Sys.iswindows() ? " (close programs that have it open, then retry)" : ""
+                    throw(Base.IOError("Parquet could not replace $(repr(writer.path)); it is " *
+                        "unchanged$hint", err))
+                end
+            end
+        end
     catch
         _abandon!(writer)
         rethrow()
     end
     writer.closed = true
-    if writer.path === nothing
-        flush(writer.io)
-        return
-    end
-    close(writer.io)
-    temporary = writer.temporary
-    temporary === nothing && return
-    # A rename replaces the file in one step, and fails rather than replace a directory.
-    err = ccall(:jl_fs_rename, Int32, (Cstring, Cstring), temporary, writer.target)
-    err < 0 || return
-    rm(temporary; force=true)
-    hint = Sys.iswindows() ? " (close programs that have it open, then retry)" : ""
-    throw(Base.IOError("Parquet could not replace $(repr(writer.path)); it is " *
-        "unchanged$hint", err))
+    return
 end
 
 function _finishfile!(writer::Writer)

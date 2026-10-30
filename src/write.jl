@@ -293,7 +293,17 @@ Base.@nospecializeinfer function _writeinputcolumns(table, limits::Limits)
     Base.@nospecialize table
     Tables.columnaccess(table) || return _barrier(_writeinputrowcolumns, table,
         limits)::Tuple{Vector{Pair{String,AbstractVector}},Int}
-    columns = Tables.columns(table)
+    output, rows = _writecolumnvectors(Tables.columns(table), limits)
+    for index in eachindex(output)
+        name, values = output[index]
+        output[index] = name => _barrier(_writeinputcolumn, name, values)
+    end
+    return output, rows
+end
+
+# Validate the complete column table before either a file or a partitioned write begins.
+Base.@nospecializeinfer function _writecolumnvectors(columns, limits::Limits)
+    Base.@nospecialize columns
     names = collect(Tables.columnnames(columns))
     normalized = _validatewritecolumnnames(names)
     output = Pair{String,AbstractVector}[]
@@ -310,8 +320,7 @@ Base.@nospecializeinfer function _writeinputcolumns(table, limits::Limits)
         end
         length(values) == rows || throw(ArgumentError(
             "Parquet columns have different lengths"))
-        push!(output, Pair{String,AbstractVector}(name,
-            _barrier(_writeinputcolumn, name, values)))
+        push!(output, name => values)
     end
     return output, something(rows, 0)
 end

@@ -1,5 +1,6 @@
 using Test
 using Dates
+using Random
 import Tables
 import DataAPI
 using PooledArrays, CategoricalArrays
@@ -45,6 +46,20 @@ DataAPI.colmetadatakeys(table::WRMetaTable, column::Symbol) =
     keys(get(table.colmetadata, column, Dict{String,String}()))
 DataAPI.colmetadata(table::WRMetaTable, column::Symbol, key::AbstractString;
     style::Bool=false) = table.colmetadata[column][key]
+
+mutable struct WRFailingClose <: IO
+    io::IOStream
+    fail::Bool
+end
+Base.unsafe_write(io::WRFailingClose, pointer::Ptr{UInt8}, count::UInt) =
+    Base.unsafe_write(io.io, pointer, count)
+function Base.close(io::WRFailingClose)
+    close(io.io)
+    if io.fail
+        io.fail = false
+        error("close failed")
+    end
+end
 
 @testset "Writer appends tables as row groups" begin
     io = IOBuffer()
@@ -162,6 +177,67 @@ end
             @test ischardev("/dev/null")
         end
         @test !any(endswith(".partial"), readdir(directory))
+    end
+end
+
+@testset "abandoned and failed writers discard temporary files" begin
+    mktempdir() do directory
+        path = joinpath(directory, "out.parquet")
+        write(path, "previous")
+        writer = Parquet.Writer(path)
+        Parquet.write(writer, (value=[1],))
+        finalize(writer)
+        @test writer.closed
+        @test read(path, String) == "previous"
+        @test readdir(directory) == ["out.parquet"]
+
+        temporary = joinpath(directory, ".out.partial")
+        io = WRFailingClose(open(temporary, "w"), true)
+        writer = Parquet._newwriter(io, path, path, temporary, Parquet._writeoptions())
+        Parquet.write(writer, (value=[1],))
+        @test_throws "close failed" close(writer)
+        @test writer.closed
+        @test read(path, String) == "previous"
+        @test readdir(directory) == ["out.parquet"]
+
+        target = joinpath(directory, "new.parquet")
+        writer = Parquet.Writer(target)
+        Parquet.write(writer, (value=[1],))
+        mkdir(target)
+        @test_throws "could not replace" close(writer)
+        @test isdir(target)
+        @test sort(readdir(directory)) == ["new.parquet", "out.parquet"]
+    end
+end
+
+@testset "writer temporary names are independent of the input path and RNG" begin
+    mktempdir() do directory
+        path = joinpath(directory, "out.parquet")
+        first, second = fetch(@async begin
+            Random.seed!(1234)
+            first = Parquet.Writer(path)
+            Random.seed!(1234)
+            second = Parquet.Writer(path)
+            (first, second)
+        end)
+        try
+            @test first.temporary != second.temporary
+            Parquet.write(first, (value=[1],))
+            Parquet.write(second, (value=[2, 3],))
+            close(first)
+            @test wrcolumn(read(path), :value) == [1]
+            close(second)
+            @test wrcolumn(read(path), :value) == [2, 3]
+        finally
+            Parquet._abandon!(first)
+            Parquet._abandon!(second)
+        end
+        @test readdir(directory) == ["out.parquet"]
+        if !Sys.iswindows()
+            long = joinpath(directory, repeat("x", 240))
+            @test Parquet.write(long, (value=[1],)) == long
+            @test wrcolumn(read(long), :value) == [1]
+        end
     end
 end
 
@@ -410,6 +486,14 @@ end
     bad = String(UInt8[0x61, 0xff])
     sink() = IOBuffer()
     invalid(column, row) = "column \"$column\" has a string at row $row that is not valid UTF-8"
+    errors = try
+        Parquet.write(sink(), (s=[bad],); ntasks=1)
+        Any[]
+    catch
+        [entry.exception for entry in current_exceptions()]
+    end
+    @test length(errors) == 1
+    @test only(errors) isa ArgumentError
     @test_throws invalid("s", 3) Parquet.write(sink(), (s=["a", "b", bad],))
     @test_throws "write binary data as Vector{UInt8} values" Parquet.write(sink(), (s=[bad],))
     @test_throws invalid("s", 3) Parquet.write(sink(),

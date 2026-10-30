@@ -45,6 +45,24 @@ _hivevalue(value, name::String) = throw(ArgumentError("partition column $(repr(n
     "holds $(typeof(value)) values; partition by integer, float, Bool, Date, timestamp, " *
     "or string columns (convert others first, for example with string.(column))"))
 
+function _hivekey(name::String)
+    isempty(name) && throw(ArgumentError("a partition column must have a nonempty name"))
+    occursin('\0', name) && throw(ArgumentError("Parquet top-level field names cannot contain NUL"))
+    key = _hiveescape(name)
+    # Dataset readers skip directory names that start with either character.
+    first(key) in ('.', '_') &&
+        (key = "%" * uppercase(string(UInt8(first(key)); base=16, pad=2)) * key[2:end])
+    return key
+end
+
+function _hivecomponent(name::String, value)
+    text = _hivevalue(DataAPI.unwrap(value), name)
+    value !== missing && text == _HIVE_NULL && throw(ArgumentError(
+        "partition column $(repr(name)) holds the reserved Hive null value " *
+        repr(_HIVE_NULL) * "; replace that value before partitioning"))
+    return _hivekey(name) * "=" * text
+end
+
 # Rows of each distinct key, in order of first appearance.
 function _partitiongroups(keys::Tuple, rows::Int)
     K = Tuple{map(eltype, keys)...}
@@ -56,7 +74,7 @@ function _partitiongroups(keys::Tuple, rows::Int)
             push!(order, key)
             Int[]
         end
-        push!(indices, firstindex(first(keys)) + row - 1)
+        push!(indices, row)
     end
     return Pair{K,Vector{Int}}[key => groups[key] for key in order]
 end
@@ -81,6 +99,12 @@ function _partitionwriter!(state::_PartitionedWrite, directory::String)
         close(pop!(state.writers, oldest))
     end
     full = joinpath(state.root, directory)
+    path = state.root
+    for component in split(directory, '/')
+        path = joinpath(path, component)
+        islink(path) && throw(ArgumentError("partition output $(repr(path)) is a " *
+            "symbolic link; remove it before writing into this dataset"))
+    end
     count = get(state.files, directory, 0)
     # `delete_matching` clears a partition the first time this write touches it.
     count == 0 && state.existing === :delete_matching && rm(full; force=true, recursive=true)
@@ -106,6 +130,7 @@ Base.@nospecializeinfer function _writepartitioned(root::String, table, partitio
         (partitionby,) : partitionby)]
     isempty(keys) && throw(ArgumentError("partitionby names no columns"))
     allunique(keys) || throw(ArgumentError("partitionby names a column twice"))
+    foreach(_hivekey, keys)
     existing in (:error, :delete_matching) || throw(ArgumentError(
         "existing must be :error or :delete_matching, got :$existing"))
     isfile(root) && throw(ArgumentError("partitioned output $(repr(root)) is a file"))
@@ -148,8 +173,8 @@ end
 Base.@nospecializeinfer function _writepartition!(state::_PartitionedWrite, part,
         keys::Vector{String}, offset::Int)
     Base.@nospecialize part
-    columns = Tables.columns(part)
-    names = String[String(name) for name in Tables.columnnames(columns)]
+    columns, rows = _writecolumnvectors(Tables.columns(part), state.options.limits)
+    names = first.(columns)
     for key in keys
         key in names || throw(ArgumentError("partitionby names $(repr(key)), which is " *
             "not a column"))
@@ -157,15 +182,12 @@ Base.@nospecializeinfer function _writepartition!(state::_PartitionedWrite, part
     data = Symbol[Symbol(name) for name in names if !(name in keys)]
     isempty(data) && throw(ArgumentError(
         "partitionby uses every column, so the files would have no columns"))
-    keycolumns = Tuple(Any[Tables.getcolumn(columns, Symbol(key)) for key in keys])
+    keycolumns = Tuple(Any[last(columns[findfirst(==(key), names)]) for key in keys])
     datacolumns = AbstractVector[_barrier(_partitioncolumn, String(name),
-        Tables.getcolumn(columns, name)) for name in data]
-    rows = length(first(keycolumns))
-    # Errors count rows of the input from 1, and `indices` index the key columns.
-    base = offset + 1 - firstindex(first(keycolumns))
+        last(columns[findfirst(==(String(name)), names)])) for name in data]
     # The key columns' types are known at run time.
     groups = _barrier(_partitiongroups, keycolumns, rows)
-    _barrier(_writegroups!, state, groups, keys, data, datacolumns, base)
+    _barrier(_writegroups!, state, groups, keys, data, datacolumns, offset)
     return rows
 end
 
@@ -174,9 +196,10 @@ function _writegroups!(state::_PartitionedWrite, groups::Vector{<:Pair},
         keys::Vector{String}, data::Vector{Symbol}, datacolumns::Vector{AbstractVector},
         base::Int)
     for (key, indices) in groups
-        directory = join((name * "=" * _hivevalue(DataAPI.unwrap(value), name)
+        directory = join((_hivecomponent(name, value)
             for (name, value) in zip(keys, key)), '/')
-        group = NamedTuple{Tuple(data)}(Tuple(Any[_barrier(view, column, indices)
+        group = NamedTuple{Tuple(data)}(Tuple(Any[_barrier(view, column,
+            firstindex(column) == 1 ? indices : indices .+ (firstindex(column) - 1))
             for column in datacolumns]))
         writer = _partitionwriter!(state, directory)
         _writetable!(writer, group, group, base, indices)

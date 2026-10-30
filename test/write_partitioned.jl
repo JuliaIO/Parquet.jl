@@ -9,6 +9,72 @@ function wpfiles(root)
     return sort!(files)
 end
 
+struct WPShiftedVector{T} <: AbstractVector{T}
+    values::Vector{T}
+    start::Int
+end
+Base.size(column::WPShiftedVector) = size(column.values)
+Base.axes(column::WPShiftedVector) =
+    (column.start:(column.start + length(column.values) - 1),)
+Base.getindex(column::WPShiftedVector, index::Int) = column.values[index - column.start + 1]
+
+@testset "partition names stay within the dataset" begin
+    mktempdir() do directory
+        root = joinpath(directory, "lake")
+        outside = joinpath(directory, "outside", "k=1")
+        mkpath(outside)
+        write(joinpath(outside, "keep.txt"), "previous")
+        name = Symbol("../outside/k")
+        table = NamedTuple{(name, :value)}(([1], [2]))
+        Parquet.write(root, table; partitionby=name, existing=:delete_matching)
+        @test read(joinpath(outside, "keep.txt"), String) == "previous"
+        @test readdir(outside) == ["keep.txt"]
+        @test wpfiles(root) == ["%2E.%2Foutside%2Fk=1/part-0.parquet"]
+        @test Tables.getcolumn(Parquet.Table(root), name) == [1]
+        for name in (:_key, Symbol(".key"), Symbol("a=b"), Symbol("a\\b"), Symbol("é/δ"))
+            root = joinpath(directory, string(length(readdir(directory))))
+            table = NamedTuple{(name, :value)}(([1, 2], [10, 20]))
+            Parquet.write(root, table; partitionby=name)
+            @test Tables.getcolumn(Parquet.Table(root), name) == [1, 2]
+        end
+        @test_throws "nonempty name" Parquet.write(joinpath(directory, "empty"),
+            NamedTuple{(Symbol(""), :v)}(([1], [2])); partitionby=Symbol(""))
+        @test_throws "reserved Hive null value" Parquet.write(joinpath(directory, "null"),
+            (key=["__HIVE_DEFAULT_PARTITION__"], v=[1]); partitionby=:key)
+        if !Sys.iswindows()
+            root = joinpath(directory, "links")
+            mkpath(root)
+            symlink(dirname(outside), joinpath(root, "a=1"))
+            @test_throws "symbolic link" Parquet.write(root,
+                (a=[1], k=[1], value=[3]); partitionby=[:a, :k], existing=:delete_matching)
+            @test read(joinpath(outside, "keep.txt"), String) == "previous"
+            @test readdir(outside) == ["keep.txt"]
+        end
+    end
+end
+
+@testset "partitioned writes validate all column lengths before replacement" begin
+    mktempdir() do directory
+        Parquet.write(directory, (k=[1], value=[10]); partitionby=:k)
+        original = read(joinpath(directory, "k=1", "part-0.parquet"))
+        for table in ((k=[1], value=[20, 30]), (k=[1, 2], value=[20]),
+                (k=[1], other=[2, 3], value=[20]))
+            @test_throws "different lengths" Parquet.write(directory, table;
+                partitionby=:k, existing=:delete_matching)
+            @test read(joinpath(directory, "k=1", "part-0.parquet")) == original
+        end
+    end
+    mktempdir() do directory
+        Parquet.write(directory, (k=WPShiftedVector([1, 2, 1], -1),
+            other=WPShiftedVector([true, false, true], 4),
+            value=WPShiftedVector([10, 20, 30], 8)); partitionby=[:k, :other])
+        @test Parquet.Table(joinpath(directory, "k=1", "other=true", "part-0.parquet")).value ==
+            [10, 30]
+        @test Parquet.Table(joinpath(directory, "k=2", "other=false", "part-0.parquet")).value ==
+            [20]
+    end
+end
+
 # A stream of tables that must be written partition by partition, never as a whole.
 struct WPStream
     parts::Vector{Any}

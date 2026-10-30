@@ -112,10 +112,16 @@ integers, floats, Bools, `Date`s, timestamps, or strings; a timestamp is written
 pyarrow writes it (`2024-01-01 12:30:00.000`, `Z` when adjusted to UTC) and, as with
 pyarrow, reads back as a string. Values are percent-encoded as pyarrow does
 (all but `A-Z a-z 0-9 - . _ ~`), and `missing` is written as
-`__HIVE_DEFAULT_PARTITION__`. An empty string is written as an empty value (`key=`) and
+`__HIVE_DEFAULT_PARTITION__`; a literal string with that reserved value is rejected.
+Column names are also percent-encoded, including an initial `.` or `_` so dataset
+readers do not skip them as hidden directories. An empty string is written as an empty value (`key=`) and
 reads back as `""` in Parquet.jl, pyarrow, Polars, and DuckDB. Readers type key columns
 from the values (`Parquet.Table` reads integers as `Int64`).
 Every file has the first file's column types.
+
+Parquet.jl and pyarrow decode escaped partition column names. DuckDB and Polars currently
+leave those names encoded; use ordinary names without punctuation for the same names in
+all four readers.
 
 A directory that is not empty is an error, so a write never mixes old and new files.
 `existing=:delete_matching` first deletes the partitions the write produces and keeps
@@ -124,6 +130,7 @@ example each `CSV.Chunks` chunk) adds row groups to its keys' files. At most 128
 are open at once, so with more keys than that a key's rows may continue in
 `part-1.parquet` and on. Each file appears complete or not at all, but a failed write
 can leave some partitions written.
+Symbolic links below the output root are rejected before a partition is replaced.
 
 ## ARROW:schema
 

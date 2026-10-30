@@ -283,7 +283,7 @@ function _hivepartitions(paths::Vector{Union{Nothing,String}}, base)
         for segment in _relativedirectories(path, base)
             equals = findfirst('=', segment)
             (equals === nothing || equals == 1) && continue
-            key = segment[1:(equals - 1)]
+            key = _unescapeuri(segment[1:(equals - 1)])
             value = _unescapeuri(segment[(equals + 1):end])
             key in keys || push!(keys, key)
             found[index][key] = value == _HIVE_DEFAULT ? nothing : value
