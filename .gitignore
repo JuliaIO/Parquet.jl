@@ -4,3 +4,9 @@
 parquet-compatibility/
 julia-parquet-compatibility/
 .vscode/settings.json
+docs/build/
+# Resolved environments are never part of the branch.
+/Manifest.toml
+/docs/Manifest.toml
+/test/interop/Manifest.toml
+/test/parquet-testing

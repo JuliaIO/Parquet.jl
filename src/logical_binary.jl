@@ -1,0 +1,418 @@
+import UUIDs
+
+"""
+    Parquet.JSONValue(text::AbstractString; limits=Parquet.Limits())
+    Parquet.JSONValue(bytes::AbstractVector{UInt8}; limits=Parquet.Limits())
+
+A JSON document kept as its UTF-8 text, the values of a JSON column. The text is copied
+and checked to hold one JSON value (an `ArgumentError` otherwise), without building
+objects from it. `string(value)` is the document text; a column of `JSONValue`s writes
+as a JSON column: `Parquet.write(io, (doc=Parquet.JSONValue.(["{\"a\":1}", "[]"]),))`.
+"""
+struct JSONValue
+    bytes::Base.CodeUnits{UInt8,String}
+
+    function JSONValue(bytes::AbstractVector{UInt8}; limits::Limits=Limits())
+        _checklimit(:string_bytes, length(bytes), limits.max_string_bytes)
+        owned = collect(bytes)
+        _validatejson(owned, limits, ArgumentError)
+        return new(codeunits(String(owned)))
+    end
+
+    function JSONValue(bytes::Vector{UInt8}, ::Val{:validated})
+        return new(codeunits(String(bytes)))
+    end
+end
+
+JSONValue(text::AbstractString; limits::Limits=Limits()) =
+    JSONValue(codeunits(String(text)); limits=limits)
+
+"""
+    Parquet.BSONValue(bytes::AbstractVector{UInt8}; limits=Parquet.Limits())
+
+A BSON document kept as its bytes, the values of a BSON column. The bytes are copied and
+checked to hold one well-formed document (an `ArgumentError` otherwise); a column of
+`BSONValue`s writes as a BSON column.
+"""
+struct BSONValue
+    bytes::Base.CodeUnits{UInt8,String}
+
+    function BSONValue(bytes::AbstractVector{UInt8}; limits::Limits=Limits())
+        _checklimit(:string_bytes, length(bytes), limits.max_string_bytes)
+        owned = collect(bytes)
+        _validatebson(owned, limits, ArgumentError)
+        return new(codeunits(String(owned)))
+    end
+
+    function BSONValue(bytes::Vector{UInt8}, ::Val{:validated})
+        return new(codeunits(String(bytes)))
+    end
+end
+
+# `print` gives the document text; `show` wraps it like a constructor call.
+function Base.print(io::IO, value::JSONValue)
+    Base.write(io, value.bytes)
+    return
+end
+
+function Base.show(io::IO, value::JSONValue)
+    print(io, "Parquet.JSONValue(")
+    show(io, value.bytes.s)
+    print(io, ")")
+    return
+end
+
+function Base.show(io::IO, value::BSONValue)
+    print(io, "Parquet.BSONValue(", length(value.bytes), " bytes)")
+    return
+end
+
+function Base.:(==)(left::JSONValue, right::JSONValue)
+    return left.bytes == right.bytes
+end
+
+function Base.isequal(left::JSONValue, right::JSONValue)
+    return isequal(left.bytes, right.bytes)
+end
+
+function Base.hash(value::JSONValue, seed::UInt)
+    return hash(value.bytes, hash(:JSONValue, seed))
+end
+
+function Base.copy(value::JSONValue)
+    return JSONValue(collect(value.bytes), Val(:validated))
+end
+
+function Base.:(==)(left::BSONValue, right::BSONValue)
+    return left.bytes == right.bytes
+end
+
+function Base.isequal(left::BSONValue, right::BSONValue)
+    return isequal(left.bytes, right.bytes)
+end
+
+function Base.hash(value::BSONValue, seed::UInt)
+    return hash(value.bytes, hash(:BSONValue, seed))
+end
+
+function Base.copy(value::BSONValue)
+    return BSONValue(collect(value.bytes), Val(:validated))
+end
+
+function _requirefixedlogical(element::Metadata.SchemaElement, width::Int)
+    _requirelogicalphysical(element, Metadata.Type.FIXED_LEN_BYTE_ARRAY)
+    element.type_length == width || throw(_IncompatibleAnnotation())
+    return
+end
+
+function _requireunknownphysical(element::Metadata.SchemaElement)
+    element.type_ === nothing &&
+        throw(FormatError("UNKNOWN annotation on $(repr(element.name)) requires " *
+            "a primitive physical type"))
+    element.repetition_type == Metadata.FieldRepetitionType.REQUIRED &&
+        throw(FormatError("UNKNOWN annotation on required field " *
+            "$(repr(element.name)) cannot represent null"))
+    return
+end
+
+function _binarymodernkind(element::Metadata.SchemaElement,
+    logical::Metadata.LogicalType)
+    if logical.ENUM !== nothing
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
+        return :enum
+    elseif logical.UNKNOWN !== nothing
+        _requireunknownphysical(element)
+        return :unknown
+    elseif logical.JSON !== nothing
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
+        return :json
+    elseif logical.BSON !== nothing
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
+        return :bson
+    elseif logical.UUID !== nothing
+        _requirefixedlogical(element, 16)
+        return :uuid
+    elseif logical.FLOAT16 !== nothing
+        _requirefixedlogical(element, 2)
+        return :float16
+    end
+    return nothing
+end
+
+function _binarylegacykind(element::Metadata.SchemaElement)
+    converted = element.converted_type
+    if converted == Metadata.ConvertedType.ENUM
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
+        return :enum
+    elseif converted == Metadata.ConvertedType.JSON
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
+        return :json
+    elseif converted == Metadata.ConvertedType.BSON
+        _requirelogicalphysical(element, Metadata.Type.BYTE_ARRAY)
+        return :bson
+    elseif converted == Metadata.ConvertedType.INTERVAL
+        _requirefixedlogical(element, 12)
+        return :interval
+    end
+    return nothing
+end
+
+_binarylogicalkind(element::Metadata.SchemaElement) =
+    _compatiblekind(_binaryannotationkind, element)
+
+function _binaryannotationkind(element::Metadata.SchemaElement)
+    logical = element.logicalType
+    logical === nothing || return _binarymodernkind(element, logical)
+    return _binarylegacykind(element)
+end
+
+function _binarylogicalkind(node::SchemaNode)
+    return _binarylogicalkind(node.element)
+end
+
+function _binarylogicaleltype(kind::Symbol, physical::Type)
+    kind === :enum && return DataStrings.DataString
+    kind === :uuid && return UUIDs.UUID
+    kind === :float16 && return Float16
+    kind === :json && return JSONValue
+    kind === :bson && return BSONValue
+    kind === :interval && return Durations.Duration
+    kind === :unknown && return Missing
+    return nothing
+end
+
+function _binarylogicaleltype(element::Metadata.SchemaElement, physical::Type)
+    kind = _binarylogicalkind(element)
+    kind === nothing && return nothing
+    return _binarylogicaleltype(kind, physical)
+end
+
+function _binarylogicaleltype(node::SchemaNode, physical::Type)
+    return _binarylogicaleltype(node.element, physical)
+end
+
+function _requirelogicalbytes(value, element::Metadata.SchemaElement,
+    annotation::Symbol)
+    value isa AbstractVector{UInt8} && return value
+    throw(FormatError("$annotation column $(repr(element.name)) contains a non-byte-array value"))
+end
+
+function _fixedlogicalbytes(value, element::Metadata.SchemaElement, width::Int,
+    annotation::Symbol)
+    bytes = _requirelogicalbytes(value, element, annotation)
+    length(bytes) == width ||
+        throw(FormatError("$annotation column $(repr(element.name)) contains " *
+            "$(length(bytes)) bytes, expected $width"))
+    return bytes
+end
+
+function _uuidfrombytes(bytes::AbstractVector{UInt8})
+    value = UInt128(0)
+    for byte in bytes
+        value = (value << 8) | UInt128(byte)
+    end
+    return UUIDs.UUID(value)
+end
+
+function _uuidbytes(value::UUIDs.UUID)
+    raw = UInt128(value)
+    bytes = Vector{UInt8}(undef, 16)
+    for index in eachindex(bytes)
+        shift = 8 * (length(bytes) - index)
+        bytes[index] = UInt8((raw >> shift) & 0xff)
+    end
+    return bytes
+end
+
+function _float16frombytes(bytes::AbstractVector{UInt8})
+    bits = UInt16(bytes[1]) | (UInt16(bytes[2]) << 8)
+    return reinterpret(Float16, bits)
+end
+
+function _float16bytes(value::Float16)
+    bits = reinterpret(UInt16, value)
+    return UInt8[UInt8(bits & 0xff), UInt8(bits >> 8)]
+end
+
+function _readuint32le(bytes::AbstractVector{UInt8}, offset::Int)
+    return UInt32(bytes[offset]) |
+        (UInt32(bytes[offset + 1]) << 8) |
+        (UInt32(bytes[offset + 2]) << 16) |
+        (UInt32(bytes[offset + 3]) << 24)
+end
+
+# INTERVAL holds unsigned months, days, and milliseconds; it reads as a
+# `Durations.Duration`, whose months and days are Int32.
+function _intervalfrombytes(bytes::AbstractVector{UInt8}, element::Metadata.SchemaElement)
+    months = _readuint32le(bytes, 1)
+    days = _readuint32le(bytes, 5)
+    months <= typemax(Int32) && days <= typemax(Int32) || throw(UnsupportedFeatureError(
+        "INTERVAL column $(repr(element.name)) holds $months months and $days days; " *
+        "Durations.Duration holds at most $(typemax(Int32)) of each"))
+    return Durations.Duration(months, days, Int64(_readuint32le(bytes, 9)) * 1_000_000)
+end
+
+function _taggedlogicalvalue(::Type{JSONValue}, value,
+    element::Metadata.SchemaElement, limits::Limits)
+    bytes = _requirelogicalbytes(value, element, :JSON)
+    _validatejson(bytes, limits, FormatError)
+    return JSONValue(collect(bytes), Val(:validated))
+end
+
+function _taggedlogicalvalue(::Type{BSONValue}, value,
+    element::Metadata.SchemaElement, limits::Limits)
+    bytes = _requirelogicalbytes(value, element, :BSON)
+    _validatebson(bytes, limits, FormatError)
+    return BSONValue(collect(bytes), Val(:validated))
+end
+
+function _binarylogicalvalue(kind::Symbol, element::Metadata.SchemaElement, value,
+    limits::Limits)
+    if kind === :unknown
+        ismissing(value) && return missing
+        throw(FormatError("UNKNOWN column $(repr(element.name)) contains a non-null value"))
+    end
+    ismissing(value) && return missing
+    if kind === :enum
+        bytes = _requirelogicalbytes(value, element, :ENUM)
+        return _fromparquetstring(bytes, limits)
+    elseif kind === :uuid
+        return _uuidfrombytes(_fixedlogicalbytes(value, element, 16, :UUID))
+    elseif kind === :float16
+        return _float16frombytes(_fixedlogicalbytes(value, element, 2, :FLOAT16))
+    elseif kind === :json
+        return _taggedlogicalvalue(JSONValue, value, element, limits)
+    elseif kind === :bson
+        return _taggedlogicalvalue(BSONValue, value, element, limits)
+    elseif kind === :interval
+        return _intervalfrombytes(_fixedlogicalbytes(value, element, 12, :INTERVAL),
+            element)
+    end
+    return nothing
+end
+
+function _binarylogicalvalue(element::Metadata.SchemaElement, value;
+    limits::Limits=Limits())
+    kind = _binarylogicalkind(element)
+    kind === nothing && return nothing
+    return _binarylogicalvalue(kind, element, value, limits)
+end
+
+function _binarylogicalvalue(node::SchemaNode, value; limits::Limits=Limits())
+    return _binarylogicalvalue(node.element, value; limits=limits)
+end
+
+function _taggedphysicalvalue(value::JSONValue, limits::Limits)
+    _validatejson(value.bytes, limits, ArgumentError)
+    return collect(value.bytes)
+end
+
+function _taggedphysicalvalue(value::BSONValue, limits::Limits)
+    _validatebson(value.bytes, limits, ArgumentError)
+    return collect(value.bytes)
+end
+
+function _binaryphysicalvalue(kind::Symbol, element::Metadata.SchemaElement, value,
+    limits::Limits)
+    if kind === :unknown
+        ismissing(value) && return missing
+        throw(ArgumentError("UNKNOWN column $(repr(element.name)) contains a non-null value"))
+    end
+    ismissing(value) && return missing
+    if kind === :enum
+        value isa AbstractString ||
+            throw(ArgumentError("ENUM column $(repr(element.name)) contains a non-string value"))
+        return _toparquetstring(value, limits)
+    elseif kind === :uuid
+        value isa UUIDs.UUID ||
+            throw(ArgumentError("UUID column $(repr(element.name)) contains a non-UUID value"))
+        return _uuidbytes(value)
+    elseif kind === :float16
+        value isa Float16 ||
+            throw(ArgumentError("FLOAT16 column $(repr(element.name)) contains " *
+                "a non-Float16 value"))
+        return _float16bytes(value)
+    elseif kind === :json
+        value isa JSONValue ||
+            throw(ArgumentError("JSON column $(repr(element.name)) contains an untagged value"))
+        return _taggedphysicalvalue(value, limits)
+    elseif kind === :bson
+        value isa BSONValue ||
+            throw(ArgumentError("BSON column $(repr(element.name)) contains an untagged value"))
+        return _taggedphysicalvalue(value, limits)
+    elseif kind === :interval
+        value isa Durations.Duration ||
+            throw(ArgumentError("INTERVAL column $(repr(element.name)) contains " *
+                "a non-Duration value"))
+        return collect(_IntervalBytes()(value))
+    end
+    return nothing
+end
+
+function _binaryphysicalvalue(element::Metadata.SchemaElement, value;
+    limits::Limits=Limits())
+    kind = _binarylogicalkind(element)
+    kind === nothing && return nothing
+    return _binaryphysicalvalue(kind, element, value, limits)
+end
+
+function _binaryphysicalvalue(node::SchemaNode, value; limits::Limits=Limits())
+    return _binaryphysicalvalue(node.element, value; limits=limits)
+end
+
+function _unknownlogicalvalues(element::Metadata.SchemaElement,
+    values::AbstractVector, limits::Limits)
+    _checklimit(:container_elements, length(values), limits.max_container_elements)
+    output = Vector{Missing}(undef, length(values))
+    for (index, value) in enumerate(values)
+        output[index] = _binarylogicalvalue(:unknown, element, value, limits)
+    end
+    return output
+end
+
+function _unknownphysicalvalues(element::Metadata.SchemaElement,
+    values::AbstractVector, limits::Limits)
+    _checklimit(:container_elements, length(values), limits.max_container_elements)
+    output = Vector{Missing}(undef, length(values))
+    for (index, value) in enumerate(values)
+        output[index] = _binaryphysicalvalue(:unknown, element, value, limits)
+    end
+    return output
+end
+
+function _binarylogicalvalues(element::Metadata.SchemaElement,
+    values::AbstractVector; limits::Limits=Limits())
+    kind = _binarylogicalkind(element)
+    kind === nothing && return nothing
+    kind === :unknown && return _unknownlogicalvalues(element, values, limits)
+    _checklimit(:container_elements, length(values), limits.max_container_elements)
+    T = _binarylogicaleltype(kind, eltype(values))
+    output = _convertedvector(T, values)
+    for (index, value) in enumerate(values)
+        output[index] = _binarylogicalvalue(kind, element, value, limits)
+    end
+    return output
+end
+
+function _binarylogicalvalues(node::SchemaNode, values::AbstractVector;
+    limits::Limits=Limits())
+    return _binarylogicalvalues(node.element, values; limits=limits)
+end
+
+function _binaryphysicalvalues(element::Metadata.SchemaElement,
+    values::AbstractVector; limits::Limits=Limits())
+    kind = _binarylogicalkind(element)
+    kind === nothing && return nothing
+    kind === :unknown && return _unknownphysicalvalues(element, values, limits)
+    _checklimit(:container_elements, length(values), limits.max_container_elements)
+    output = _convertedvector(Vector{UInt8}, values)
+    for (index, value) in enumerate(values)
+        output[index] = _binaryphysicalvalue(kind, element, value, limits)
+    end
+    return output
+end
+
+function _binaryphysicalvalues(node::SchemaNode, values::AbstractVector;
+    limits::Limits=Limits())
+    return _binaryphysicalvalues(node.element, values; limits=limits)
+end

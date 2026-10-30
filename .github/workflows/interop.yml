@@ -1,0 +1,35 @@
+name: Interop
+on:
+  pull_request:
+  push:
+    branches: [master]
+    tags: ['*']
+jobs:
+  interop:
+    # Files that pyarrow, Polars, and DuckDB write must read exactly with Parquet.Table,
+    # and files Parquet.write writes must read exactly with each of them
+    # (test/interop/interop.py).
+    name: pyarrow, Polars, DuckDB
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: test/interop/requirements.txt
+      - run: pip install -r test/interop/requirements.txt
+      - uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9 # v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9 # v2
+      - run: julia --project=test/interop -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+      - name: Files the tools write, read by Parquet.jl
+        run: |
+          python test/interop/interop.py write "$RUNNER_TEMP/tools"
+          julia --project=test/interop test/interop/interop.jl read "$RUNNER_TEMP/tools"
+      - name: Files Parquet.jl writes, read by the tools
+        run: |
+          julia --project=test/interop test/interop/interop.jl write "$RUNNER_TEMP/julia"
+          python test/interop/interop.py read "$RUNNER_TEMP/julia"

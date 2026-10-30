@@ -1,52 +1,101 @@
 module Parquet
 
-using Thrift
-using Snappy
-using CodecZlib
-using CodecZstd
-using Dates
-using Decimals
+import DataDecimals, DataStrings, Durations
+
 using Mmap
-using Base.Threads
-using SentinelArrays
+import CRC32
 
-if VERSION < v"1.3"
-    using Missings: nonmissingtype
-end
+# Calls `f(args...)` as a dynamic call that inference does not look into. Used where
+# column types are known only at run time (from a file's schema or the input table):
+# `f` then compiles for the concrete types alone, instead of also being inferred for
+# abstract ones, whose code loading other packages would invalidate. Not specialized,
+# so it compiles once for every call site.
+_barrier(@nospecialize(f), @nospecialize(args...); kwargs...) =
+    Base.inferencebarrier(f)(args...; kwargs...)
 
-if VERSION < v"1.5"
-    Base.signed(::Type{UInt16}) = Int16
-    Base.signed(::Type{UInt32}) = Int32
-    Base.signed(::Type{UInt64}) = Int64
-    Base.signed(::Type{UInt128}) = Int128
-end
-
-const PARQUET_JL_VERSION = v"0.7.0"
-
-const _use_mmap = Ref(true)
-
-function use_mmap(b::Bool)
-    _use_mmap[] = b
-end
-
-import Base: show, open, close, values, eltype, length
-
-export is_par_file, show, nrows, ncols, rowgroups, columns, pages, bytes, values, colname, colnames
-export schema
-export logical_timestamp, logical_string
-export RecordCursor, BatchedColumnsCursor
-export write_parquet, read_parquet
-
-# package code goes here
-include("PAR2/PAR2.jl")
-using .PAR2
-include("codec.jl")
+include("errors.jl")
+include("thrift.jl")
+include("metadata/parquet.jl")
 include("schema.jl")
-include("reader.jl")
-include("cursor.jl")
-include("writer.jl")
-include("simple_reader.jl")
+include("nested_schema.jl")
+include("logical.jl")
+include("logical_temporal.jl")
+include("logical_json.jl")
+include("logical_bson.jl")
+include("logical_binary.jl")
+include("logical_decimal.jl")
+include("arrow_schema.jl")
+include("statistics.jl")
+include("vectors.jl")
+include("dremel.jl")
+include("source.jl")
+include("footer.jl")
+include("plain.jl")
+include("rle.jl")
+include("delta.jl")
+include("bss.jl")
+include("checksum.jl")
+include("page.jl")
+include("codecs.jl")
+include("dictionary.jl")
+include("column.jl")
+include("nested_reader.jl")
+include("nested_table.jl")
+include("xxhash.jl")
+include("bloom.jl")
+include("write_types.jl")
+include("write_encode.jl")
+include("write.jl")
+include("write_statistics.jl")
+include("write_logical.jl")
+include("logical_column.jl")
+include("table.jl")
+include("pushdown.jl")
 include("dataset.jl")
-include("show.jl")
+include("write_nested.jl")
+include("writer.jl")
+include("write_partitioned.jl")
+include("precompile.jl")
 
-end # module
+# Parquet.jl 0.8 names, kept until 2.0.
+"""
+    read_parquet(path; rows=nothing, use_threads=nothing, batchsize=nothing, kwargs...)
+
+Deprecated; use [`Parquet.Table`](@ref)`(path; kwargs...)`. The 0.8 keywords still work:
+`rows` (a range of rows) reads those rows, `use_threads=false` reads on one task, and
+`batchsize` is ignored. Removed in 2.0.
+"""
+function read_parquet(path; rows::Union{Nothing,AbstractUnitRange}=nothing,
+        use_threads::Union{Nothing,Bool}=nothing, batchsize=nothing, kwargs...)
+    Base.depwarn("`read_parquet(path; kwargs...)` is deprecated, use " *
+        "`Parquet.Table(path; kwargs...)` instead.", :read_parquet)
+    use_threads === nothing ||
+        (kwargs = (; kwargs..., ntasks=use_threads ? Threads.nthreads() : 1))
+    rows === nothing ||
+        (kwargs = (; kwargs..., scan=Tables.Scan(offset=first(rows) - 1, limit=length(rows))))
+    return Table(path; kwargs...)
+end
+export read_parquet
+
+"""
+    write_parquet(sink, table; compression_codec="SNAPPY")
+
+Deprecated; use [`Parquet.write`](@ref)`(sink, table; compress)`, where
+`compression_codec="ZSTD"` becomes `compress=:zstd`. Removed in 2.0.
+"""
+function write_parquet(sink, table; compression_codec="SNAPPY")
+    Base.depwarn("`write_parquet(sink, table; compression_codec)` is deprecated, use " *
+        "`Parquet.write(sink, table; compress)` instead.", :write_parquet)
+    return write(sink, table; compress=Symbol(lowercase(String(compression_codec))))
+end
+export write_parquet
+
+if VERSION >= v"1.11"
+    Core.eval(@__MODULE__, Expr(:public, :AbstractSource, :BSONValue, :Dataset, :Decimal, :File,
+        :FormatError, :JSONValue, :LimitError, :Limits, :ListValue, :ListVector,
+        :LogicalColumn, :MapValue, :MapVector, :StructValue, :StructVector, :Table,
+        :UnsupportedFeatureError, :Writer, :col, :colcmp, :colin, :concurrentreads,
+        :isnull, :metadata, :read, :readrange, :sourcelength, :statistics, :write))
+end
+
+end

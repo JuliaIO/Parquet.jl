@@ -1,0 +1,505 @@
+using Dates
+using SHA
+using UUIDs
+import Tables
+
+const WSMD = Parquet.Metadata
+
+function wsmetadata(bytes::Vector{UInt8})
+    file = Parquet.File(bytes)
+    return try
+        Parquet.Thrift.decode(file.footer.bytes, WSMD.FileMetaData)
+    finally
+        close(file)
+    end
+end
+
+function wsstats(metadata::WSMD.FileMetaData, group::Int, column::Int)
+    return metadata.row_groups[group].columns[column].meta_data.statistics
+end
+
+function wspages(bytes::Vector{UInt8}, column::Int)
+    file = Parquet.File(bytes)
+    return try
+        metadata = Parquet.Thrift.decode(file.footer.bytes, WSMD.FileMetaData)
+        chunk = metadata.row_groups[1].columns[column].meta_data
+        start, stop = Parquet._chunkrange(chunk, file.footer.offset)
+        headers = WSMD.PageHeader[]
+        position = start
+        while position < stop
+            frame = Parquet.readpage(file.source, position, stop, Parquet.Limits())
+            push!(headers, frame.header)
+            position = Parquet.pageend(frame)
+        end
+        headers
+    finally
+        close(file)
+    end
+end
+
+function wscolumnindex(metadata::WSMD.FileMetaData, name::String)
+    for (index, leaf) in enumerate(metadata.schema[2:end])
+        leaf.name == name && return index
+    end
+    throw(ArgumentError("writer statistics test column $name is absent"))
+end
+
+# The ColumnIndex of a chunk, or nothing when the writer wrote none.
+function wspageindex(bytes::Vector{UInt8}, group::Int, column::Int)
+    chunk = wsmetadata(bytes).row_groups[group].columns[column]
+    chunk.column_index_offset === nothing && return nothing
+    start = Int(chunk.column_index_offset) + 1
+    return Parquet.Thrift.decode(bytes[start:(start + Int(chunk.column_index_length) - 1)],
+        WSMD.ColumnIndex)
+end
+
+function wsorderkind(order::WSMD.ColumnOrder)
+    order.TYPE_ORDER !== nothing && return :type
+    order.IEEE_754_TOTAL_ORDER !== nothing && return :ieee
+    return :unknown
+end
+
+function wsle16(bytes::AbstractVector{UInt8})
+    length(bytes) == 2 || throw(ArgumentError("expected two bytes"))
+    return UInt16(bytes[1]) | (UInt16(bytes[2]) << 8)
+end
+
+function wsle32(bytes::AbstractVector{UInt8})
+    length(bytes) == 4 || throw(ArgumentError("expected four bytes"))
+    return UInt32(bytes[1]) | (UInt32(bytes[2]) << 8) |
+        (UInt32(bytes[3]) << 16) | (UInt32(bytes[4]) << 24)
+end
+
+function wsle64(bytes::AbstractVector{UInt8})
+    length(bytes) == 8 || throw(ArgumentError("expected eight bytes"))
+    value = UInt64(0)
+    for index in 8:-1:1
+        value = (value << 8) | UInt64(bytes[index])
+    end
+    return value
+end
+
+function wsfloatvalue(::Type{Float16}, bits::UInt16)
+    return reinterpret(Float16, bits)
+end
+
+function wsfloatvalue(::Type{Float32}, bits::UInt32)
+    return reinterpret(Float32, bits)
+end
+
+function wsfloatvalue(::Type{Float64}, bits::UInt64)
+    return reinterpret(Float64, bits)
+end
+
+function wsfloatbits(::Type{Float16}, bytes::AbstractVector{UInt8})
+    return wsle16(bytes)
+end
+
+function wsfloatbits(::Type{Float32}, bytes::AbstractVector{UInt8})
+    return wsle32(bytes)
+end
+
+function wsfloatbits(::Type{Float64}, bytes::AbstractVector{UInt8})
+    return wsle64(bytes)
+end
+
+function wsieeekey(bits::T) where {T<:Union{UInt16,UInt32,UInt64}}
+    sign = one(T) << (8 * sizeof(T) - 1)
+    return iszero(bits & sign) ? bits | sign : ~bits
+end
+
+function wsassertmodern(statistics::WSMD.Statistics)
+    @test statistics.min === nothing
+    @test statistics.max === nothing
+    if statistics.min_value === nothing
+        @test statistics.max_value === nothing
+        @test statistics.is_min_value_exact === nothing
+        @test statistics.is_max_value_exact === nothing
+    else
+        @test statistics.max_value !== nothing
+        @test statistics.is_min_value_exact === true
+        @test statistics.is_max_value_exact === true
+    end
+    return
+end
+
+mutable struct WSCountingVector{T} <: AbstractVector{T}
+    values::Vector{T}
+    reads::Int
+end
+
+function Base.IndexStyle(::Type{<:WSCountingVector})
+    return IndexLinear()
+end
+
+function Base.size(values::WSCountingVector)
+    return size(values.values)
+end
+
+function Base.getindex(values::WSCountingVector, index::Int)
+    values.reads += 1
+    return values.values[index]
+end
+
+mutable struct WSCallbackTable
+    calls::Int
+    values::Vector{Int32}
+end
+
+function Tables.istable(::Type{WSCallbackTable})
+    return true
+end
+
+function Tables.columnaccess(::Type{WSCallbackTable})
+    return true
+end
+
+function Tables.columns(table::WSCallbackTable)
+    table.calls += 1
+    return (value=table.values,)
+end
+
+@testset "writer statistics column orders and logical families" begin
+    input = (
+        flag=Bool[true, false],
+        i32=Int32[-2, 3],
+        i64=Int64[-9, 11],
+        u32=UInt32[typemax(UInt32), 0],
+        u64=UInt64[typemax(UInt64), 0],
+        f32=Float32[-0.0, 0.0],
+        f64=Float64[-Inf, Inf],
+        text=["a\0b", "a\0c"],
+        raw=Vector{UInt8}[UInt8[0xff], UInt8[0x00, 0xff]],
+        fixed=NTuple{3,UInt8}[(0x01, 0x00, 0xff), (0x01, 0x01, 0x00)],
+        date=Date[Date(1969, 12, 31), Date(2000, 2, 29)],
+        time=Time[Time(0), Time(23, 59, 59, 999, 999, 999)],
+        timestamp=Parquet.Durations.Timestamp{Dates.Nanosecond}[
+            pqstamp(-1, :nanos, false),
+            pqstamp(1, :nanos, false),
+        ],
+        decimal32=Parquet.Decimal[
+            Parquet.Decimal(-12, 1), Parquet.Decimal(34, 1)],
+        decimal64=Parquet.Decimal[
+            Parquet.Decimal(-12_345_678_901, 1),
+            Parquet.Decimal(12_345_678_902, 1),
+        ],
+        decimalfixed=Parquet.Decimal[
+            Parquet.Decimal(big"-12345678901234567890", 1),
+            Parquet.Decimal(big"12345678901234567891", 1),
+        ],
+        uuid=UUID[
+            UUID("00112233-4455-6677-8899-aabbccddeeff"),
+            UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        ],
+        f16=Float16[-0.0, 0.0],
+        json=Parquet.JSONValue[
+            Parquet.JSONValue(codeunits("{\"a\":1}")),
+            Parquet.JSONValue(codeunits("[1,null,3]")),
+        ],
+        bson=Parquet.BSONValue[
+            Parquet.BSONValue(hex2bytes("0c0000001061000100000000")),
+            Parquet.BSONValue(hex2bytes("090000000a00ff0000")),
+        ],
+        interval=Parquet.Durations.Duration[
+            Parquet.Durations.Duration(0, 1, 2_000_000),
+            Parquet.Durations.Duration(3, 4, 5_000_000)],
+        unknown=Missing[missing, missing],
+    )
+    metadata = wsmetadata(Parquet._encodefile(input; statistics=true))
+    @test metadata.column_orders !== nothing
+    @test length(metadata.column_orders) == length(metadata.schema) - 1
+    floating = Set(["f32", "f64", "f16"])
+    for (index, element) in enumerate(metadata.schema[2:end])
+        # Floats too use the type-defined order, as pyarrow writes it.
+        @test wsorderkind(metadata.column_orders[index]) == :type
+        statistics = wsstats(metadata, 1, index)
+        @test statistics !== nothing
+        wsassertmodern(statistics)
+        @test statistics.null_count == (element.name == "unknown" ? 2 : 0)
+        if element.name in floating
+            @test statistics.nan_count == 0
+        else
+            @test statistics.nan_count === nothing
+        end
+        if element.name in ("interval", "unknown")
+            @test statistics.min_value === nothing
+            @test statistics.max_value === nothing
+        else
+            @test statistics.min_value !== nothing
+            @test statistics.max_value !== nothing
+        end
+        # A ColumnIndex is written for every leaf whose values have a sort order.
+        chunk = metadata.row_groups[1].columns[index]
+        if element.name in ("interval", "unknown")
+            @test chunk.column_index_offset === nothing
+        else
+            @test chunk.column_index_offset !== nothing
+            @test chunk.column_index_length > 0
+        end
+    end
+    unsigned32 = wsstats(metadata, 1, wscolumnindex(metadata, "u32"))
+    @test wsle32(unsigned32.min_value) == UInt32(0)
+    @test wsle32(unsigned32.max_value) == typemax(UInt32)
+    unsigned64 = wsstats(metadata, 1, wscolumnindex(metadata, "u64"))
+    @test wsle64(unsigned64.min_value) == UInt64(0)
+    @test wsle64(unsigned64.max_value) == typemax(UInt64)
+    signed = wsstats(metadata, 1, wscolumnindex(metadata, "i32"))
+    @test reinterpret(Int32, wsle32(signed.min_value)) == Int32(-2)
+    @test reinterpret(Int32, wsle32(signed.max_value)) == Int32(3)
+    text = wsstats(metadata, 1, wscolumnindex(metadata, "text"))
+    @test text.min_value == collect(codeunits("a\0b"))
+    @test text.max_value == collect(codeunits("a\0c"))
+    raw = wsstats(metadata, 1, wscolumnindex(metadata, "raw"))
+    @test raw.min_value == UInt8[0x00, 0xff]
+    @test raw.max_value == UInt8[0xff]
+    fixed = wsstats(metadata, 1, wscolumnindex(metadata, "fixed"))
+    @test fixed.min_value == UInt8[0x01, 0x00, 0xff]
+    @test fixed.max_value == UInt8[0x01, 0x01, 0x00]
+end
+
+@testset "writer float extrema, NaN counts, and signed zero" begin
+    # The type-defined order's rules: no NaN in bounds, none for only NaN, zero bounds
+    # -0.0 and +0.0.
+    formats = (
+        (Float16, UInt16, UInt16(0x8000), UInt16(0x0000),
+            UInt16(0x7e11), UInt16(0xfe22)),
+        (Float32, UInt32, UInt32(0x80000000), UInt32(0x00000000),
+            UInt32(0x7fc00011), UInt32(0xffc00022)),
+        (Float64, UInt64, UInt64(0x8000000000000000),
+            UInt64(0x0000000000000000), UInt64(0x7ff8000000000011),
+            UInt64(0xfff8000000000022)),
+    )
+    for (T, _, negativezero, positivezero, positivenan, negativenan) in formats
+        mixed = Union{Missing,T}[
+            wsfloatvalue(T, negativezero), wsfloatvalue(T, positivenan),
+            missing, wsfloatvalue(T, positivezero),
+        ]
+        metadata = wsmetadata(Parquet._encodefile((value=mixed,);
+            statistics=true))
+        statistics = wsstats(metadata, 1, 1)
+        @test wsorderkind(only(metadata.column_orders)) == :type
+        @test statistics.null_count == 1
+        @test statistics.nan_count == 1
+        @test wsfloatbits(T, statistics.min_value) == negativezero
+        @test wsfloatbits(T, statistics.max_value) == positivezero
+        allnanbits = (negativenan, positivenan)
+        allnan = T[wsfloatvalue(T, bits) for bits in allnanbits]
+        allnanmetadata = wsmetadata(Parquet._encodefile((value=allnan,);
+            statistics=true))
+        allnanstatistics = wsstats(allnanmetadata, 1, 1)
+        @test allnanstatistics.nan_count == 2
+        @test allnanstatistics.min_value === nothing
+        @test allnanstatistics.max_value === nothing
+        for bits in (positivezero, negativezero)
+            zero = wsfloatvalue(T, bits)
+            zerostatistics = wsstats(wsmetadata(Parquet._encodefile(
+                (value=T[zero],); statistics=true)), 1, 1)
+            @test zerostatistics.nan_count == 0
+            @test wsfloatbits(T, zerostatistics.min_value) == negativezero
+            @test wsfloatbits(T, zerostatistics.max_value) == positivezero
+        end
+    end
+    allhalves = reinterpret(Float16, collect(UInt16(0):typemax(UInt16)))
+    statistics = wsstats(wsmetadata(Parquet._encodefile(
+        (value=allhalves,); statistics=true)), 1, 1)
+    @test statistics.nan_count == 2046
+    @test wsle16(statistics.min_value) == UInt16(0xfc00)
+    @test wsle16(statistics.max_value) == UInt16(0x7c00)
+end
+
+@testset "writer statistics nested row-group slices" begin
+    E = Union{Missing,Int32}
+    rows = Union{Missing,Vector{E}}[
+        E[Int32(1), missing],
+        missing,
+        E[],
+        E[Int32(5), Int32(-2)],
+        E[Int32(7)],
+    ]
+    metadata = wsmetadata(Parquet._encodefile((items=rows,);
+        rowgroupsize=2, statistics=true))
+    @test length(metadata.row_groups) == 3
+    expected = ((2, Int32(1), Int32(1)),
+        (1, Int32(-2), Int32(5)), (0, Int32(7), Int32(7)))
+    for (group, (nulls, lower, upper)) in enumerate(expected)
+        statistics = wsstats(metadata, group, 1)
+        @test statistics.null_count == nulls
+        @test reinterpret(Int32, wsle32(statistics.min_value)) == lower
+        @test reinterpret(Int32, wsle32(statistics.max_value)) == upper
+    end
+end
+
+@testset "writer statistics empty and all-null states" begin
+    empty = wsmetadata(Parquet._encodefile((integer=Int32[],
+        double=Float64[], half=Float16[]);
+        statistics=true))
+    @test isempty(empty.row_groups)
+    @test length(empty.column_orders) == 3
+    @test wsorderkind.(empty.column_orders) == [:type, :type, :type]
+    allnull = Union{Missing,Int32}[missing, missing, missing]
+    statistics = wsstats(wsmetadata(Parquet._encodefile((value=allnull,);
+        statistics=true)), 1, 1)
+    @test statistics.null_count == 3
+    @test statistics.nan_count === nothing
+    @test statistics.min_value === nothing
+    @test statistics.max_value === nothing
+    wsassertmodern(statistics)
+end
+
+@testset "writer statistics value limit" begin
+    values = (value=Int32[-1, 2],)
+    exact = wsstats(wsmetadata(Parquet._encodefile(values;
+        statistics=true,
+        limits=Parquet.Limits(max_statistics_value_bytes=4))), 1, 1)
+    @test exact.min_value !== nothing
+    @test exact.max_value !== nothing
+    over = wsstats(wsmetadata(Parquet._encodefile(values;
+        statistics=true,
+        limits=Parquet.Limits(max_statistics_value_bytes=3))), 1, 1)
+    @test over.null_count == 0
+    @test over.min_value === nothing
+    @test over.max_value === nothing
+    variable = (value=Vector{UInt8}[UInt8[0x01, 0x02],
+        UInt8[0x01, 0x02, 0x03]],)
+    variableexact = wsstats(wsmetadata(Parquet._encodefile(variable;
+        statistics=true,
+        limits=Parquet.Limits(max_statistics_value_bytes=3))), 1, 1)
+    @test variableexact.min_value == UInt8[0x01, 0x02]
+    @test variableexact.max_value == UInt8[0x01, 0x02, 0x03]
+    variableover = wsstats(wsmetadata(Parquet._encodefile(variable;
+        statistics=true,
+        limits=Parquet.Limits(max_statistics_value_bytes=2))), 1, 1)
+    @test variableover.null_count == 0
+    @test variableover.min_value === nothing
+    @test variableover.max_value === nothing
+    emptybound = wsstats(wsmetadata(Parquet._encodefile(
+        (value=Vector{UInt8}[UInt8[]],); statistics=true,
+        limits=Parquet.Limits(max_statistics_value_bytes=0))), 1, 1)
+    @test emptybound.min_value == UInt8[]
+    @test emptybound.max_value == UInt8[]
+end
+
+@testset "writer statistics opt-out and page boundary" begin
+    input = (id=Int32[1, 2, 3],
+        label=Union{Missing,String}["a", missing, "b"])
+    disabled = Parquet._encodefile(input; statistics=false)
+    @test bytes2hex(sha256(disabled)) ==
+        "14fdceb9fad03da64d4b2206d079d7efd171af4c4fc62c538dce5cb1bcf99cd3"
+    metadata = wsmetadata(disabled)
+    @test metadata.column_orders === nothing
+    @test all(chunk -> chunk.meta_data.statistics === nothing,
+        metadata.row_groups[1].columns)
+    @test Parquet._encodefile(input) == Parquet._encodefile(input;
+        statistics=true)
+    without = WSCountingVector(Int32[1, 2, 3], 0)
+    with = WSCountingVector(Int32[1, 2, 3], 0)
+    Parquet._encodefile((value=without,); statistics=false)
+    Parquet._encodefile((value=with,); statistics=true)
+    @test with.reads == without.reads
+    for pageversion in (:v1, :v2)
+        bytes = Parquet._encodefile((value=Int32[1, 2, 3],);
+            pageversion=pageversion, pagesize=4, statistics=true)
+        headers = wspages(bytes, 1)
+        @test length(headers) > 1
+        for header in headers
+            statistics = pageversion === :v1 ?
+                header.data_page_header.statistics :
+                header.data_page_header_v2.statistics
+            @test statistics === nothing
+        end
+    end
+end
+
+@testset "writer statistics validation and destination atomicity" begin
+    limits = Parquet.Limits(max_statistics_value_bytes=-1)
+    table = WSCallbackTable(0, Int32[1])
+    io = IOBuffer()
+    Base.write(io, codeunits("unchanged"))
+    @test_throws ArgumentError Parquet.write(io, table; limits=limits)
+    @test table.calls == 0
+    @test String(take!(io)) == "unchanged"
+    table = WSCallbackTable(0, Int32[1])
+    mktempdir() do directory
+        path = joinpath(directory, "existing.parquet")
+        write(path, "unchanged")
+        @test_throws ArgumentError Parquet.write(path, table; limits=limits)
+        @test table.calls == 0
+        @test read(path, String) == "unchanged"
+        absent = joinpath(directory, "absent.parquet")
+        @test_throws ArgumentError Parquet.write(absent, table; limits=limits)
+        @test !ispath(absent)
+    end
+    @test_throws ArgumentError Parquet._encodefile((value=Int32[1],);
+        statistics=false, limits=limits)
+end
+
+@testset "writer rejects fixed values of the wrong width" begin
+    element = WSMD.SchemaElement(
+        type_=WSMD.Type.FIXED_LEN_BYTE_ARRAY,
+        type_length=Int32(2),
+        repetition_type=WSMD.FieldRepetitionType.REQUIRED,
+        name="value",
+    )
+    options = Parquet._writeoptions().chunk
+    leaf = Parquet._LeafSpec(element, String["value"], 0, 0,
+        Parquet._statisticorder(element), nothing, false, false, false)
+    rows = Parquet._FlatRows(Vector{UInt8}[UInt8[0x01]], 1, 1, identity, false, "value")
+    @test_throws "FIXED_LEN_BYTE_ARRAY(2) value has 1 bytes" Parquet._encodechunk(leaf,
+        rows, options)
+end
+
+@testset "writer page bounds stay allocation-free" begin
+    bounds(values) = @allocated Parquet._numberbounds(values, Parquet._ORDER_SIGNED)
+    small = Int32[1]
+    large = rand(Int32, 100_000)
+    bounds(small)
+    bounds(large)
+    @test bounds(large) <= bounds(small)
+    # Julia 1.10 boxes the result tuple in @allocated, so compare sizes instead of
+    # asserting zero: the float kernel allocates nothing per value either.
+    floatbounds(values) = @allocated Parquet._numberbounds(values, Parquet._ORDER_FLOAT)
+    smallfloats = rand(1)
+    largefloats = rand(100_000)
+    floatbounds(smallfloats)
+    floatbounds(largefloats)
+    @test floatbounds(largefloats) <= floatbounds(smallfloats)
+end
+
+@testset "float pages of only NaN" begin
+    # A page of only NaN has no bounds, so the chunk's bounds come from the other pages
+    # and no column index is written for the chunk (its pages must each have bounds).
+    for nan in (NaN, -NaN)
+        bytes = Parquet._encodefile((x=vcat(fill(nan, 20_000), collect(1.0:20_000.0)),);
+            statistics=true)
+        statistics = wsstats(wsmetadata(bytes), 1, 1)
+        @test reinterpret(Float64, statistics.min_value)[1] == 1.0
+        @test reinterpret(Float64, statistics.max_value)[1] == 20_000.0
+        @test statistics.nan_count == 20_000
+        @test wspageindex(bytes, 1, 1) === nothing
+        @test wsmetadata(bytes).row_groups[1].columns[1].offset_index_offset !== nothing
+    end
+    # Page-index zero bounds follow the same rules as the chunk's.
+    bytes = Parquet._encodefile((x=[0.0, -0.0, 1.0],); statistics=true)
+    index = wspageindex(bytes, 1, 1)
+    @test reinterpret(UInt64, only(index.min_values))[1] == 0x8000000000000000
+    @test reinterpret(UInt64, only(index.max_values))[1] == reinterpret(UInt64, 1.0)
+end
+
+@testset "page-index bounds are valid values of their column" begin
+    # FIXED_LEN_BYTE_ARRAY bounds keep the column's width.
+    wide = [ntuple(i -> UInt8(i == 1 ? value : 0x00), 100) for value in 1:3]
+    index = wspageindex(Parquet._encodefile((x=wide,); statistics=true), 1, 1)
+    @test length(only(index.min_values)) == 100 && length(only(index.max_values)) == 100
+    # Long STRING bounds are cut between characters, and the maximum still bounds the
+    # page's values.
+    text = [repeat("€", 30), repeat("€", 29) * "z", repeat("ab", 40)]
+    index = wspageindex(Parquet._encodefile((x=text,); statistics=true), 1, 1)
+    lower, upper = only(index.min_values), only(index.max_values)
+    @test isvalid(String, lower) && isvalid(String, upper)
+    @test length(lower) <= 64
+    @test all(value -> lower <= codeunits(value) <= upper, text)
+    # Without characters to increment, the whole value is the bound.
+    top = repeat("\U10ffff", 20)
+    index = wspageindex(Parquet._encodefile((x=[top],); statistics=true), 1, 1)
+    @test only(index.max_values) == codeunits(top)
+end
