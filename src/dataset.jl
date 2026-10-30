@@ -381,12 +381,14 @@ end
 
 ## Reading footers and unifying columns
 
+# Retain inputs that cannot be reopened between discovery and row-group reads.
+_datasetinput(input, ::_ByteBudget) = input
+_datasetinput(input::IO, budget::_ByteBudget) = _readsourcebytes(input, budget)
+
 function _datasetfile(input, path, partitions::Vector{Any}, stringtype::Type, int96::Type,
         limits::Limits, budget::_ByteBudget)
     file = try
-        # Streams cannot be reopened after their footer is read. Keep their bytes for
-        # later row-group reads, without closing or seeking the caller's stream.
-        input isa IO && (input = _readsourcebytes(input, budget))
+        input = _datasetinput(input, budget)
         File(input; ntasks=1, stringtype=stringtype, int96=int96, limits=limits,
             budget=budget)
     catch err

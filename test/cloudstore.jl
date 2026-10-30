@@ -1,6 +1,35 @@
 using CloudBaseTest, CloudStore
 using Tables
 
+@testset "CloudStore snapshots without a supplied ETag" begin
+    Minio.with() do conf
+        credentials, bucket = conf
+        original = take!(Parquet.write(IOBuffer(), (a=Int64[1, 2],);
+            compress=nothing, dictionary=false))
+        replacement = take!(Parquet.write(IOBuffer(), (a=Int64[3, 4],);
+            compress=nothing, dictionary=false))
+        @test length(original) == length(replacement)
+        CloudStore.put(bucket, "snapshot.parquet", original; credentials)
+        tagged = CloudStore.Object(bucket, "snapshot.parquet"; credentials)
+        untagged = CloudStore.Object(bucket, credentials, tagged.key, length(tagged), "")
+        source = Parquet.source(untagged)
+        @test Parquet.readrange(source, 0, 4) == original[1:4]
+        dataset = Parquet.Dataset([untagged])
+        @test Parquet.Table(dataset).a == [1, 2]
+
+        # A same-size replacement must fail both later ranges and cached-footer reads.
+        CloudStore.put(bucket, tagged.key, replacement; credentials)
+        @test_throws CloudStore.API.HTTP.StatusError Parquet.readrange(source, 4, 4)
+        @test_throws CloudStore.API.HTTP.StatusError Parquet.Table(dataset)
+        # A supplied version is kept even if the object has since changed.
+        known = Parquet.source(tagged)
+        @test known.object === tagged
+        @test_throws CloudStore.API.HTTP.StatusError Parquet.readrange(known, 0, 4)
+        stale = CloudStore.Object(bucket, credentials, tagged.key, length(tagged) + 1, "")
+        @test_throws ArgumentError Parquet.source(stale)
+    end
+end
+
 @testset "CloudStore objects" begin
     rows = 100_000
     bytes = take!(Parquet.write(IOBuffer(), (a=collect(1:rows), b=[string(i) for i in 1:rows]);

@@ -8,7 +8,20 @@ struct ObjectSource <: Parquet.AbstractSource
     object::CloudStore.Object
 end
 
-Parquet.source(object::CloudStore.Object; budget=nothing) = ObjectSource(object)
+function Parquet.source(object::CloudStore.Object; budget=nothing)
+    if isempty(object.eTag)
+        snapshot = CloudStore.Object(object.store, object.key; credentials=object.credentials)
+        length(snapshot) == length(object) || throw(ArgumentError(
+            "object size changed before ranged Parquet read"))
+        isempty(snapshot.eTag) && throw(ArgumentError(
+            "object has no ETag for a consistent ranged Parquet read"))
+        object = snapshot
+    end
+    return ObjectSource(object)
+end
+
+Parquet._datasetinput(object::CloudStore.Object, ::Parquet._ByteBudget) =
+    Parquet.source(object)
 Parquet._sourcepath(object::CloudStore.Object) = object.key
 Parquet.sourcelength(src::ObjectSource) = Int64(length(src.object))
 Parquet.concurrentreads(::ObjectSource) = true
