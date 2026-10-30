@@ -245,7 +245,7 @@ function _storedelements(table::Table)
     unit = Dates.Nanosecond
     for (child, column) in zip(_tableschema(table).root.children, _tablecolumns(table))
         child.element.type_ == Metadata.Type.INT96 || continue
-        T = Base.nonmissingtype(eltype(column))
+        T = Base.nonmissingtype(_eltypeof(column))
         T <: Durations.Timestamp && (unit = T.parameters[1])
         break
     end

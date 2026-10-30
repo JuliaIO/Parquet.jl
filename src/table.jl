@@ -921,7 +921,7 @@ end
 function _chargecolumncopy!(budget::_ByteBudget, column::AbstractVector, rows::Int)
     budget.maximum == typemax(Int64) && return
     T = column isa Union{DataStrings.StringVector,DataStrings.BytesVector} ?
-        DataStrings.StringPayload : eltype(column)
+        DataStrings.StringPayload : _eltypeof(column)
     _chargearray!(budget, T, rows)
     return
 end
@@ -1047,7 +1047,7 @@ function _slicetable(table::Table, drop::Int, take::Int, budget::_ByteBudget)
     range = (drop + 1):(drop + take)
     columns = map(_tablecolumns(table)) do column
         T = column isa Union{DataStrings.StringVector,DataStrings.BytesVector} ?
-            DataStrings.StringPayload : eltype(column)
+            DataStrings.StringPayload : _eltypeof(column)
         _chargearray!(budget, T, take)
         return _slicecolumn(column, range)
     end
@@ -1315,7 +1315,7 @@ Base.names(x::Union{File,Table}) = String[String(name) for name in Tables.column
 
 function Tables.schema(table::Table)
     columns = _tablecolumns(table)
-    return Tables.Schema(_tablenames(table), map(eltype, columns))
+    return Tables.Schema(_tablenames(table), map(_eltypeof, columns))
 end
 
 function Tables.rowcount(table::Table)

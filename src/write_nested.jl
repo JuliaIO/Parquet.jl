@@ -235,7 +235,7 @@ Base.@nospecializeinfer function _nestedwriteshape(name::String, declared::Type,
     throw(_writeunsupported(value_type, path))
 end
 
-# The element type of a vector that `_nestedwriteshape` sees untyped.
+# The element type of a column whose concrete vector type is known only at run time.
 _eltypeof(values::AbstractVector) = _barrier(eltype, values)::Type
 
 # Tuples write as lists, so their fields need one element type: types that are equal up
