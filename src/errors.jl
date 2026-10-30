@@ -92,9 +92,9 @@ Base.@kwdef struct Limits
     max_metadata_depth::Int = 128
 end
 
-# Bytes a read has decoded, against `max_materialized_bytes`: the file metadata, the
-# pages it decompresses, the values it decodes and assembles, and the copy of an `IO`
-# source. Charges accumulate and are never released; with no cap nothing is counted.
+# Reservations against `max_materialized_bytes`: metadata, output columns, fetched
+# range caches, conservative page-decoding estimates, and the copy of an `IO` source.
+# Charges accumulate and are never released; with no cap nothing is counted.
 # Tasks of one read share the budget.
 mutable struct _ByteBudget
     const maximum::Int64
@@ -129,8 +129,11 @@ function _charge!(budget::_ByteBudget, bytes::Integer)
     return
 end
 
+_arraybytes(::Type{T}, count::Integer) where {T} =
+    Int128(count) * (Base.elsize(Vector{T}) + (Base.isbitsunion(T) ? 1 : 0))
+
 function _chargearray!(budget::_ByteBudget, ::Type{T}, count::Integer) where {T}
-    _charge!(budget, Int128(count) * Base.elsize(Vector{T}))
+    _charge!(budget, _arraybytes(T, count))
     return
 end
 

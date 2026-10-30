@@ -826,9 +826,9 @@ end
 # `file` reading through a `_CoalescedSource` that fetches `ranges` (byte offsets, start
 # and stop), each merged run with one request on first use, when its source is not in
 # memory.
-function _plannedfile(file::File, ranges::Vector{Tuple{Int64,Int64}})
+function _plannedfile(file::File, ranges::Vector{Tuple{Int64,Int64}}, budget::_ByteBudget)
     (file.source isa MemorySource || isempty(ranges)) && return file
-    return File(_CoalescedSource(file.source, ranges), file.footer, file.metadata, file.plan,
+    return File(_CoalescedSource(file.source, ranges, budget), file.footer, file.metadata, file.plan,
         false, false)
 end
 
@@ -857,7 +857,7 @@ function _prefetchindexes(ctx::_PruneContext, indices::Vector{Int})
         end
     end
     isempty(ranges) && return ctx
-    return _PruneContext(_plannedfile(file, ranges), ctx.plan, ctx.pred, ctx.leaves,
+    return _PruneContext(_plannedfile(file, ranges, ctx.budget), ctx.plan, ctx.pred, ctx.leaves,
         ctx.fields, ctx.budget)
 end
 
@@ -883,7 +883,7 @@ function _planfetch(file::File, metadata::Metadata.FileMetaData, items, limits::
             limits)
         range === nothing || push!(indexranges, range)
     end
-    indexfile = _plannedfile(file, indexranges)
+    indexfile = _plannedfile(file, indexranges, budget)
     pages = _readmap(chunks, _readtasks(file, file.plan.ntasks, length(chunks))) do (chunk, rows, (start, stop)), _
         return _chunkpages(indexfile, chunk, rows, start, stop, limits, budget)
     end
@@ -906,7 +906,7 @@ function _planfetch(file::File, metadata::Metadata.FileMetaData, items, limits::
                 push!(ranges, (location.offset, location.offset + location.compressed_page_size))
         end
     end
-    return _plannedfile(file, ranges), located
+    return _plannedfile(file, ranges, budget), located
 end
 
 function _filterpart(ctx::_PruneContext, index::Int)
@@ -1138,6 +1138,8 @@ function _readselectedchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractS
         end
         position = frameend
     end
+    row > lastrow || throw(FormatError(
+        "column chunk ended before requested row $(lastrow + 1)"))
     gather === nothing && _rowcount(decoded) != sink.filled && throw(AssertionError(
         "selected pages decoded $(sink.filled) values for $(_rowcount(decoded)) rows"))
     return decoded, kept
@@ -1348,7 +1350,7 @@ function _decodechunk(file::File, group::Metadata.RowGroup, wanted::Vector{UnitR
     # A planned source holds the pages the offset index leads to; without an index the
     # chunk is read whole.
     src = file.source
-    src isa MemorySource || pages !== nothing || (src = _ChunkSource(src, start, stop))
+    src isa MemorySource || pages !== nothing || (src = _ChunkSource(src, start, stop, budget))
     return _barrier(_decodechunk, _flatoutputtype(L, node), convert, src, md, node, start,
         stop, limits, budget, buffers, wanted, pages, gather,
         options.checksum)::Union{Nothing,_DecodedPart}
@@ -1569,6 +1571,11 @@ function _readselectedflat(file::File, plan::_ReadPlan, parts::Vector{_GroupRows
     starts = cumsum(counts) .- counts
     total = sum(counts; init=0)
     _checklimit(:container_elements, total, limits.max_container_elements)
+    _chargeflatallocation!(fields, limits, budget, options) do index
+        index in outfields || return 0
+        return filtered || _partsbacked(metadata, parts, counts, fields[index]) ? total :
+            min(total, 1 << 20)
+    end
     columns = AbstractVector[]
     pages = [Vector{Vector{UInt8}}[Vector{UInt8}[] for _ in parts] for _ in fields]
     tasks = Tuple{Int,Int}[]

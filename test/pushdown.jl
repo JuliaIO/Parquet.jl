@@ -67,6 +67,31 @@ end
 
 pdcheck(bytes; kw...) = pdcheck(bytes, Tables.Scan(; kw...))
 
+@testset "filtered reads reject missing requested rows" begin
+    table = (x=collect(1:10), y=collect(11:20))
+    for version in (:v1, :v2), dictionary in (false, true)
+        bytes = pdbytes(table; pageversion=version, pageindex=false, dictionary=dictionary)
+        truncated = pdrefooter(bytes) do metadata
+            group = only(metadata.row_groups)
+            columns = [Parquet._withfields(chunk; meta_data=Parquet._withfields(
+                chunk.meta_data; num_values=Int64(11))) for chunk in group.columns]
+            group = Parquet._withfields(group; columns=columns, num_rows=Int64(11))
+            Parquet._withfields(metadata; row_groups=[group], num_rows=Int64(11))
+        end
+        for ntasks in (1, 3)
+            @test_throws Parquet.FormatError Parquet.Table(truncated; ntasks=ntasks)
+            # One filter column uses a page-wise filter; two use decoded row ranges.
+            for filter in (Parquet.col(:x) >= 0,
+                    (Parquet.col(:x) >= 0) & (Parquet.col(:y) >= 0))
+                @test_throws Parquet.FormatError Parquet.Table(truncated;
+                    filter=filter, ntasks=ntasks)
+            end
+            # A row window can still read the valid prefix without reading later rows.
+            @test Parquet.Table(truncated; limit=5, ntasks=ntasks).x == collect(1:5)
+        end
+    end
+end
+
 @testset "pushdown: three-valued summaries" begin
     bits(values) = reduce(|, (value === true ? Parquet._CAN_TRUE : value === false ?
         Parquet._CAN_FALSE : Parquet._CAN_MISSING for value in values); init=0x00)

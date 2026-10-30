@@ -182,6 +182,20 @@ function _flatcolumnvector(node::SchemaNode, rows::Int, limits::Limits,
     return Vector{_flatoutputtype(L, node)}(undef, rows)
 end
 
+# Reserve output storage before allocating it. Page charges separately estimate the
+# decompressed bytes and temporary decoded values used while filling these columns.
+function _chargeflatallocation!(count, fields, limits::Limits, budget::_ByteBudget,
+        options::_ReadOptions)
+    budget.maximum == typemax(Int64) && return
+    bytes = Int128(0)
+    for (index, node) in enumerate(fields)
+        _, L = _valueconverter(node, limits, options)
+        bytes += _arraybytes(_flatoutputtype(L, node), count(index))
+    end
+    _charge!(budget, bytes)
+    return
+end
+
 # One row group's chunk of a flat field, decoded into `column[(offset + 1):]`. Returns
 # the page buffers a STRING chunk's payloads point into, or `nothing`.
 function _readtablechunk!(column::Vector, offset::Int, file::File,
@@ -282,6 +296,9 @@ function _readflattable(file::File, metadata::Metadata.FileMetaData, schema::Sch
         else
             push!(tasks, (fieldindex, 0))
         end
+    end
+    _chargeflatallocation!(fields, limits, budget, options) do index
+        return backed[index] ? rows : _claimcapacity(rows, _checkedsourcelength(file.source))
     end
     # Allocating a column zeroes part of it, so columns allocate on the read's tasks too.
     columns = _readmap(eachindex(fields), _readtasks(file, ntasks, length(fields))) do fieldindex, _
@@ -730,7 +747,7 @@ function _readgroups(file::File, groups::AbstractVector{Int}, budget::_ByteBudge
     schema = plan.schema
     rows = _validatetablerowgroups(metadata, schema, limits)
     _checklimit(:container_elements, rows, limits.max_container_elements)
-    file = _coalescedfile(file, metadata, schema)
+    file = _coalescedfile(file, metadata, schema, budget)
     names = _tablenames(schema, limits)
     if _isflattableplan(nested)
         columns = _readflattable(file, metadata, schema, rows, limits, budget, plan.ntasks,
@@ -752,14 +769,15 @@ end
 
 # `file` reading through a `_CoalescedSource` over the column chunks of `metadata`, when
 # its source is not in memory.
-function _coalescedfile(file::File, metadata::Metadata.FileMetaData, schema::Schema)
+function _coalescedfile(file::File, metadata::Metadata.FileMetaData, schema::Schema,
+        budget::_ByteBudget)
     file.source isa MemorySource && return file
     wanted = Tuple{Int64,Int64}[]
     for group in metadata.row_groups, leaf in schema.leaves
         md = _chunkmetadata(group.columns[Int(leaf.column_index)], leaf)
         push!(wanted, _chunkrange(md, file.footer.offset))
     end
-    return File(_CoalescedSource(file.source, wanted), file.footer, file.metadata,
+    return File(_CoalescedSource(file.source, wanted, budget), file.footer, file.metadata,
         file.plan, false, false)
 end
 

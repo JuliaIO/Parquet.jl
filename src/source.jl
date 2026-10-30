@@ -245,8 +245,11 @@ struct _ChunkSource{B<:AbstractVector{UInt8}} <: AbstractSource
     total::Int64
 end
 
-function _ChunkSource(src::AbstractSource, start::Int64, stop::Int64)
+function _ChunkSource(src::AbstractSource, start::Int64, stop::Int64,
+        budget::_ByteBudget=_UNCAPPED)
     total = _checkedsourcelength(src)
+    # A planned source charges its own cache; this view does not reserve another copy.
+    src isa _CoalescedSource || _charge!(budget, stop - start)
     bytes = _contiguous(_readrangeexact(src, total, start, stop - start))
     return _ChunkSource(bytes, start, total)
 end
@@ -288,9 +291,11 @@ struct _CoalescedSource{S<:AbstractSource} <: AbstractSource
     total::Int64
     starts::Vector{Int64}
     ranges::Vector{_FetchedRange}
+    budget::_ByteBudget
 end
 
-function _CoalescedSource(src::AbstractSource, wanted::Vector{Tuple{Int64,Int64}})
+function _CoalescedSource(src::AbstractSource, wanted::Vector{Tuple{Int64,Int64}},
+        budget::_ByteBudget=_UNCAPPED)
     total = _checkedsourcelength(src)
     merged = Tuple{Int64,Int64}[]
     for (start, stop) in sort(wanted)
@@ -303,7 +308,7 @@ function _CoalescedSource(src::AbstractSource, wanted::Vector{Tuple{Int64,Int64}
     end
     ranges = _FetchedRange[_FetchedRange(start, stop, ReentrantLock(), UInt8[], false)
         for (start, stop) in merged]
-    return _CoalescedSource(src, total, Int64[first(range) for range in merged], ranges)
+    return _CoalescedSource(src, total, Int64[first(range) for range in merged], ranges, budget)
 end
 
 sourcelength(src::_CoalescedSource) = src.total
@@ -317,6 +322,7 @@ function readrange(src::_CoalescedSource, offset::Integer, count::Integer)
     range = src.ranges[index]
     bytes = lock(range.lock) do
         if !range.fetched
+            _charge!(src.budget, range.stop - range.start)
             fetched = _readrangeexact(src.src, src.total, range.start,
                 range.stop - range.start)
             range.bytes = fetched isa Vector{UInt8} ? fetched : Vector{UInt8}(fetched)

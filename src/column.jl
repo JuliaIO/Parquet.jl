@@ -857,8 +857,8 @@ function _datapagev2!(sink, ::Type{P}, convert, frame::PageFrame,
     return count
 end
 
-# Budget charge of one page: its decompressed bytes (twice for byte arrays, whose values
-# may copy them) and its decoded entries.
+# Conservative decode charge of one page: its decompressed bytes (twice for byte arrays,
+# whose values may copy them) and temporary decoded entries, apart from output storage.
 function _pagecharge(::Type{P}, frame::PageFrame, entries::Int64) where {P}
     uncompressed = Int64(max(frame.header.uncompressed_page_size, 0))
     P === Vector{UInt8} || return uncompressed + 16 * entries
@@ -872,7 +872,7 @@ function _readchunk!(sink, ::Type{P}, ::Type{L}, convert, src::AbstractSource,
         md::Metadata.ColumnMetaData, node::SchemaNode, start::Int64, stop::Int64,
         limits::Limits, budget::_ByteBudget, buffers::_PageBuffers;
         checksum::UInt8=_CRC_ALL) where {P,L}
-    src isa MemorySource || (src = _ChunkSource(src, start, stop))
+    src isa MemorySource || (src = _ChunkSource(src, start, stop, budget))
     count = Int(md.num_values)
     dictionary = _scratch(buffers.dictionary, L)
     hasdictionary = false

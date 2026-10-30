@@ -20,6 +20,14 @@ using Tables
         end)
     end
     @test shared.used == 24_000
+
+    # Nullable isbits arrays store one tag byte per value as well as their payload.
+    nullable = Union{Missing,Int64}
+    exact = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=18))
+    Parquet._chargearray!(exact, nullable, 2)
+    @test exact.used == 18
+    short = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=17))
+    @test_throws Parquet.LimitError Parquet._chargearray!(short, nullable, 2)
 end
 
 @testset "bounded schema-name interning" begin
@@ -181,6 +189,29 @@ end
     @test readtwogroups > readone
     @test_throws Parquet.LimitError Parquet.Table(tworowgroups;
         limits=Parquet.Limits(max_materialized_bytes=readone))
+end
+
+function cappedread(bytes, options)
+    try
+        Parquet.Table(bytes; limits=Parquet.Limits(max_materialized_bytes=100_000),
+            ntasks=1, options...)
+    catch err
+        err isa Parquet.LimitError || rethrow()
+        return err
+    end
+    return nothing
+end
+
+@testset "read budgets precede flat output allocation" begin
+    rows = 1_000_000
+    bytes = take!(Parquet.write(IOBuffer(), (x=collect(1:rows),);
+        compress=:none, dictionary=false, pagesize=65_536))
+    for options in ((;), (; limit=rows - 1))
+        @test cappedread(bytes, options) isa Parquet.LimitError
+        # Warm the failure path; the cap must reject before reserving an 8 MB column.
+        cappedread(bytes, options)
+        @test (@allocated cappedread(bytes, options)) < 1_000_000
+    end
 end
 
 @testset "footer metadata structural preflight" begin

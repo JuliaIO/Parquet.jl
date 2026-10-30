@@ -64,6 +64,25 @@ function Parquet.readrange(source::ExactReadSource, offset::Integer,
     return source.readvalue
 end
 
+@testset "range caches reserve their bytes before fetching" begin
+    source = ExactReadSource(4, UInt8[1, 2, 3, 4], 0, 0)
+    budget = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=3))
+    cached = Parquet._CoalescedSource(source, [(Int64(0), Int64(4))], budget)
+    @test_throws Parquet.LimitError Parquet.readrange(cached, 0, 4)
+    @test source.readcalls == 0
+
+    budget = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=4))
+    cached = Parquet._CoalescedSource(source, [(Int64(0), Int64(4))], budget)
+    @test collect(Parquet.readrange(cached, 0, 4)) == UInt8[1, 2, 3, 4]
+    @test collect(Parquet.readrange(cached, 1, 2)) == UInt8[2, 3]
+    @test source.readcalls == 1
+    @test budget.used == 4
+
+    budget = Parquet._ByteBudget(Parquet.Limits(max_materialized_bytes=3))
+    @test_throws Parquet.LimitError Parquet._ChunkSource(source, Int64(0), Int64(4), budget)
+    @test source.readcalls == 1
+end
+
 mutable struct FailingPathIO <: IO
     closed::Bool
     failure::SourceCallbackSentinel
