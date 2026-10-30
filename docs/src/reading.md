@@ -98,15 +98,13 @@ keywords of `Parquet.Table`. `Tables.schema(file)` gives the columns a read retu
 `DataAPI.nrow(file)` the row count. Iterating the file reads one `Parquet.Table` per row
 group, so a file is its own `Tables.partitions`, `file[i]` (or `file[end]`) reads row
 group `i`, and `Parquet.Table(file)` reads them all; with a filter, row groups whose
-statistics rule it out are skipped. A path stays mapped until `close(file)`.
+statistics rule it out are skipped. A path stays mapped until `close(file)`; a do block
+closes the handle automatically, including if reading or processing a row group throws.
 
 ```@example reading
-file = Parquet.File(path; select=[:zone, :fare])
-[sum(part.fare) for part in file]
-```
-
-```@example reading
-close(file)
+Parquet.File(path; select=[:zone, :fare]) do file
+    [sum(part.fare) for part in file]
+end
 ```
 
 ## Threads

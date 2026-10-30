@@ -37,6 +37,52 @@ end
 
 handlebytes(table; kw...) = Parquet._encodefile(table; kw...)
 
+@testset "File do blocks close handles and preserve source ownership" begin
+    bytes = handlebytes((a=collect(1:4), b=["a", "b", "c", "d"]); rowgroupsize=2)
+    captured = Ref{Any}()
+    mktempdir() do dir
+        path = joinpath(dir, "blocks.parquet")
+        write(path, bytes)
+        result = Parquet.File(path; select=:a) do file
+            captured[] = file
+            file[1].a
+        end
+        @test result == [1, 2]
+        @test_throws ArgumentError captured[][1]
+        @test_throws ArgumentError Parquet.readrange(captured[].source, 0, 4)
+        sentinel = ErrorException("callback failed")
+        caught = try
+            Parquet.File(path) do file
+                captured[] = file
+                throw(sentinel)
+            end
+        catch err
+            err
+        end
+        @test caught === sentinel
+        @test_throws ArgumentError captured[][1]
+        @test_throws ArgumentError Parquet.readrange(captured[].source, 0, 4)
+    end
+    source = HandleTrackingSource(bytes)
+    result = Parquet.File(source) do file
+        captured[] = file
+        sum(part -> sum(part.a), file)
+    end
+    @test result == 10
+    @test source.closes == 0
+    @test_throws ArgumentError captured[][1]
+    @test_throws ErrorException Parquet.File(source) do file
+        captured[] = file
+        error("callback failed")
+    end
+    @test source.closes == 0
+    @test_throws ArgumentError captured[][1]
+    @test Parquet.readrange(source, 0, 4) == b"PAR1"
+    io = IOBuffer(bytes)
+    @test Parquet.File(file -> file[2].a, io) == [3, 4]
+    @test isopen(io)
+end
+
 @testset "read keywords" begin
     days = Date(2025, 1, 1) .+ Day.(0:9)
     bytes = handlebytes((a=collect(1:10), b=[string(i) for i in 1:10],

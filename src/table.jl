@@ -567,6 +567,7 @@ end
     Parquet.File(source; select=nothing, drop=nothing, filter=nothing, limit=nothing,
                  scan=nothing, ntasks=Threads.nthreads(), stringtype=DataString,
                  int96=Dates.Nanosecond, checksum=false, limits=Parquet.Limits())
+    Parquet.File(f::Function, source; kwargs...)
 
 Open a Parquet file and decode its footer, without reading column data. The keywords
 are those of [`Parquet.Table`](@ref) and apply to every table the file yields.
@@ -589,6 +590,8 @@ are those of [`Parquet.Table`](@ref) and apply to every table the file yields.
 
 `source` is a path, a byte vector, an `IO`, or a [`Parquet.AbstractSource`](@ref). A
 path stays memory mapped until `close(file)`; an `AbstractSource` is never closed.
+The do-block form `Parquet.File(source) do file ... end` returns the block's result and
+closes the handle when the block finishes or throws, leaving a caller's source open.
 """
 function File(input; select=nothing, drop=nothing, filter=nothing, limit=nothing,
         scan::Union{Nothing,Tables.Scan}=nothing, ntasks::Integer=Threads.nthreads(),
@@ -597,6 +600,15 @@ function File(input; select=nothing, drop=nothing, filter=nothing, limit=nothing
     return _openfile(input, nothing; select=select, drop=drop, filter=filter, limit=limit,
         scan=scan, ntasks=ntasks, stringtype=stringtype, int96=int96, checksum=checksum,
         limits=limits, budget=budget)
+end
+
+function File(f::Function, input; kwargs...)
+    file = File(input; kwargs...)
+    try
+        return f(file)
+    finally
+        close(file)
+    end
 end
 
 # A `File`; `cached` is the footer and decoded metadata of an earlier open of the same
@@ -699,6 +711,7 @@ end
 # decodes only the pages it overlaps.
 function _readtable(file::File, groups::AbstractVector{Int}, budget::_ByteBudget;
         window=nothing)
+    (@atomic file.closed) && throw(_closederror())
     plan = file.plan
     bound = plan.bound
     offset, limit = something(window, bound === nothing ? (0, nothing) :
